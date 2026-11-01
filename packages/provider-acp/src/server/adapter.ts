@@ -358,6 +358,8 @@ export interface AcpAdapterV2Flavor {
   readonly onSessionEvent?: (
     event: AcpSessionRuntime.AcpSessionRuntimeEvent,
   ) => Effect.Effect<void>;
+  /** Prefer `session/resume` over `session/load` when both capabilities are advertised. */
+  readonly preferResumeSession?: boolean;
   readonly subagentsIdleOnTurnCompletion?: boolean;
   readonly supportsCompaction?: boolean;
   readonly runtimeHarness?: string;
@@ -6493,8 +6495,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           return yield* flavor.withRuntimeStartup?.(startup) ?? startup;
         });
 
-        const restartAcpRuntime = Effect.fnUntraced(function* (threadId: ThreadId | null) {
-          yield* spawnAcpRuntime(threadId);
+        const restartAcpRuntime = Effect.fnUntraced(function* (
+          threadId: ThreadId | null,
+          resumeSessionId?: string,
+        ) {
+          yield* spawnAcpRuntime(threadId, resumeSessionId);
           yield* wireAcpRuntimeHandlers(runtime, yield* Ref.get(runtimeCallbackGeneration));
         });
 
@@ -6751,14 +6756,20 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const mcpContext = yield* readMcpContext(threadId);
           const activationOptions = acpMcpActivation(mcpContext);
           prepareTerminalEnvironment(mcpContext, sessionId);
-          const activated = canLoadSession
-            ? yield* runtime.loadSession(sessionId, activationOptions)
-            : canResumeSession
-              ? yield* runtime.resumeSession(sessionId, activationOptions)
-              : yield* new ProviderAdapter.ProviderAdapterProtocolError({
-                  driver,
-                  detail: `ACP driver cannot load or resume session ${sessionId}`,
-                });
+          const preferResume = flavor.preferResumeSession === true && canResumeSession;
+          if (!preferResume && !canLoadSession && !canResumeSession) {
+            return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+              driver,
+              detail: `ACP driver cannot load or resume session ${sessionId}`,
+            });
+          }
+          const activated = yield* (
+            preferResume
+              ? runtime.resumeSession(sessionId, activationOptions)
+              : canLoadSession
+                ? runtime.loadSession(sessionId, activationOptions)
+                : runtime.resumeSession(sessionId, activationOptions)
+          ).pipe(Effect.tapError(() => Ref.set(runtimeRestartRequired, true)));
           rememberTerminalEnvironment(activated.sessionId, yield* readMcpContext(threadId));
           return activated;
         });
@@ -7436,10 +7447,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
 
         const restartRuntimeAfterTeardownIfRequired = Effect.fnUntraced(function* (
           threadId: ThreadId | null,
+          resumeSessionId?: string,
         ) {
           const restartRequired = yield* Ref.get(runtimeRestartRequired);
           if (!restartRequired) return false;
-          yield* restartAcpRuntime(threadId);
+          yield* restartAcpRuntime(
+            threadId,
+            flavor.preferResumeSession === true && canResumeSession ? resumeSessionId : undefined,
+          );
           yield* Ref.set(runtimeRestartRequired, false);
           yield* Ref.set(activeSessionId, null);
           yield* Ref.set(activeSessionSetup, null);
@@ -7472,6 +7487,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const requestedSessionId = yield* nativeThreadId(driver, turnInput.providerThread);
             const restartAfterInterrupt = yield* restartRuntimeAfterTeardownIfRequired(
               turnInput.threadId,
+              requestedSessionId,
             );
             const needsSessionActivation =
               (yield* Ref.get(activeSessionId)) !== requestedSessionId || restartAfterInterrupt;
@@ -8076,6 +8092,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   });
                   const restartAfterInterrupt = yield* restartRuntimeAfterTeardownIfRequired(
                     threadInput.providerThread.appThreadId,
+                    sessionId,
                   ).pipe(Effect.tapError(() => restorePreviousItemIdentity));
                   if ((yield* Ref.get(activeSessionId)) !== sessionId || restartAfterInterrupt) {
                     yield* Ref.set(snapshot, {
@@ -8399,7 +8416,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       } else {
                         // Settled soft interrupts have no prompt to cancel; cancel could kill background subagents.
                         if (!settledSoftInterrupt) {
-                          yield* runtime.cancel;
+                          yield* runtime.cancel.pipe(
+                            Effect.tapError(() =>
+                              Effect.gen(function* () {
+                                yield* Ref.set(runtimeRestartRequired, true);
+                                if (!context.finalized) {
+                                  yield* finalizeTurn(context, "interrupted");
+                                }
+                              }),
+                            ),
+                          );
                         }
                         if (restartRuntime && flavor.restartRuntimeAfterInterrupt === true) {
                           yield* Ref.set(runtimeRestartRequired, true);
@@ -8411,6 +8437,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       // The turn stays open: the agent may still be working, and the user
                       // decides whether to Force stop it.
                       if (Option.isNone(stopped)) {
+                        if (!hardRestart && runtime.terminateProcessGroup !== undefined) {
+                          yield* Ref.set(runtimeRestartRequired, true);
+                          if (!context.finalized) {
+                            yield* finalizeTurn(context, "interrupted");
+                          }
+                          yield* runtime.terminateProcessGroup.pipe(Effect.ignore);
+                          return;
+                        }
                         return yield* new ProviderAdapter.ProviderAdapterInterruptTimeoutError({
                           driver,
                           providerThreadId: turnInput.providerThread.id,

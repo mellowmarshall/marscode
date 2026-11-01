@@ -1663,7 +1663,14 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       ...(options.onIncomingRequest ? { onIncomingRequest: options.onIncomingRequest } : {}),
       onTermination: (error) =>
         recordTermination(error).pipe(
-          Effect.andThen(options.onTermination?.(error) ?? Effect.void),
+          Effect.andThen(
+            Ref.get(terminationErrorRef).pipe(
+              Effect.flatMap(
+                (recorded) =>
+                  options.onTermination?.(Option.getOrElse(recorded, () => error)) ?? Effect.void,
+              ),
+            ),
+          ),
           Effect.ensuring(
             Scope.close(runtimeScope, Exit.fail(error)).pipe(Effect.forkDetach, Effect.asVoid),
           ),
@@ -1922,6 +1929,13 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     return nextState;
   });
 
+  const retireRuntime = Effect.fn("AcpSessionRuntime.retireRuntime")(function* (
+    error: EffectAcpErrors.AcpError,
+  ) {
+    yield* recordTermination(error);
+    yield* child.kill({ forceKillAfter: "1 second" }).pipe(Effect.ignore);
+  });
+
   const runLoadSessionWithReplayIdle = (
     loadPayload: EffectAcpSchema.LoadSessionRequest,
     initializeResult: EffectAcpSchema.InitializeResponse,
@@ -1962,18 +1976,18 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           ).pipe(
             Effect.ensuring(Fiber.interrupt(idleFiber).pipe(Effect.ignore)),
             Effect.timeoutOption(sessionLoadTimeout),
-            Effect.flatMap((result) =>
-              Effect.fromOption(
-                result,
-                () =>
-                  new EffectAcpErrors.AcpTransportError({
-                    operation: "call-rpc",
-                    method: "session/load",
-                    detail: "session/load timed out waiting for RPC response or replay idle gap",
-                    cause: undefined,
-                  }),
-              ),
-            ),
+            Effect.flatMap((result) => {
+              if (Option.isSome(result)) {
+                return Effect.succeed(result.value);
+              }
+              const error = new EffectAcpErrors.AcpTransportError({
+                operation: "call-rpc",
+                method: "session/load",
+                detail: "session/load timed out waiting for RPC response or replay idle gap",
+                cause: undefined,
+              });
+              return retireRuntime(error).pipe(Effect.andThen(Effect.fail(error)));
+            }),
             Effect.tap((result) =>
               logRequest({
                 method: "session/load",
@@ -2308,13 +2322,6 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     yield* Effect.raceFirst(Deferred.await(acknowledge), Deferred.await(runtimeClosed));
   });
 
-  const retireRuntime = Effect.fn("AcpSessionRuntime.retireRuntime")(function* (
-    error: EffectAcpErrors.AcpError,
-  ) {
-    yield* recordTermination(error);
-    yield* child.kill({ forceKillAfter: "1 second" }).pipe(Effect.ignore);
-  });
-
   const cancel = Effect.gen(function* () {
     const started = yield* getStartedState;
     const activePrompt = yield* Ref.get(activePromptRef);
@@ -2409,6 +2416,13 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     resumeSession: (sessionId, activationOptions) =>
       start.pipe(
         Effect.flatMap((started) => {
+          if (
+            started.sessionId === sessionId &&
+            options.resumeSessionId === sessionId &&
+            options.resumeMethod === "resume"
+          ) {
+            return Effect.succeed(started);
+          }
           const requestPayload = {
             sessionId,
             cwd: options.cwd,
@@ -2418,9 +2432,8 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
             "session/resume",
             requestPayload,
             acp.agent.resumeSession(requestPayload),
-          );
+          ).pipe(Effect.flatMap((response) => adoptSession(sessionId, response)));
         }),
-        Effect.flatMap((response) => adoptSession(sessionId, response)),
       ),
     forkSession: (sessionId, activationOptions) =>
       start.pipe(

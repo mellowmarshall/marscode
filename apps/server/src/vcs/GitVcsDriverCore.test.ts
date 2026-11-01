@@ -532,7 +532,7 @@ it.effect.each(["bare", "unborn"] as const)(
           .pipe(Effect.result);
         assert.equal(Result.isSuccess(result), state === "bare");
         if (Result.isFailure(result)) {
-          assert.equal(result.failure.operation, "GitVcsDriver.createWorktree.createBranch");
+          assert.equal(result.failure.operation, "GitVcsDriver.createWorktree");
           assert.equal(result.failure.detail, "git worktree add failed");
         }
         assert.equal(spawnedArgs.filter((args) => args.includes("--git-common-dir")).length, 1);
@@ -3878,7 +3878,10 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           Effect.gen(function* () {
             const args = ChildProcess.isStandardCommand(command) ? command.args : [];
             const writesConfig =
-              (args.includes("worktree") && args.includes("add") && args.includes("-b")) ||
+              (args.includes("worktree") &&
+                args.includes("add") &&
+                args.includes("-b") &&
+                !args.includes("--no-track")) ||
               (args[0] === "branch" &&
                 (args[1] === "-m" || args[1]?.startsWith("--set-upstream-to"))) ||
               (args[0] === "config" && !args[1]?.startsWith("-"));

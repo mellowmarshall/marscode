@@ -53,6 +53,8 @@ export const makeAntigravityAcpRuntime = Effect.fn("makeAntigravityAcpRuntime")(
   const context = yield* Layer.build(
     AcpSessionRuntime.layer({
       ...input,
+      ownDetachedProcessGroup: input.ownDetachedProcessGroup ?? true,
+      processGroupPlatform: input.processGroupPlatform ?? process.platform,
       authMethodId: input.authMethod ?? "oauth-personal",
       authenticateEagerly: true,
       resumeMethod: "resume",

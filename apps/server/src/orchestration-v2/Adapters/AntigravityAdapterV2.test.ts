@@ -1037,3 +1037,201 @@ describe("AntigravityAdapterV2 subagent reads", () => {
     }).pipe(Effect.provide(layerSession), Effect.scoped),
   );
 });
+
+describe("AntigravityAdapterV2 session resume and interrupt recovery", () => {
+  it.effect(
+    "prefers session/resume over session/load and restarts runtime with resumeSessionId after a failed cancel",
+    () =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const path = yield* Path.Path;
+        const crypto = yield* Crypto.Crypto;
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+        );
+        type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+        const instanceId = ProviderInstanceId.make("antigravity-resume-recovery-test");
+        const resumeSessionIds: Array<string | undefined> = [];
+        const loadCalls: Array<string> = [];
+        const resumeCalls: Array<string> = [];
+        const promptStarted = yield* Deferred.make<void>();
+        let runtimeIndex = 0;
+
+        const adapter = yield* makeAntigravityAdapterV2({
+          instanceId,
+          selfInvocation: yield* resolveSelfInvocation(),
+          makeRuntime: (input) =>
+            Effect.gen(function* () {
+              const currentIndex = runtimeIndex++;
+              resumeSessionIds.push(input.resumeSessionId);
+              const runtime = yield* makeAntigravityAcpRuntime({
+                ...input,
+                childProcessSpawner,
+                spawn: {
+                  command: process.execPath,
+                  args: [mockAgentPath],
+                  cwd: input.cwd,
+                  env: {
+                    T3_ACP_ANTIGRAVITY: "1",
+                    ...(currentIndex === 0 ? { T3_ACP_HANG_PROMPT_FOREVER: "1" } : {}),
+                  },
+                },
+              }).pipe(Effect.provideService(Crypto.Crypto, crypto));
+              return {
+                ...runtime,
+                loadSession: (sessionId, options) =>
+                  Effect.sync(() => {
+                    loadCalls.push(sessionId);
+                  }).pipe(Effect.andThen(runtime.loadSession(sessionId, options))),
+                resumeSession: (sessionId, options) =>
+                  Effect.sync(() => {
+                    resumeCalls.push(sessionId);
+                  }).pipe(Effect.andThen(runtime.resumeSession(sessionId, options))),
+                prompt: (request) =>
+                  (currentIndex === 0
+                    ? Deferred.succeed(promptStarted, undefined)
+                    : Effect.void
+                  ).pipe(Effect.andThen(runtime.prompt(request))),
+                cancel:
+                  currentIndex === 0
+                    ? Effect.fail(
+                        new EffectAcpErrors.AcpTransportError({
+                          operation: "call-rpc",
+                          method: "session/cancel",
+                          detail:
+                            "The ACP agent did not finish cancellation. Its process was stopped.",
+                          cause: undefined,
+                        }),
+                      )
+                    : runtime.cancel,
+              } satisfies RuntimeService;
+            }),
+          withProcess: (_stop, task) => task,
+          // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
+          defaultModel: Effect.succeed(undefined),
+        });
+
+        const threadId = ThreadId.make("thread-antigravity-resume-recovery");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "gemini-test-low" } as const;
+        const existingSessionId = "b237e36f-fea1-4fa2-9245-a4d790b3d94f";
+
+        const session = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-antigravity-resume-recovery"),
+          modelSelection,
+          runtimePolicy,
+          initialNativeThreadId: existingSessionId,
+        });
+        const baseThread = yield* session.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* session.resumeThread({
+          providerThread: {
+            ...baseThread,
+            nativeThreadRef: {
+              driver: baseThread.driver,
+              nativeId: existingSessionId,
+              strength: "strong",
+            },
+          },
+          modelSelection,
+          runtimePolicy,
+        });
+
+        assert.deepEqual(loadCalls, []);
+        assert.deepEqual(resumeSessionIds, [existingSessionId]);
+
+        const now = yield* DateTime.now;
+        const appThread = {
+          createdBy: "user" as const,
+          creationSource: "web" as const,
+          id: threadId,
+          projectId: ProjectId.make("project-antigravity-resume-recovery"),
+          title: "Antigravity resume recovery",
+          providerInstanceId: instanceId,
+          modelSelection,
+          runtimeMode: "full-access" as const,
+          interactionMode: "default" as const,
+          branch: null,
+          worktreePath: process.cwd(),
+          activeProviderThreadId: providerThread.id,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        };
+
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const turn1ProviderTurnId = idAllocator.derive.providerTurn({
+          driver: providerThread.driver,
+          nativeTurnId: `${existingSessionId}:turn:1`,
+        });
+        yield* session
+          .startTurn({
+            appThread,
+            threadId,
+            runId: RunId.make("run-antigravity-resume-1"),
+            runOrdinal: 1,
+            providerTurnOrdinal: 1,
+            attemptId: RunAttemptId.make("attempt-antigravity-resume-1"),
+            rootNodeId: NodeId.make("node-antigravity-resume-1"),
+            providerThread,
+            message: {
+              createdBy: "user",
+              creationSource: "web",
+              messageId: MessageId.make("message-antigravity-resume-1"),
+              text: "first turn",
+              attachments: [],
+            },
+            modelSelection,
+            runtimePolicy,
+          })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(promptStarted);
+
+        const interruptExit = yield* session
+          .interruptTurn({
+            providerThread,
+            providerTurnId: turn1ProviderTurnId,
+          })
+          .pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(interruptExit));
+
+        yield* session.startTurn({
+          appThread,
+          threadId,
+          runId: RunId.make("run-antigravity-resume-2"),
+          runOrdinal: 2,
+          providerTurnOrdinal: 2,
+          attemptId: RunAttemptId.make("attempt-antigravity-resume-2"),
+          rootNodeId: NodeId.make("node-antigravity-resume-2"),
+          providerThread,
+          message: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: MessageId.make("message-antigravity-resume-2"),
+            text: "second turn after failed cancel",
+            attachments: [],
+          },
+          modelSelection,
+          runtimePolicy,
+        });
+
+        assert.deepEqual(loadCalls, []);
+        assert.deepEqual(resumeCalls, [existingSessionId]);
+        assert.deepEqual(resumeSessionIds, [existingSessionId, existingSessionId]);
+      }).pipe(Effect.provide(layerSession), Effect.scoped),
+  );
+});

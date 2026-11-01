@@ -48,6 +48,7 @@ import type { ServerProviderDraft } from "@t3tools/provider-core/server/snapshot
 import {
   removeAntigravityRuntimeTempDirs,
   removeAntigravitySessionFiles,
+  sanitizeAntigravityConversationDb,
 } from "../acp/AntigravitySessionFiles.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
@@ -240,6 +241,31 @@ export const AntigravityDriver: ProviderDriver<
               ),
             ),
       );
+      let activeSanitizedSessionId = input.resumeSessionId;
+      if (input.resumeSessionId !== undefined) {
+        yield* sanitizeAntigravityConversationDb({
+          profileDirectory,
+          sessionId: input.resumeSessionId,
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        );
+      }
+      const sanitizeSessionBeforeActivation = (sessionId: string) =>
+        activeSanitizedSessionId === sessionId
+          ? Effect.void
+          : sanitizeAntigravityConversationDb({
+              profileDirectory,
+              sessionId,
+            }).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  activeSanitizedSessionId = sessionId;
+                }),
+              ),
+            );
       const runtime = yield* makeAntigravityAcpRuntime({
         ...input,
         authMethod: auth.authMethod,
@@ -256,15 +282,26 @@ export const AntigravityDriver: ProviderDriver<
       return {
         ...runtime,
         start: () =>
-          runtime
-            .start()
-            .pipe(
-              Effect.tapError((cause): Effect.Effect<void> =>
-                input.onAuthorizationUrl === undefined && isAntigravitySignInRequiredError(cause)
-                  ? provider.onAuthRequired
-                  : Effect.void,
-              ),
+          runtime.start().pipe(
+            Effect.tap((started) =>
+              Effect.sync(() => {
+                activeSanitizedSessionId = started.sessionId;
+              }),
             ),
+            Effect.tapError((cause): Effect.Effect<void> =>
+              input.onAuthorizationUrl === undefined && isAntigravitySignInRequiredError(cause)
+                ? provider.onAuthRequired
+                : Effect.void,
+            ),
+          ),
+        loadSession: (sessionId, activationOptions) =>
+          sanitizeSessionBeforeActivation(sessionId).pipe(
+            Effect.andThen(runtime.loadSession(sessionId, activationOptions)),
+          ),
+        resumeSession: (sessionId, activationOptions) =>
+          sanitizeSessionBeforeActivation(sessionId).pipe(
+            Effect.andThen(runtime.resumeSession(sessionId, activationOptions)),
+          ),
       };
     });
 

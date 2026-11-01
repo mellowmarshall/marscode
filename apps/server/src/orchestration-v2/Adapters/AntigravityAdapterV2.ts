@@ -126,6 +126,8 @@ export function makeAntigravityAcpAdapterFlavor(
           Scope.close(scope, Exit.void),
           options.makeRuntime({
             ...input,
+            ownDetachedProcessGroup: true,
+            processGroupPlatform: process.platform,
             clientFileReads: true,
             additionalDirectories: [options.host.paths.attachmentsDir],
           }),
@@ -201,6 +203,7 @@ export function makeAntigravityAcpAdapterFlavor(
         Effect.provideService(Path.Path, options.path),
       ),
     // Loading history replays tool calls; resume avoids replay.
+    preferResumeSession: true,
     subagentsIdleOnTurnCompletion: true,
     ...(options.onSessionEvent === undefined ? {} : { onSessionEvent: options.onSessionEvent }),
     applyModelSelection: Effect.fn("AntigravityAdapterV2.applyModelSelection")(function* ({

@@ -4106,15 +4106,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }
       worktreePath = path.join(parentDir, repoName, directoryName);
     }
-    if (input.newRefName) {
-      // Kept apart from the checkout so the shared-config lock only covers the tracking write.
-      yield* createBranchAt(
-        "GitVcsDriver.createWorktree.createBranch",
-        { cwd: input.cwd, branch: input.newRefName, startPoint: input.refName },
-        "git worktree add failed",
-      );
-    }
-    const args = ["worktree", "add", "--", worktreePath, input.newRefName ?? input.refName];
+    // Pass --no-track to worktree add -b so the checkout does not write .git/config or
+    // run a separate `git branch` in the primary checkout; tracking is recorded afterwards.
+    const startPoint = input.refName === "-" ? "@{-1}" : input.refName;
+    const startRef = input.newRefName
+      ? yield* executeGit(
+          "GitVcsDriver.createWorktree.resolveStartPoint",
+          input.cwd,
+          ["rev-parse", "--symbolic-full-name", startPoint],
+          { allowNonZeroExit: true },
+        ).pipe(Effect.map((result) => (result.exitCode === 0 ? result.stdout.trim() : "")))
+      : "";
+    const args = input.newRefName
+      ? ["worktree", "add", "--no-track", "-b", input.newRefName, "--", worktreePath, startPoint]
+      : ["worktree", "add", "--", worktreePath, input.refName];
     const progress = options?.progress;
     const onCheckoutProgress = progress?.onCheckoutProgress;
 
@@ -4143,6 +4148,22 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           : {}),
       },
     );
+
+    if (input.newRefName && startRef.startsWith("refs/remotes/")) {
+      yield* executeGitWithStableDiagnostics(
+        "GitVcsDriver.createWorktree.track",
+        worktreePath,
+        ["branch", `--set-upstream-to=${startRef}`, "--", input.newRefName],
+        { writesSharedConfig: true },
+      ).pipe(
+        retryWhileConfigLocked,
+        Effect.catch((cause) =>
+          Effect.logWarning("created the worktree branch without tracking its start point", {
+            cause,
+          }),
+        ),
+      );
+    }
 
     if (progress?.onWorktreeClaimed) {
       yield* progress.onWorktreeClaimed(worktreePath);
