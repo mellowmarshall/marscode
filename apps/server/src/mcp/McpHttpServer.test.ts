@@ -1185,6 +1185,101 @@ it.effect("answers 2026-07-28 discovery and keeps 2025-06-18 as the initialize f
         result: { protocolVersion: string };
       };
       expect(initialized.result.protocolVersion).toBe("2025-06-18");
+
+      const rootsChangedResponse = yield* httpClient.post("/mcp", {
+        headers: {
+          accept: "application/json, text/event-stream",
+          "mcp-protocol-version": "2026-07-28",
+        },
+        body: HttpBody.text(
+          `{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}`,
+          "application/json",
+        ),
+      });
+      expect(rootsChangedResponse.status).toBe(202);
+
+      const initializedNotificationResponse = yield* httpClient.post("/mcp", {
+        headers: {
+          accept: "application/json, text/event-stream",
+          "mcp-method": "notifications/initialized",
+          "mcp-protocol-version": "2026-07-28",
+        },
+        body: HttpBody.text(
+          `{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}`,
+          "application/json",
+        ),
+      });
+      expect(initializedNotificationResponse.status).toBe(202);
+
+      const postNotifyToolCall = yield* httpClient.post("/mcp", {
+        headers: {
+          accept: "application/json, text/event-stream",
+          "mcp-method": "tools/call",
+          "mcp-name": "probe",
+          "mcp-protocol-version": "2026-07-28",
+        },
+        body: HttpBody.text(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 4,
+            method: "tools/call",
+            params: {
+              name: "probe",
+              arguments: {},
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/clientInfo": { name: "mcp-test", version: "1.0.0" },
+              },
+            },
+          }),
+          "application/json",
+        ),
+      });
+      expect(postNotifyToolCall.status).toBe(200);
+      const probeResult = (yield* postNotifyToolCall.json) as {
+        error?: unknown;
+        result: { structuredContent: { ok: boolean } };
+      };
+      expect(probeResult.error).toBeUndefined();
+      expect(probeResult.result.structuredContent).toEqual({ ok: true });
+
+      const unauthNotify = yield* (yield* HttpClient.HttpClient).post("/mcp", {
+        headers: {
+          accept: "application/json, text/event-stream",
+          "mcp-protocol-version": "2026-07-28",
+        },
+        body: HttpBody.text(
+          `{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}`,
+          "application/json",
+        ),
+      });
+      expect(unauthNotify.status).toBe(401);
+
+      const originNotify = yield* httpClient.post("/mcp", {
+        headers: {
+          accept: "application/json, text/event-stream",
+          origin: "https://evil.example",
+          "mcp-protocol-version": "2026-07-28",
+        },
+        body: HttpBody.text(
+          `{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}`,
+          "application/json",
+        ),
+      });
+      expect(originNotify.status).toBe(403);
+
+      const legacyMissingSessionNotify = yield* httpClient.post("/mcp", {
+        headers: {
+          accept: "application/json, text/event-stream",
+          "mcp-protocol-version": "2025-06-18",
+        },
+        body: HttpBody.text(
+          `{"jsonrpc":"2.0","method":"notifications/roots/list_changed"}`,
+          "application/json",
+        ),
+      });
+      expect(legacyMissingSessionNotify.status).toBe(400);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

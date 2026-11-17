@@ -153,6 +153,39 @@ type McpAuthMiddleware = (
   HttpServerRequest.HttpServerRequest
 >;
 
+const decodeJsonTextOption = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+
+const isStatelessClientNotification = Effect.fnUntraced(function* (
+  request: HttpServerRequest.HttpServerRequest,
+) {
+  if (request.method !== "POST") return false;
+  if (request.headers["mcp-session-id"] !== undefined) return false;
+  const protocolVersion = request.headers["mcp-protocol-version"];
+  if (
+    protocolVersion !== undefined &&
+    protocolVersion !== McpProtocol.v2026_07_28.protocolVersion
+  ) {
+    return false;
+  }
+  const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType !== "application/json") return false;
+  const raw = yield* request.text.pipe(Effect.orElseSucceed(() => ""));
+  if (raw.length === 0) return false;
+  const decoded = decodeJsonTextOption(raw);
+  if (Option.isNone(decoded)) return false;
+  const payload = decoded.value;
+  if (!Predicate.isReadonlyObject(payload) || Array.isArray(payload)) return false;
+  if (payload.jsonrpc !== "2.0" || typeof payload.method !== "string") return false;
+  if ("id" in payload && payload.id !== undefined) return false;
+  if (
+    payload.method === "notifications/cancelled" &&
+    request.headers["mcp-method"] === "notifications/cancelled"
+  ) {
+    return false;
+  }
+  return payload.method.startsWith("notifications/");
+});
+
 const normalizeMcpHttpResponse = (
   response: HttpServerResponse.HttpServerResponse,
 ): HttpServerResponse.HttpServerResponse => {
@@ -285,6 +318,16 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
     if (request.headers.origin !== undefined) return HttpServerResponse.empty({ status: 403 });
     const admitted = yield* authenticateRequest(request);
     if (HttpServerResponse.isHttpServerResponse(admitted)) return admitted;
+    // Stateless 2026-07-28 clients (e.g. go-sdk) send notifications like
+    // notifications/roots/list_changed without RequestParams._meta or Mcp-Method;
+    // Effect's v2026-07-28 admitHttp only exempts notifications/cancelled and
+    // rejects others with 400. Acknowledge them as 202 after auth & origin checks.
+    if (yield* isStatelessClientNotification(request)) {
+      return HttpServerResponse.empty({
+        status: 202,
+        headers: { "cache-control": "no-store" },
+      });
+    }
     return yield* httpEffect.pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, admitted),
       Effect.map(normalizeMcpHttpResponse),
