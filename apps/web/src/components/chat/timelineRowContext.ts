@@ -30,6 +30,7 @@ import { type MessagesTimelineRow, type WorkGroupScrollAnchor } from "./Messages
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import type { TurnItemDetailSource } from "../../state/queries";
 import { type HandoffTimelineRun } from "./V2LifecycleRow";
+import type { TuiProviderKey } from "../../lib/tuiOutputPalette";
 
 /**
  * Where an expanded row reads an item's detail and a command's output. The owner's rows read them
@@ -63,6 +64,10 @@ export interface TimelineRowSharedState {
   skills: ReadonlyArray<ServerProviderSkill>;
   runs: ReadonlyArray<HandoffTimelineRun>;
   activeThreadEnvironmentId: EnvironmentId;
+  tuiProviderByInstanceId: ReadonlyMap<string, TuiProviderKey>;
+  tuiProviderByRunId: ReadonlyMap<RunId, TuiProviderKey>;
+  providerTuiPalettes: boolean;
+  defaultTuiProvider: TuiProviderKey;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   onSendAppMessage: ((text: string) => Promise<void>) | undefined;

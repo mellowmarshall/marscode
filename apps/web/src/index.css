@@ -2221,7 +2221,7 @@ code {
     [data-language="plaintext" i]
   ) {
   &,
-  & :is(pre, pre *) {
+  & :is(pre, pre :not(.tui-term-output, .tui-term-output *)) {
     color: inherit !important;
   }
 }
@@ -2639,4 +2639,514 @@ code {
 
 .messages-timeline-scroll:focus-visible {
   outline: none;
+}
+
+/* Per-provider TUI output palettes & semantic/ANSI highlighting */
+:root,
+[data-provider="default"] {
+  --tui-accent: #2563eb;
+  --tui-fg: #27272a;
+  --tui-fg-muted: #6b7280;
+  --tui-rail: rgb(100 116 139 / 28%);
+  --tui-pill-bg: rgb(100 116 139 / 7%);
+  --tui-pill-border: rgb(100 116 139 / 20%);
+  --tui-path: #0e7490;
+  --tui-cmd: #2563eb;
+  --tui-flag: #9a5b04;
+  --tui-symbol: #7c3aed;
+  --tui-literal: #b45309;
+  --tui-ok: #15803d;
+  --tui-warn: #b45309;
+  --tui-err: #dc2626;
+  --tui-diff-add-fg: #15803d;
+  --tui-diff-add-bg: rgb(21 128 61 / 10%);
+  --tui-diff-del-fg: #dc2626;
+  --tui-diff-del-bg: rgb(220 38 38 / 10%);
+  --tui-ansi-0: #18181b;
+  --tui-ansi-1: #dc2626;
+  --tui-ansi-2: #15803d;
+  --tui-ansi-3: #9a5b04;
+  --tui-ansi-4: #2563eb;
+  --tui-ansi-5: #7c3aed;
+  --tui-ansi-6: #0e7490;
+  --tui-ansi-7: #52525b;
+  --tui-ansi-8: #71717a;
+  --tui-ansi-9: #ef4444;
+  --tui-ansi-10: #16a34a;
+  --tui-ansi-11: #b45309;
+  --tui-ansi-12: #3b82f6;
+  --tui-ansi-13: #9333ea;
+  --tui-ansi-14: #0891b2;
+  --tui-ansi-15: #09090b;
+}
+
+.dark,
+.dark [data-provider="default"] {
+  --tui-accent: #78a9ff;
+  --tui-fg: #e4e4e7;
+  --tui-fg-muted: #9ca3af;
+  --tui-rail: rgb(148 163 184 / 32%);
+  --tui-pill-bg: rgb(148 163 184 / 9%);
+  --tui-pill-border: rgb(148 163 184 / 22%);
+  --tui-path: #67d2e8;
+  --tui-cmd: #78a9ff;
+  --tui-flag: #eab308;
+  --tui-symbol: #c084fc;
+  --tui-literal: #f59e0b;
+  --tui-ok: #4ade80;
+  --tui-warn: #fbbf24;
+  --tui-err: #f87171;
+  --tui-diff-add-fg: #4ade80;
+  --tui-diff-add-bg: rgb(74 222 128 / 12%);
+  --tui-diff-del-fg: #f87171;
+  --tui-diff-del-bg: rgb(248 113 113 / 12%);
+  --tui-ansi-0: #18181b;
+  --tui-ansi-1: #e05252;
+  --tui-ansi-2: #4ec970;
+  --tui-ansi-3: #e5b94c;
+  --tui-ansi-4: #5b8ff9;
+  --tui-ansi-5: #c678dd;
+  --tui-ansi-6: #4ec2d6;
+  --tui-ansi-7: #d4d4d8;
+  --tui-ansi-8: #71717a;
+  --tui-ansi-9: #f87171;
+  --tui-ansi-10: #6ee78e;
+  --tui-ansi-11: #facc15;
+  --tui-ansi-12: #7ba8ff;
+  --tui-ansi-13: #da98f0;
+  --tui-ansi-14: #67d8eb;
+  --tui-ansi-15: #fafafa;
+}
+
+[data-provider="claudeAgent"] {
+  --tui-accent: #c25937;
+  --tui-fg: #2c241e;
+  --tui-fg-muted: #6e645b;
+  --tui-rail: rgb(194 89 55 / 32%);
+  --tui-pill-bg: rgb(194 89 55 / 7%);
+  --tui-pill-border: rgb(194 89 55 / 22%);
+  --tui-path: #1f6f7a;
+  --tui-cmd: #b84a27;
+  --tui-flag: #9c5f0b;
+  --tui-symbol: #7d4289;
+  --tui-literal: #8f6214;
+  --tui-ok: #237340;
+  --tui-warn: #9c6108;
+  --tui-err: #b8322f;
+  --tui-diff-add-fg: #1f6b3a;
+  --tui-diff-add-bg: rgb(40 115 68 / 10%);
+  --tui-diff-del-fg: #b3302d;
+  --tui-diff-del-bg: rgb(184 50 47 / 10%);
+  --tui-ansi-0: #2c241e;
+  --tui-ansi-1: #b8322f;
+  --tui-ansi-2: #237340;
+  --tui-ansi-3: #9c6108;
+  --tui-ansi-4: #255c99;
+  --tui-ansi-5: #7d4289;
+  --tui-ansi-6: #1f6f7a;
+  --tui-ansi-7: #5c534b;
+  --tui-ansi-8: #786e65;
+  --tui-ansi-9: #c9403c;
+  --tui-ansi-10: #2c874d;
+  --tui-ansi-11: #ad6f0e;
+  --tui-ansi-12: #326fb3;
+  --tui-ansi-13: #9452a1;
+  --tui-ansi-14: #268491;
+  --tui-ansi-15: #1f1914;
+}
+
+.dark [data-provider="claudeAgent"] {
+  --tui-accent: #d97757;
+  --tui-fg: #eeeae2;
+  --tui-fg-muted: #a69f91;
+  --tui-rail: rgb(217 119 87 / 38%);
+  --tui-pill-bg: rgb(217 119 87 / 10%);
+  --tui-pill-border: rgb(217 119 87 / 24%);
+  --tui-path: #8fbcbb;
+  --tui-cmd: #e89172;
+  --tui-flag: #e5c07b;
+  --tui-symbol: #d0a5d8;
+  --tui-literal: #d4a973;
+  --tui-ok: #7cc994;
+  --tui-warn: #f0c674;
+  --tui-err: #e06c75;
+  --tui-diff-add-fg: #86d19c;
+  --tui-diff-add-bg: rgb(124 201 148 / 12%);
+  --tui-diff-del-fg: #ea868d;
+  --tui-diff-del-bg: rgb(224 108 117 / 12%);
+  --tui-ansi-0: #282522;
+  --tui-ansi-1: #e06c75;
+  --tui-ansi-2: #7cc994;
+  --tui-ansi-3: #e5c07b;
+  --tui-ansi-4: #7ea6d9;
+  --tui-ansi-5: #c994cf;
+  --tui-ansi-6: #56b6c2;
+  --tui-ansi-7: #dfd9cf;
+  --tui-ansi-8: #7d746b;
+  --tui-ansi-9: #f08b92;
+  --tui-ansi-10: #98daa9;
+  --tui-ansi-11: #f0c674;
+  --tui-ansi-12: #9bc0ec;
+  --tui-ansi-13: #dfb1e4;
+  --tui-ansi-14: #7dcfff;
+  --tui-ansi-15: #faf9f5;
+}
+
+[data-provider="codex"] {
+  --tui-accent: #0284c7;
+  --tui-fg: #18202c;
+  --tui-fg-muted: #5b6778;
+  --tui-rail: rgb(2 132 199 / 32%);
+  --tui-pill-bg: rgb(2 132 199 / 7%);
+  --tui-pill-border: rgb(2 132 199 / 22%);
+  --tui-path: #0369a1;
+  --tui-cmd: #1d4ed8;
+  --tui-flag: #0f766e;
+  --tui-symbol: #7c3aed;
+  --tui-literal: #a16207;
+  --tui-ok: #008a36;
+  --tui-warn: #b45309;
+  --tui-err: #ba2623;
+  --tui-diff-add-fg: #008a36;
+  --tui-diff-add-bg: rgb(0 162 64 / 10%);
+  --tui-diff-del-fg: #ba2623;
+  --tui-diff-del-bg: rgb(186 38 35 / 10%);
+  --tui-ansi-0: #18202c;
+  --tui-ansi-1: #ba2623;
+  --tui-ansi-2: #008a36;
+  --tui-ansi-3: #a16207;
+  --tui-ansi-4: #1d4ed8;
+  --tui-ansi-5: #7c3aed;
+  --tui-ansi-6: #0369a1;
+  --tui-ansi-7: #475569;
+  --tui-ansi-8: #64748b;
+  --tui-ansi-9: #d93834;
+  --tui-ansi-10: #00a240;
+  --tui-ansi-11: #b45309;
+  --tui-ansi-12: #2563eb;
+  --tui-ansi-13: #924ff7;
+  --tui-ansi-14: #0284c7;
+  --tui-ansi-15: #0f172a;
+}
+
+.dark [data-provider="codex"] {
+  --tui-accent: #38bdf8;
+  --tui-fg: #e5ecf4;
+  --tui-fg-muted: #8e9db2;
+  --tui-rail: rgb(56 189 248 / 36%);
+  --tui-pill-bg: rgb(56 189 248 / 9%);
+  --tui-pill-border: rgb(56 189 248 / 24%);
+  --tui-path: #61d6d6;
+  --tui-cmd: #6aa9ff;
+  --tui-flag: #5eead4;
+  --tui-symbol: #ad7bf9;
+  --tui-literal: #f6c453;
+  --tui-ok: #40c977;
+  --tui-warn: #f5b841;
+  --tui-err: #fa423e;
+  --tui-diff-add-fg: #40c977;
+  --tui-diff-add-bg: rgb(64 201 119 / 12%);
+  --tui-diff-del-fg: #fa5c58;
+  --tui-diff-del-bg: rgb(250 66 62 / 12%);
+  --tui-ansi-0: #1b222c;
+  --tui-ansi-1: #e74856;
+  --tui-ansi-2: #16c60c;
+  --tui-ansi-3: #c19c00;
+  --tui-ansi-4: #3b78ff;
+  --tui-ansi-5: #ad7bf9;
+  --tui-ansi-6: #3a96dd;
+  --tui-ansi-7: #cccccc;
+  --tui-ansi-8: #767676;
+  --tui-ansi-9: #ff6b66;
+  --tui-ansi-10: #40c977;
+  --tui-ansi-11: #f9f1a5;
+  --tui-ansi-12: #6aa9ff;
+  --tui-ansi-13: #c39cfb;
+  --tui-ansi-14: #61d6d6;
+  --tui-ansi-15: #f2f2f2;
+}
+
+[data-provider="antigravity"] {
+  --tui-accent: #5b4bc4;
+  --tui-fg: #191c2b;
+  --tui-fg-muted: #585f80;
+  --tui-rail: rgb(91 75 196 / 32%);
+  --tui-pill-bg: rgb(91 75 196 / 7%);
+  --tui-pill-border: rgb(91 75 196 / 22%);
+  --tui-path: #0f766e;
+  --tui-cmd: #4338ca;
+  --tui-flag: #6d28d9;
+  --tui-symbol: #0369a1;
+  --tui-literal: #9a5b04;
+  --tui-ok: #047857;
+  --tui-warn: #b45309;
+  --tui-err: #be123c;
+  --tui-diff-add-fg: #047857;
+  --tui-diff-add-bg: rgb(4 120 87 / 10%);
+  --tui-diff-del-fg: #be123c;
+  --tui-diff-del-bg: rgb(190 18 60 / 10%);
+  --tui-ansi-0: #191c2b;
+  --tui-ansi-1: #be123c;
+  --tui-ansi-2: #047857;
+  --tui-ansi-3: #9a5b04;
+  --tui-ansi-4: #4338ca;
+  --tui-ansi-5: #6d28d9;
+  --tui-ansi-6: #0f766e;
+  --tui-ansi-7: #4a506e;
+  --tui-ansi-8: #686f8f;
+  --tui-ansi-9: #d82350;
+  --tui-ansi-10: #059669;
+  --tui-ansi-11: #b45309;
+  --tui-ansi-12: #4f46e5;
+  --tui-ansi-13: #7c3aed;
+  --tui-ansi-14: #0d9488;
+  --tui-ansi-15: #111320;
+}
+
+.dark [data-provider="antigravity"] {
+  --tui-accent: #8c7bd1;
+  --tui-fg: #e8eaf6;
+  --tui-fg-muted: #969cc0;
+  --tui-rail: rgb(140 123 209 / 40%);
+  --tui-pill-bg: rgb(140 123 209 / 11%);
+  --tui-pill-border: rgb(140 123 209 / 26%);
+  --tui-path: #56d7c6;
+  --tui-cmd: #93a8ff;
+  --tui-flag: #b89eff;
+  --tui-symbol: #74c0fc;
+  --tui-literal: #ecc16f;
+  --tui-ok: #54d69c;
+  --tui-warn: #efb758;
+  --tui-err: #f07488;
+  --tui-diff-add-fg: #54d69c;
+  --tui-diff-add-bg: rgb(84 214 156 / 12%);
+  --tui-diff-del-fg: #f28596;
+  --tui-diff-del-bg: rgb(240 116 136 / 12%);
+  --tui-ansi-0: #1e2130;
+  --tui-ansi-1: #f07488;
+  --tui-ansi-2: #54d69c;
+  --tui-ansi-3: #efb758;
+  --tui-ansi-4: #7a8cff;
+  --tui-ansi-5: #b89eff;
+  --tui-ansi-6: #56d7c6;
+  --tui-ansi-7: #d1d5eb;
+  --tui-ansi-8: #6f7598;
+  --tui-ansi-9: #f58fa0;
+  --tui-ansi-10: #74e2b1;
+  --tui-ansi-11: #f6cb78;
+  --tui-ansi-12: #98a8ff;
+  --tui-ansi-13: #cbb8ff;
+  --tui-ansi-14: #76e3d5;
+  --tui-ansi-15: #f3f5ff;
+}
+
+[data-provider="muse"] {
+  --tui-accent: #0064e1;
+  --tui-fg: #141d2e;
+  --tui-fg-muted: #55647d;
+  --tui-rail: rgb(0 100 225 / 32%);
+  --tui-pill-bg: rgb(0 100 225 / 7%);
+  --tui-pill-border: rgb(0 100 225 / 22%);
+  --tui-path: #0f766e;
+  --tui-cmd: #0052bd;
+  --tui-flag: #7e22ce;
+  --tui-symbol: #0369a1;
+  --tui-literal: #b45309;
+  --tui-ok: #15803d;
+  --tui-warn: #a16207;
+  --tui-err: #be123c;
+  --tui-diff-add-fg: #15803d;
+  --tui-diff-add-bg: rgb(21 128 61 / 10%);
+  --tui-diff-del-fg: #be123c;
+  --tui-diff-del-bg: rgb(190 18 60 / 10%);
+  --tui-ansi-0: #141d2e;
+  --tui-ansi-1: #be123c;
+  --tui-ansi-2: #15803d;
+  --tui-ansi-3: #9a6204;
+  --tui-ansi-4: #0052bd;
+  --tui-ansi-5: #7e22ce;
+  --tui-ansi-6: #0f766e;
+  --tui-ansi-7: #475569;
+  --tui-ansi-8: #64748b;
+  --tui-ansi-9: #db2757;
+  --tui-ansi-10: #16a34a;
+  --tui-ansi-11: #b45309;
+  --tui-ansi-12: #0081fb;
+  --tui-ansi-13: #9333ea;
+  --tui-ansi-14: #0d9488;
+  --tui-ansi-15: #0b111c;
+}
+
+.dark [data-provider="muse"] {
+  --tui-accent: #3b9eff;
+  --tui-fg: #eaf1fb;
+  --tui-fg-muted: #96a8c4;
+  --tui-rail: rgb(0 129 251 / 42%);
+  --tui-pill-bg: rgb(0 129 251 / 11%);
+  --tui-pill-border: rgb(59 158 255 / 28%);
+  --tui-path: #38d9c0;
+  --tui-cmd: #58a6ff;
+  --tui-flag: #c084fc;
+  --tui-symbol: #79c0ff;
+  --tui-literal: #f2b866;
+  --tui-ok: #4ade80;
+  --tui-warn: #fbbf24;
+  --tui-err: #fb7185;
+  --tui-diff-add-fg: #4ade80;
+  --tui-diff-add-bg: rgb(74 222 128 / 12%);
+  --tui-diff-del-fg: #fb7185;
+  --tui-diff-del-bg: rgb(251 113 133 / 12%);
+  --tui-ansi-0: #172030;
+  --tui-ansi-1: #fb7185;
+  --tui-ansi-2: #4ade80;
+  --tui-ansi-3: #fbbf24;
+  --tui-ansi-4: #3b9eff;
+  --tui-ansi-5: #c084fc;
+  --tui-ansi-6: #38d9c0;
+  --tui-ansi-7: #d3dff0;
+  --tui-ansi-8: #6b7f9e;
+  --tui-ansi-9: #fda4af;
+  --tui-ansi-10: #6ee7b7;
+  --tui-ansi-11: #fde68a;
+  --tui-ansi-12: #79c0ff;
+  --tui-ansi-13: #d8b4fe;
+  --tui-ansi-14: #5eead4;
+  --tui-ansi-15: #f3f7ff;
+}
+
+/* Inline code role pills inside assistant/plan markdown (beats theme pill overrides). */
+html
+  .chat-markdown[data-tui-highlighting="semantic"]
+  :not(pre)
+  > code[data-tui-role]:not([data-tui-role="plain"]) {
+  background-color: var(--tui-pill-bg);
+  border-color: var(--tui-pill-border);
+  font-weight: 500;
+}
+
+html .chat-markdown[data-tui-highlighting="semantic"] :not(pre) > code[data-tui-role="path"] {
+  color: var(--tui-path);
+}
+
+html .chat-markdown[data-tui-highlighting="semantic"] :not(pre) > code[data-tui-role="cmd"] {
+  color: var(--tui-cmd);
+}
+
+html .chat-markdown[data-tui-highlighting="semantic"] :not(pre) > code[data-tui-role="flag"] {
+  color: var(--tui-flag);
+}
+
+html .chat-markdown[data-tui-highlighting="semantic"] :not(pre) > code[data-tui-role="symbol"] {
+  color: var(--tui-symbol);
+}
+
+html .chat-markdown[data-tui-highlighting="semantic"] :not(pre) > code[data-tui-role="literal"] {
+  color: var(--tui-literal);
+}
+
+/* Terminal & command output semantic tokens. */
+.tui-term-output:not([data-tui-highlighting="off"]) {
+  color: var(--tui-fg, inherit);
+}
+
+.tui-term-output .tui-term-token-cmd {
+  color: var(--tui-cmd);
+  font-weight: 500;
+}
+
+.tui-term-output .tui-term-token-flag {
+  color: var(--tui-flag);
+}
+
+.tui-term-output .tui-term-token-path {
+  color: var(--tui-path);
+}
+
+.tui-term-output .tui-term-token-url {
+  color: var(--tui-path);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--tui-path) 45%, transparent);
+}
+
+.tui-term-output .tui-term-token-symbol {
+  color: var(--tui-symbol);
+}
+
+.tui-term-output .tui-term-token-literal {
+  color: var(--tui-literal);
+}
+
+.tui-term-output .tui-term-token-info {
+  color: var(--tui-accent);
+  font-weight: 500;
+}
+
+.tui-term-output .tui-term-token-timestamp {
+  color: var(--tui-fg-muted);
+}
+
+.tui-term-output .tui-term-token-comment {
+  color: var(--tui-fg-muted);
+  font-style: italic;
+}
+
+.tui-term-output .tui-term-token-prompt,
+.tui-term-output .tui-term-token-header,
+.tui-term-output .tui-term-token-diff-hunk {
+  color: var(--tui-accent);
+  font-weight: 600;
+}
+
+.tui-term-output .tui-term-token-ok {
+  color: var(--tui-ok);
+  font-weight: 600;
+}
+
+.tui-term-output .tui-term-token-warn {
+  color: var(--tui-warn);
+  font-weight: 600;
+}
+
+.tui-term-output .tui-term-token-err {
+  color: var(--tui-err);
+  font-weight: 600;
+}
+
+.tui-term-output .tui-term-token-diff-add {
+  color: var(--tui-diff-add-fg);
+  background-color: var(--tui-diff-add-bg);
+  border-radius: 0.15rem;
+}
+
+.tui-term-output .tui-term-token-diff-del {
+  color: var(--tui-diff-del-fg);
+  background-color: var(--tui-diff-del-bg);
+  border-radius: 0.15rem;
+}
+
+.tui-term-output .tui-term-token-diff-meta {
+  color: var(--tui-fg-muted);
+  font-weight: 500;
+}
+
+/* Subtle per-provider structural & rail accents that do not alter virtualization geometry. */
+[data-tui-work-output="true"] {
+  border-inline-start: 2px solid transparent;
+  padding-inline-start: 0.625rem;
+}
+
+[data-provider]:not([data-provider="default"]) [data-tui-work-output="true"] {
+  border-inline-start-color: var(--tui-rail);
+}
+
+[data-provider]:not([data-provider="default"]) .chat-markdown blockquote {
+  border-inline-start-color: var(--tui-rail);
+}
+
+[data-provider]:not([data-provider="default"]) .chat-markdown-codeblock {
+  border-color: color-mix(in srgb, var(--tui-rail) 65%, var(--contrast-border));
+}
+
+[data-provider]:not([data-provider="default"]) [data-v2-item-inspector="reasoning"] > div {
+  border-inline-start: 2px solid var(--tui-rail);
 }

@@ -21,6 +21,13 @@ import {
 import { useCustomThemes } from "../../hooks/useCustomThemes";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { useTheme } from "../../hooks/useTheme";
+import {
+  DEFAULT_OUTPUT_HIGHLIGHTING_MODE,
+  DEFAULT_PROVIDER_TUI_PALETTES,
+  useOutputHighlightingMode,
+  useProviderTuiPalettes,
+  type OutputHighlightingMode,
+} from "../../lib/tuiOutputPreferences";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
@@ -84,6 +91,12 @@ const EFFORT_DISPLAY_LABELS: Record<EffortDisplay, string> = {
   bars: "Bars",
 };
 
+const OUTPUT_HIGHLIGHTING_LABELS: Record<OutputHighlightingMode, string> = {
+  semantic: "Semantic + ANSI (default)",
+  ansi: "ANSI escapes only",
+  off: "Off",
+};
+
 export function AppearanceSettingsPanel() {
   const {
     appearanceMode,
@@ -99,6 +112,8 @@ export function AppearanceSettingsPanel() {
   const [isImportThemeOpen, setIsImportThemeOpen] = useState(false);
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
+  const [providerTuiPalettes, setProviderTuiPalettes] = useProviderTuiPalettes();
+  const [outputHighlightingMode, setOutputHighlightingMode] = useOutputHighlightingMode();
   const environmentStageLabel = useEnvironmentStageLabel();
   const environmentStageVariant = resolveSidebarStageBackdropVariant(environmentStageLabel);
   const environmentIdentificationOptionList =
@@ -346,6 +361,62 @@ export function AppearanceSettingsPanel() {
               }
               aria-label="Render math"
             />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("provider-tui-palettes")}
+          description="Tint assistant markdown, inline code pills, and terminal output using each provider’s native TUI palette (Claude Code, Codex, Antigravity, Muse)."
+          resetAction={
+            providerTuiPalettes !== DEFAULT_PROVIDER_TUI_PALETTES ? (
+              <SettingResetButton
+                label="provider TUI palettes"
+                onClick={() => setProviderTuiPalettes(DEFAULT_PROVIDER_TUI_PALETTES)}
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={providerTuiPalettes}
+              onCheckedChange={(checked) => setProviderTuiPalettes(Boolean(checked))}
+              aria-label="Provider TUI palettes"
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("output-highlighting")}
+          description="Highlight ANSI escapes, shell commands, flags, file paths, JSON, diffs, and log levels across command outputs and assistant inline code."
+          resetAction={
+            outputHighlightingMode !== DEFAULT_OUTPUT_HIGHLIGHTING_MODE ? (
+              <SettingResetButton
+                label="output highlighting"
+                onClick={() => setOutputHighlightingMode(DEFAULT_OUTPUT_HIGHLIGHTING_MODE)}
+              />
+            ) : null
+          }
+          control={
+            <div className="w-full sm:w-48">
+              <Select
+                value={outputHighlightingMode}
+                onValueChange={(value) => {
+                  if (value === "semantic" || value === "ansi" || value === "off") {
+                    setOutputHighlightingMode(value);
+                  }
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className="w-full min-w-0"
+                  aria-label="Output highlighting"
+                >
+                  <SelectValue>{OUTPUT_HIGHLIGHTING_LABELS[outputHighlightingMode]}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem value="semantic">Semantic + ANSI (default)</SelectItem>
+                  <SelectItem value="ansi">ANSI escapes only</SelectItem>
+                  <SelectItem value="off">Off</SelectItem>
+                </SelectPopup>
+              </Select>
+            </div>
           }
         />
         <AdvancedSettings

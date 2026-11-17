@@ -153,6 +153,7 @@ export function WorkLogDetails({
         const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
         atLiveEdgeRef.current = scrollHeight - scrollTop - clientHeight <= LIVE_EDGE_PX;
       }}
+      data-tui-work-output={kind === "panel" ? "true" : undefined}
       className={cn(
         "cursor-auto",
         kind === "text"
