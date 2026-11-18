@@ -456,7 +456,7 @@ export const make = Effect.gen(function* () {
       const attestation =
         name === "terminal" && terminalOwner !== undefined
           ? { kind: "terminal", owner: terminalOwner }
-          : name === "claude" && threadId !== undefined && shared !== true
+          : (name === "claude" || name === "acp") && threadId !== undefined && shared !== true
             ? { kind: "thread", owner: threadId }
             : undefined;
       const recorder =

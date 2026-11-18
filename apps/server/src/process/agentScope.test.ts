@@ -311,7 +311,7 @@ describe("AgentScope service", () => {
   );
 
   it.effect(
-    "records terminal and exclusive Claude scopes without assigning shared processes to a thread",
+    "records terminal and exclusive provider scopes without assigning shared processes to a thread",
     () =>
       withFakeSystemd(
         ({ scope, stateDir }) =>
@@ -337,6 +337,12 @@ describe("AgentScope service", () => {
               shared: true,
             });
             const codex = yield* launchCodex(scope, "a");
+            const acp = yield* scope.wrap({
+              command: "agent",
+              args: [],
+              name: "acp",
+              threadId: "b",
+            });
             expect(sliceOf(terminal)).toBe("app-t3code-agents.slice");
             expect(terminal.args.slice(-8)).toEqual([
               "attest",
@@ -359,6 +365,15 @@ describe("AgentScope service", () => {
             ]);
             expect(codex.args).not.toContain("attest");
             expect(sharedClaude.args).not.toContain("attest");
+            expect(acp.args.slice(-7)).toEqual([
+              "attest",
+              unitOf(acp),
+              "thread",
+              stateDir,
+              "b",
+              "--",
+              expect.stringMatching(/\/agent$/),
+            ]);
           }),
         { enrollment: true },
       ),
