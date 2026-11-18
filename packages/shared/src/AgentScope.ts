@@ -7,6 +7,7 @@ export interface AgentScopeShape {
     readonly args: ReadonlyArray<string>;
     readonly name: string;
     readonly threadId?: string | undefined;
+    readonly terminalOwner?: string | undefined;
     readonly env?: NodeJS.ProcessEnv | undefined;
     /** Terminals may survive restarts; agents must remain eligible for orphan cleanup. */
     readonly survivesRestart?: boolean | undefined;

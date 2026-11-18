@@ -67,16 +67,23 @@ const withFakeSystemd = <A, E>(
     stopFails = false,
     leftovers = false,
     liveOwner = false,
+    enrollment = false,
   }: {
     readonly oomPolicy?: boolean;
     readonly stopFails?: boolean;
     readonly leftovers?: boolean;
     readonly liveOwner?: boolean;
+    readonly enrollment?: boolean;
   } = {},
 ) =>
   Effect.gen(function* () {
     const bin = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-agent-scope-"));
-    for (const name of ["systemd-run", "systemctl", "agent"]) {
+    for (const name of [
+      "systemd-run",
+      "systemctl",
+      "agent",
+      ...(enrollment ? ["devlease-enroll"] : []),
+    ]) {
       NodeFS.writeFileSync(NodePath.join(bin, name), "", { mode: 0o755 });
     }
     const cgroupRoot = NodePath.join(bin, "cgroup");
@@ -301,6 +308,60 @@ describe("AgentScope service", () => {
         }
       }),
     ),
+  );
+
+  it.effect(
+    "records terminal and exclusive Claude scopes without assigning shared processes to a thread",
+    () =>
+      withFakeSystemd(
+        ({ scope, stateDir }) =>
+          Effect.gen(function* () {
+            const terminal = yield* scope.wrap({
+              command: "agent",
+              args: ["shell-flag"],
+              name: "terminal",
+              terminalOwner: "a/terminal",
+              survivesRestart: true,
+            });
+            const claude = yield* scope.wrap({
+              command: "agent",
+              args: [],
+              name: "claude",
+              threadId: "a",
+            });
+            const sharedClaude = yield* scope.wrap({
+              command: "agent",
+              args: [],
+              name: "claude",
+              threadId: "a",
+              shared: true,
+            });
+            const codex = yield* launchCodex(scope, "a");
+            expect(sliceOf(terminal)).toBe("app-t3code-agents.slice");
+            expect(terminal.args.slice(-8)).toEqual([
+              "attest",
+              unitOf(terminal),
+              "terminal",
+              stateDir,
+              "a/terminal",
+              "--",
+              expect.stringMatching(/\/agent$/),
+              "shell-flag",
+            ]);
+            expect(claude.args.slice(-7)).toEqual([
+              "attest",
+              unitOf(claude),
+              "thread",
+              stateDir,
+              "a",
+              "--",
+              expect.stringMatching(/\/agent$/),
+            ]);
+            expect(codex.args).not.toContain("attest");
+            expect(sharedClaude.args).not.toContain("attest");
+          }),
+        { enrollment: true },
+      ),
   );
 
   it.effect("caps agent memory and yields CPU, disk, and tasks to the server", () =>

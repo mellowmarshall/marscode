@@ -421,6 +421,7 @@ export const make = Effect.gen(function* () {
       args,
       name,
       threadId,
+      terminalOwner,
       env,
       survivesRestart,
       shared,
@@ -452,6 +453,33 @@ export const make = Effect.gen(function* () {
           ...(owned ? [] : ["--collect"]),
         ],
       };
+      const attestation =
+        name === "terminal" && terminalOwner !== undefined
+          ? { kind: "terminal", owner: terminalOwner }
+          : name === "claude" && threadId !== undefined && shared !== true
+            ? { kind: "thread", owner: threadId }
+            : undefined;
+      const recorder =
+        attestation === undefined ? null : yield* resolve("devlease-enroll", hostEnvironment);
+      if (attestation !== undefined && recorder !== null) {
+        return {
+          ...agentScopeCommand({
+            command: recorder,
+            args: [
+              "attest",
+              unit,
+              attestation.kind,
+              stateDir,
+              attestation.owner,
+              "--",
+              resolved,
+              ...args,
+            ],
+            scope: systemdScope,
+          }),
+          unit,
+        };
+      }
       return { ...agentScopeCommand({ command: resolved, args, scope: systemdScope }), unit };
     }),
     oomKilled,
