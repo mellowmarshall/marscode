@@ -11,6 +11,7 @@ import {
   formatUptime,
   metricTone,
   readMachinesTab,
+  selectEnvironmentBackgroundJobs,
   selectEnvironmentThreads,
   shortMountLabel,
   sortMachineEnvironments,
@@ -150,5 +151,71 @@ describe("machines.logic", () => {
       active: 0,
       attention: 1,
     });
+  });
+
+  it("parses jobs tab cleanly", () => {
+    expect(readMachinesTab("jobs")).toBe("jobs");
+    expect(readMachinesTab("processes")).toBe("processes");
+    expect(readMachinesTab("servers")).toBe("servers");
+    expect(readMachinesTab("unknown")).toBe("overview");
+  });
+
+  it("selects non-archived environment background jobs with awaited tasks first", () => {
+    const envA = EnvironmentId.make("env-a");
+    const envB = EnvironmentId.make("env-b");
+    const tArchived = makeThreadFixture({
+      id: ThreadId.make("t-archived"),
+      environmentId: envA,
+      archivedAt: "2026-11-23T09:00:00.000Z",
+      updatedAt: "2026-11-23T09:00:00.000Z",
+      pendingBackgroundTasks: [
+        {
+          kind: "command",
+          taskId: "cmd-arch",
+          awaited: true,
+          command: "python train.py",
+        },
+      ],
+    });
+    const tBg = makeThreadFixture({
+      id: ThreadId.make("t-bg"),
+      environmentId: envA,
+      updatedAt: "2026-11-23T09:10:00.000Z",
+      pendingBackgroundTasks: [
+        {
+          kind: "subagent",
+          taskId: "agent-1",
+          description: "Inspect fixtures",
+        },
+      ],
+    });
+    const tAwaited = makeThreadFixture({
+      id: ThreadId.make("t-awaited"),
+      environmentId: envA,
+      updatedAt: "2026-11-23T09:05:00.000Z",
+      pendingBackgroundTasks: [
+        {
+          kind: "command",
+          taskId: "cmd-live",
+          awaited: true,
+          command: "pytest -q",
+        },
+      ],
+    });
+    const tOtherEnv = makeThreadFixture({
+      id: ThreadId.make("t-other"),
+      environmentId: envB,
+      pendingBackgroundTasks: [
+        {
+          kind: "monitor",
+          taskId: "mon-b",
+          awaited: true,
+          description: "Watch logs",
+        },
+      ],
+    });
+
+    const jobs = selectEnvironmentBackgroundJobs([tArchived, tBg, tAwaited, tOtherEnv], envA);
+    expect(jobs.map((entry) => entry.key)).toEqual(["t-awaited:cmd-live", "t-bg:agent-1"]);
   });
 });

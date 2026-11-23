@@ -3210,7 +3210,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "på datorn som öppnade den här sidan"]
+      "c": [
+        " ",
+        "på datorn som öppnade den här sidan"
+      ]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3222,7 +3225,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "· den som kör den får den här åtkomsten"]
+      "c": [
+        " ",
+        "· den som kör den får den här åtkomsten"
+      ]
     }
   ],
   "c54cc9c75db9dc58": "Godkänn bara en inloggning som du själv precis har startat.",
@@ -3310,10 +3316,6 @@
   "3390f0b2396998c0": "Citera markeringen i inmatningsfältet",
   "e5dc8d61a6d178ed": "Korta ned markeringen",
   "a5b06aaaba1d742f": "Citera",
-  "b1d8a5a24bd684e3": "subagent",
-  "5a805b37d8940816": "kommando",
-  "da2da87e78bd6b11": "övervakare",
-  "b034f8434dd8479d": "bakgrundsuppgift",
   "519dd506361059c9": "Kommando",
   "b851b1f4c772dea4": "Väntar",
   "83915f0968cde2cc": "Körs",
@@ -12912,5 +12914,66 @@
   "27d76249d09eb69f": "Granskningsguiden är klar",
   "faa3bb26abb39c93": "Granskningsguiden misslyckades",
   "b7df38b7d8792d78": "Öppna guiden",
-  "9e91e9a77b664e4e": "Kunde inte starta en granskningsguide"
+  "9e91e9a77b664e4e": "Kunde inte starta en granskningsguide",
+  "079979253938b239": "{seconds}s !",
+  "68c0621520a2bce2": "Väntar",
+  "36265b411433dd3d": "Aktiv",
+  "52db9bf9eeda6c46": "ETA {eta}",
+  "af4c1bb734580c07": "Ingen utdata på {seconds}s",
+  "668e353261860b41": "Bakgrundsarbete",
+  "1bcb35917c410a99": "Subagent",
+  "e7f6d6b0a06817ca": "Kommando",
+  "0d2521e4bc6a8428": "Övervakare",
+  "cff999470519030d": "Bakgrundsuppgift",
+  "b9a75ddf09a6d6d0": "{percent}% GPU",
+  "6acc22bb2a785e42": [
+    "Ingen ny utdata på ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    "s. Strömmen förblir ansluten och uppdateras automatiskt när utdata återupptas."
+  ],
+  "1b56fff35cc9404b": [
+    "ETA ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "ab1e2366ce9e9f9b": "Bekräfta stopp av tråd",
+  "aba7e8025f1ab49b": "Stoppar…",
+  "e7cadc6b94916eab": "Stoppa tråd",
+  "488462681c7ab05a": "steg {step}: {value}",
+  "b05921ff66695033": "{count} pkt",
+  "6e688f07d1a880fd": "Log10",
+  "a0482d6b86b07cee": "Linjär",
+  "82a05096b78ba050": "Oändl.",
+  "099da2758a5bb032": "Subagent",
+  "5b864dadbc4c233f": "Övervakare",
+  "d1ced71fcd3c8e72": "Kommando",
+  "388f4f253fd372be": "Bakgrundsuppgift",
+  "564ab805b2a09b22": "Avstannad {seconds}s",
+  "05403ba4f0d11195": "Kunde inte stoppa tråden",
+  "a69d56c3eda06a53": "Filtrera bakgrundsjobb",
+  "0e995137d5932503": "Bakgrundsjobb",
+  "3fc1f26ff7258c87": [
+    "Arbetsflöden · ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " aktiva"
+  ],
+  "a65ad03dda72be9a": "Alla",
+  "5a5d9be1bd5e6980": "Kommandon",
+  "78fd6b4fbfd33603": "Subagenter",
+  "7016cedd80fe8fd7": "Inga körande bakgrundsjobb",
+  "d16d1fadc799a3d3": "Väntade kommandon, övervakare och subagenter som körs på den här datorn visas här.",
+  "4ec08221fabd1a8e": "Inga matchande jobb",
+  "c3e0406e0c3fc92f": "Byt filter ovan för att granska annat körande bakgrundsarbete.",
+  "ddd088819f44be6f": "Jobb"
 }

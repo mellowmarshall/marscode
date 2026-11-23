@@ -22,6 +22,7 @@ describe("thread details items", () => {
     });
     expect(visibility.usage).toBe(row.usage);
     expect(visibility.context).toBe(row.context);
+    expect(visibility.backgroundWork).toBe(true);
     expect(visibility.servers).toBe(true);
   });
 

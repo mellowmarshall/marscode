@@ -36,6 +36,9 @@ import {
 import { ThreadDetailsItemsMenuItems } from "./ThreadDetailsItemsMenu";
 import { resolveThreadDetailsVisibility, THREAD_DETAILS_ITEMS } from "./threadDetailsItems";
 import { useClientSettings } from "../../hooks/useSettings";
+import { ThreadBackgroundWorkPanel } from "./ThreadBackgroundWorkPanel";
+import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
+import type { OrchestrationV2PendingBackgroundTask } from "@t3tools/contracts";
 import { useProject, useServerConfigs } from "../../state/entities";
 import { filesystemEnvironment } from "../../state/filesystem";
 import { useEnvironmentQuery } from "../../state/query";
@@ -94,6 +97,15 @@ interface ThreadDetailsPanelProps extends Pick<
     input: NewProjectScriptInput,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
+  backgroundWork?: {
+    readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+    readonly turnItems: ThreadStructure["turnItems"];
+    readonly branch?: string | null;
+    readonly stopDisabled: boolean;
+    readonly stopping: boolean;
+    readonly onStop: () => Promise<void>;
+    readonly onOpenThread: (threadId: ThreadId) => void;
+  };
   usage: ThreadDetailsUsageInput;
 }
 
@@ -304,6 +316,24 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                     ) : null}
                   </div>
                 </ThreadDetailsSection>
+              ) : null}
+
+              {!props.draftId &&
+              visible.backgroundWork &&
+              props.backgroundWork &&
+              props.backgroundWork.tasks.length > 0 ? (
+                <ThreadBackgroundWorkPanel
+                  density={density}
+                  environmentId={props.environmentId}
+                  threadId={props.threadId}
+                  tasks={props.backgroundWork.tasks}
+                  turnItems={props.backgroundWork.turnItems}
+                  branch={props.backgroundWork.branch}
+                  stopDisabled={props.backgroundWork.stopDisabled}
+                  stopping={props.backgroundWork.stopping}
+                  onStop={props.backgroundWork.onStop}
+                  onOpenThread={props.backgroundWork.onOpenThread}
+                />
               ) : null}
 
               {density === "full" && !props.draftId && visible.servers ? (

@@ -1,14 +1,14 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, OrchestrationV2PendingBackgroundTask } from "@t3tools/contracts";
 
 import { resolveSidebarThreadStatus, type SidebarThreadStatus } from "../Sidebar.logic";
 import type { EnvironmentPresentation } from "../../state/environments";
 import type { SidebarThreadSummary } from "../../types";
 
-export type MachinesTab = "overview" | "processes" | "servers";
+export type MachinesTab = "overview" | "processes" | "jobs" | "servers";
 export type MetricTone = "default" | "warning" | "danger";
 
 export function readMachinesTab(raw: unknown): MachinesTab {
-  if (raw === "processes" || raw === "servers") return raw;
+  if (raw === "processes" || raw === "jobs" || raw === "servers") return raw;
   return "overview";
 }
 
@@ -142,4 +142,37 @@ export function countEnvironmentThreadStates(
     }
   }
   return { total, active, attention };
+}
+
+export interface MachineBackgroundJobEntry {
+  readonly key: string;
+  readonly thread: SidebarThreadSummary;
+  readonly task: OrchestrationV2PendingBackgroundTask;
+}
+
+export function selectEnvironmentBackgroundJobs(
+  threads: ReadonlyArray<SidebarThreadSummary>,
+  environmentId: EnvironmentId,
+): ReadonlyArray<MachineBackgroundJobEntry> {
+  const entries: Array<MachineBackgroundJobEntry> = [];
+  for (const thread of threads) {
+    if (thread.environmentId !== environmentId || thread.archivedAt !== null) {
+      continue;
+    }
+    for (const task of thread.pendingBackgroundTasks) {
+      entries.push({
+        key: `${thread.id}:${task.taskId}`,
+        thread,
+        task,
+      });
+    }
+  }
+  entries.sort((left, right) => {
+    const awaitedDiff = Number(right.task.awaited === true) - Number(left.task.awaited === true);
+    if (awaitedDiff !== 0) return awaitedDiff;
+    const updatedDiff = right.thread.updatedAt.localeCompare(left.thread.updatedAt);
+    if (updatedDiff !== 0) return updatedDiff;
+    return left.key.localeCompare(right.key);
+  });
+  return entries;
 }

@@ -1581,6 +1581,7 @@ export default function ChatView(props: ChatViewProps) {
     activeProviderThread,
   );
   const pendingBackgroundTasks = deriveThreadPendingBackgroundTasks(serverProjection);
+  const serverTurnItems = serverProjection?.turnItems ?? EMPTY_TURN_ITEMS;
   const activeWorkStartedAt =
     deriveActiveWorkStartedAt(activeActivityRun, activeRuntime, localDispatchStartedAt) ??
     runlessWorkStartedAt;
@@ -2554,6 +2555,7 @@ export default function ChatView(props: ChatViewProps) {
     activeBranchMismatchKey,
     attentionNow,
     workNow,
+    backgroundWorkPanel,
     childInputNow,
     goalNow,
     handleSwitchCheckoutToThread,
@@ -2586,7 +2588,7 @@ export default function ChatView(props: ChatViewProps) {
     // A waiting run is checkpoint drain; Stop there reaches its background work.
     runIsLive: (isWorking && activeRuntime?.status !== "waiting") || phase === "connecting",
     pendingBackgroundTasks,
-    turnItems: serverProjection?.turnItems ?? EMPTY_TURN_ITEMS,
+    turnItems: serverTurnItems,
     activePendingApproval,
     activePendingUserInput,
     localCheckoutBranchMismatch,
@@ -4151,6 +4153,13 @@ export default function ChatView(props: ChatViewProps) {
                   onAddProjectScript={saveProjectScriptStable}
                   onUpdateProjectScript={updateProjectScriptStable}
                   onDeleteProjectScript={deleteProjectScriptStable}
+                  backgroundWork={{
+                    tasks: pendingBackgroundTasks,
+                    turnItems: serverTurnItems,
+                    branch: activeThread.branch,
+                    ...backgroundWorkPanel,
+                    onOpenThread: onOpenRelatedThreadStable,
+                  }}
                   usage={{
                     providerInstanceId: activeProviderInstanceId,
                     model: activeUsageModel,

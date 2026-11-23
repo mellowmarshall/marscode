@@ -14,6 +14,11 @@ export const THREAD_DETAILS_ITEMS = [
     defaultVisible: true,
   },
   {
+    id: "backgroundWork",
+    label: msg("Background work"),
+    defaultVisible: true,
+  },
+  {
     id: "servers",
     label: msg("Servers", { $context: "thread details item: running dev servers" }),
     defaultVisible: true,

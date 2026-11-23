@@ -8,6 +8,7 @@ import { useEffect } from "react";
 
 import { isElectron } from "~/env";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { useVisibleThreadShells } from "../../state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -36,10 +37,16 @@ import {
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { MachineCardStrip } from "./MachineCardStrip";
+import { MachineJobsPanel } from "./MachineJobsPanel";
 import { MachineServersPanel } from "./MachineServersPanel";
 import { MachineTelemetryCards } from "./MachineTelemetryCards";
 import { MachineThreadsPanel } from "./MachineThreadsPanel";
-import { type MachinesTab, readMachinesTab, sortMachineEnvironments } from "./machines.logic";
+import {
+  type MachinesTab,
+  readMachinesTab,
+  selectEnvironmentBackgroundJobs,
+  sortMachineEnvironments,
+} from "./machines.logic";
 
 export interface MachinesSearch {
   readonly env?: string;
@@ -67,6 +74,7 @@ export function MachinesPage() {
   const search = useSearch({ from: "/_chat/machines" });
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const allThreads = useVisibleThreadShells();
 
   const sortedEnvironments = sortMachineEnvironments(environments, primaryEnvironmentId);
   const askedEnvironmentId = search.env ? EnvironmentId.make(search.env) : null;
@@ -161,6 +169,10 @@ export function MachinesPage() {
   };
 
   const isRefreshing = selectedConnected && hardware.isPending;
+  const activeJobsCount =
+    selectedId && selectedConnected
+      ? selectEnvironmentBackgroundJobs(allThreads, selectedId).length
+      : 0;
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
@@ -298,6 +310,14 @@ export function MachinesPage() {
                           <Toggle value="processes">
                             <T>Processes</T>
                           </Toggle>
+                          <Toggle value="jobs">
+                            <T>Jobs</T>
+                            {activeJobsCount > 0 ? (
+                              <span className="text-2xs text-muted-foreground tabular-nums">
+                                {activeJobsCount}
+                              </span>
+                            ) : null}
+                          </Toggle>
                           <Toggle value="servers">
                             <T>Servers</T>
                           </Toggle>
@@ -392,6 +412,11 @@ export function MachinesPage() {
                               environmentId={selectedEnvironment.environmentId}
                             />
                           )
+                        ) : tab === "jobs" ? (
+                          <MachineJobsPanel
+                            key={`jobs:${selectedEnvironment.environmentId}`}
+                            environmentId={selectedEnvironment.environmentId}
+                          />
                         ) : (
                           <MachineServersPanel
                             key={selectedEnvironment.environmentId}

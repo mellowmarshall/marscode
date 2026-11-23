@@ -3210,7 +3210,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "en el ordenador que abrió esta página"]
+      "c": [
+        " ",
+        "en el ordenador que abrió esta página"
+      ]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3222,7 +3225,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "· quien lo ejecute obtiene este acceso"]
+      "c": [
+        " ",
+        "· quien lo ejecute obtiene este acceso"
+      ]
     }
   ],
   "c54cc9c75db9dc58": "Aprueba solo un inicio de sesión que acabes de iniciar.",
@@ -3310,10 +3316,6 @@
   "3390f0b2396998c0": "Citar la selección en el cuadro de mensaje",
   "e5dc8d61a6d178ed": "Acortar selección",
   "a5b06aaaba1d742f": "Citar",
-  "b1d8a5a24bd684e3": "subagente",
-  "5a805b37d8940816": "comando",
-  "da2da87e78bd6b11": "monitor",
-  "b034f8434dd8479d": "tarea en segundo plano",
   "519dd506361059c9": "Comando",
   "b851b1f4c772dea4": "Esperando",
   "83915f0968cde2cc": "En ejecución",
@@ -12900,5 +12902,66 @@
   "27d76249d09eb69f": "Guía de revisión lista",
   "faa3bb26abb39c93": "Falló la guía de revisión",
   "b7df38b7d8792d78": "Abrir guía",
-  "9e91e9a77b664e4e": "No se pudo iniciar una guía de revisión"
+  "9e91e9a77b664e4e": "No se pudo iniciar una guía de revisión",
+  "079979253938b239": "{seconds}s !",
+  "68c0621520a2bce2": "Esp.",
+  "36265b411433dd3d": "Activo",
+  "52db9bf9eeda6c46": "ETA {eta}",
+  "af4c1bb734580c07": "Sin salida durante {seconds}s",
+  "668e353261860b41": "Trabajo en segundo plano",
+  "1bcb35917c410a99": "Subagente",
+  "e7f6d6b0a06817ca": "Comando",
+  "0d2521e4bc6a8428": "Monitor",
+  "cff999470519030d": "Tarea en segundo plano",
+  "b9a75ddf09a6d6d0": "{percent}% GPU",
+  "6acc22bb2a785e42": [
+    "Sin nueva salida durante ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    "s. La transmisión sigue conectada y se actualizará automáticamente al reanudarse."
+  ],
+  "1b56fff35cc9404b": [
+    "ETA ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "ab1e2366ce9e9f9b": "Confirmar detención del hilo",
+  "aba7e8025f1ab49b": "Deteniendo…",
+  "e7cadc6b94916eab": "Detener hilo",
+  "488462681c7ab05a": "paso {step}: {value}",
+  "b05921ff66695033": "{count} pts",
+  "6e688f07d1a880fd": "Log10",
+  "a0482d6b86b07cee": "Lineal",
+  "82a05096b78ba050": "Inf",
+  "099da2758a5bb032": "Subagente",
+  "5b864dadbc4c233f": "Monitor",
+  "d1ced71fcd3c8e72": "Comando",
+  "388f4f253fd372be": "Tarea en segundo plano",
+  "564ab805b2a09b22": "Detenido {seconds}s",
+  "05403ba4f0d11195": "No se pudo detener el hilo",
+  "a69d56c3eda06a53": "Filtrar tareas en segundo plano",
+  "0e995137d5932503": "Tareas en segundo plano",
+  "3fc1f26ff7258c87": [
+    "Flujos de trabajo · ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " activos"
+  ],
+  "a65ad03dda72be9a": "Todos",
+  "5a5d9be1bd5e6980": "Comandos",
+  "78fd6b4fbfd33603": "Subagentes",
+  "7016cedd80fe8fd7": "No hay tareas en segundo plano en ejecución",
+  "d16d1fadc799a3d3": "Los comandos esperados, monitores y subagentes que se ejecutan en esta máquina aparecen aquí.",
+  "4ec08221fabd1a8e": "Sin tareas coincidentes",
+  "c3e0406e0c3fc92f": "Cambia el filtro superior para inspeccionar otro trabajo en segundo plano.",
+  "ddd088819f44be6f": "Tareas"
 }
