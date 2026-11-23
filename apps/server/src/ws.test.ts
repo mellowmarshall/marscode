@@ -8,9 +8,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   AuthAccessReadScope,
+  AuthAccessWriteScope,
   type AuthEnvironmentScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  AuthTerminalOperateScope,
   type WorkflowRun,
   type WorkflowStep,
   AuthSessionId,
@@ -96,6 +98,7 @@ import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as HostHardware from "./resourceTelemetry/HostHardware.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import * as HostGuardBroker from "./hostGuard/HostGuardBroker.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
 import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
@@ -854,6 +857,9 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   Layer.mock(HostHardware.HostHardware)({}),
   Layer.mock(HostResources.HostResources)({}),
+  Layer.mock(HostGuardBroker.HostGuardBroker)({
+    preapprove: () => ({ ok: false, error: "unused" }),
+  }),
   Layer.mock(McpAppRequests.McpAppRequests)({}),
   Layer.mock(McpSignIn.McpSignIn)({}),
   Layer.mock(ModelManifest.ModelManifest)({}),
@@ -2811,4 +2817,97 @@ it.effect("a session that can only read sees a workflow run but cannot steer it"
     );
     assert.deepEqual(calls, []);
   }).pipe(Effect.provide(layerWorkflowRpcTest), Effect.scoped),
+);
+
+it.effect(
+  "rejects MCP and peer-link subjects from subscribing or resolving host-guard overrides",
+  () =>
+    Effect.gen(function* () {
+      const hostGuardRpcs = WsRpcGroup.omit(
+        ...[...WsRpcGroup.requests.keys()].filter(
+          (
+            tag,
+          ): tag is Exclude<
+            keyof typeof RpcAuthorization.RPC_REQUIRED_SCOPES,
+            typeof WS_METHODS.hostGuardSubscribe | typeof WS_METHODS.hostGuardResolve
+          > => tag !== WS_METHODS.hostGuardSubscribe && tag !== WS_METHODS.hostGuardResolve,
+        ),
+      );
+      const resolvedInputs: Array<unknown> = [];
+      const hostGuardServices = Layer.mergeAll(
+        layerUnusedConfigRpcServices,
+        Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+        Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+        Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+        Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+        Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+        Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+        Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+        Layer.mock(Workflows.Workflows)({}),
+        Layer.mock(HostGuardBroker.HostGuardBroker)({
+          stateStream: Stream.make({ listening: true, pending: [] }),
+          resolve: (input) =>
+            Effect.sync(() => {
+              resolvedInputs.push(input);
+              return { resolved: true, grantId: "grant-1" };
+            }),
+          preapprove: () => ({ ok: false, error: "unused" }),
+        }),
+      );
+      const scopes: ReadonlyArray<AuthEnvironmentScope> = [
+        AuthAccessWriteScope,
+        AuthTerminalOperateScope,
+      ];
+      const serverBrowser = yield* ServerBrowser.ServerBrowser;
+      const makeClient = (subject: string) =>
+        RpcTest.makeClient(hostGuardRpcs).pipe(
+          Effect.provide(
+            layerWsRpc(
+              {
+                sessionId: AuthSessionId.make(`session-${subject}`),
+                subject,
+                method: "bearer-access-token",
+                scopes: [...scopes],
+              },
+              {},
+              serverBrowser,
+              () => Effect.void,
+              { secretReferences: true },
+            ).pipe(Layer.provide(hostGuardServices), Layer.merge(RpcAuthorization.layer(scopes))),
+          ),
+        );
+
+      for (const subject of ["mcp-client", "peer-link:peer-1"]) {
+        const restricted = yield* makeClient(subject);
+        const subError = yield* Stream.runCollect(
+          restricted[WS_METHODS.hostGuardSubscribe]({}),
+        ).pipe(Effect.flip);
+        const resolveError = yield* restricted[WS_METHODS.hostGuardResolve]({
+          requestId: "t3r_123",
+          decision: "approve",
+        }).pipe(Effect.flip);
+        assert.equal(subError._tag, "EnvironmentAuthorizationError");
+        assert.equal(resolveError._tag, "EnvironmentAuthorizationError");
+      }
+
+      const human = yield* makeClient("paired-owner");
+      const states = yield* Stream.runCollect(human[WS_METHODS.hostGuardSubscribe]({}));
+      assert.deepEqual([...states], [{ listening: true, pending: [] }]);
+      const resolved = yield* human[WS_METHODS.hostGuardResolve]({
+        requestId: "t3r_123",
+        decision: "approve",
+        reason: "Trusted command",
+      });
+      assert.deepEqual(resolved, { resolved: true, grantId: "grant-1" });
+      assert.deepEqual(resolvedInputs, [
+        {
+          requestId: "t3r_123",
+          decision: "approve",
+          reason: "Trusted command",
+          approvedVia: "bearer-access-token:paired-owner",
+        },
+      ]);
+    }).pipe(Effect.provide(layerWorkflowRpcTest), Effect.scoped),
 );

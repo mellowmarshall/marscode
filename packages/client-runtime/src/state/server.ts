@@ -1713,6 +1713,19 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.subscribeResourceTelemetry,
       idleTtlMs: 0,
     }),
+    hostGuardLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:host-guard:live",
+      tag: WS_METHODS.hostGuardSubscribe,
+      idleTtlMs: 0,
+    }),
+    resolveHostGuard: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:host-guard:resolve",
+      tag: WS_METHODS.hostGuardResolve,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.requestId]),
+      },
+    }),
     resourceTelemetryHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry-history",
       tag: WS_METHODS.serverGetResourceTelemetryHistory,

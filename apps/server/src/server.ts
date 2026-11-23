@@ -212,6 +212,7 @@ import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as HostHardware from "./resourceTelemetry/HostHardware.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import * as HostGuardBroker from "./hostGuard/HostGuardBroker.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as TriageService from "./triage/TriageService.ts";
@@ -868,6 +869,7 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   // The same layer the event sink uses; memoized, subscriptions and batch ranking share it.
   Layer.provideMerge(ThreadViewers.layer),
   Layer.provideMerge(layerResourceDiagnostics),
+  Layer.provideMerge(HostGuardBroker.layer),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(TriageService.layer.pipe(Layer.provide(GitVcsDriver.layer))),
   // Layers memoize by reference, so this is the same policy the settings layer reads.

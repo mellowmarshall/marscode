@@ -33,6 +33,7 @@ import {
   authScopeResponse,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
+  AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
   AuthProvidersManageScope,
   type AuthEnvironmentScope,
@@ -257,6 +258,7 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as HostHardware from "./resourceTelemetry/HostHardware.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import * as HostGuardBroker from "./hostGuard/HostGuardBroker.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
@@ -1622,10 +1624,13 @@ export const layerWsRpc = (
       const triage = yield* TriageService.TriageService;
       const hostHardware = yield* HostHardware.HostHardware;
       const hostResources = yield* HostResources.HostResources;
+      const hostGuardBroker = yield* HostGuardBroker.HostGuardBroker;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
       // Webhook URLs start agents; expose them only to operate-scoped sessions while keeping tasks readable.
+      const isPeerOrMcpSubject = (subject: string): boolean =>
+        subject.startsWith("mcp-") || subject.startsWith("peer-link:");
       const withVisibleWebhookUrls = (result: ScheduledTaskListResult): ScheduledTaskListResult =>
         currentSession.scopes.includes(AuthOrchestrationOperateScope)
           ? result
@@ -2813,6 +2818,17 @@ export const layerWsRpc = (
         [WS_METHODS.serverGetProcessDiagnostics]: (_input) => processDiagnostics.read,
         [WS_METHODS.serverGetHostResources]: (_input) => hostResources.read,
         [WS_METHODS.serverGetHostHardware]: (_input) => hostHardware.read,
+        [WS_METHODS.hostGuardSubscribe]: (_input) =>
+          isPeerOrMcpSubject(currentSession.subject)
+            ? Stream.fail(rpcAuthorizationError(AuthAccessWriteScope))
+            : hostGuardBroker.stateStream,
+        [WS_METHODS.hostGuardResolve]: (input) =>
+          isPeerOrMcpSubject(currentSession.subject)
+            ? Effect.fail(rpcAuthorizationError(AuthAccessWriteScope))
+            : hostGuardBroker.resolve({
+                ...input,
+                approvedVia: `${currentSession.method}:${currentSession.subject}`,
+              }),
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           processResourceMonitor.readHistory(input),
         [WS_METHODS.serverGetResourceTelemetryHistory]: (input) =>

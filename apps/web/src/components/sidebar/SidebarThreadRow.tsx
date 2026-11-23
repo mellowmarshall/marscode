@@ -80,6 +80,7 @@ import { useThreadSelectionStore } from "../../threadSelectionStore";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useNowSecond } from "../../hooks/useNowSecond";
 import { vcsEnvironment, vcsBranchRevalidation } from "../../state/vcs";
+import { useThreadHasHostGuardApproval } from "../../state/hostGuard";
 import { useSidebarLinkedIssueState } from "../../state/issues";
 import { useEnvironmentQuery } from "../../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
@@ -772,7 +773,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     : null;
 
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = resolveSidebarRowStatus({ ...thread, lastVisitedAt });
+  const hasHostGuardApproval = useThreadHasHostGuardApproval({
+    environmentId: thread.environmentId,
+    threadId: thread.id,
+    enabled: leaseLiveStatus,
+  });
+  const baseStatus = resolveSidebarRowStatus({ ...thread, lastVisitedAt });
+  const status =
+    hasHostGuardApproval && baseStatus !== "approval" && baseStatus !== "input"
+      ? "approval"
+      : baseStatus;
   const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
   const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
   const isWoke =

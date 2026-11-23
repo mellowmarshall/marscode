@@ -838,3 +838,63 @@ it.effect("requires provider management to send /logout through chat", () =>
     ]);
   }).pipe(Effect.scoped),
 );
+
+it.effect("requires access write and terminal operate scopes for host-guard broker RPCs", () =>
+  Effect.gen(function* () {
+    const hostGuardRpcs = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          typeof WS_METHODS.hostGuardSubscribe | typeof WS_METHODS.hostGuardResolve
+        > => tag !== WS_METHODS.hostGuardSubscribe && tag !== WS_METHODS.hostGuardResolve,
+      ),
+    );
+    const handlers = Layer.mergeAll(
+      hostGuardRpcs.toLayerHandler(WS_METHODS.hostGuardSubscribe, () =>
+        Stream.make({ listening: true, pending: [] }),
+      ),
+      hostGuardRpcs.toLayerHandler(WS_METHODS.hostGuardResolve, () =>
+        Effect.succeed({ resolved: false }),
+      ),
+    );
+
+    const accessOnly = yield* RpcTest.makeClient(hostGuardRpcs).pipe(
+      Effect.provide(Layer.merge(handlers, RpcAuthorization.layer([AuthAccessWriteScope]))),
+    );
+    expect(
+      yield* Stream.runCollect(accessOnly[WS_METHODS.hostGuardSubscribe]({})).pipe(Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthTerminalOperateScope });
+    expect(
+      yield* accessOnly[WS_METHODS.hostGuardResolve]({
+        requestId: "req-1",
+        decision: "approve",
+      }).pipe(Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthTerminalOperateScope });
+
+    const terminalOnly = yield* RpcTest.makeClient(hostGuardRpcs).pipe(
+      Effect.provide(Layer.merge(handlers, RpcAuthorization.layer([AuthTerminalOperateScope]))),
+    );
+    expect(
+      yield* terminalOnly[WS_METHODS.hostGuardResolve]({
+        requestId: "req-1",
+        decision: "deny",
+      }).pipe(Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthAccessWriteScope });
+
+    const authorized = yield* RpcTest.makeClient(hostGuardRpcs).pipe(
+      Effect.provide(
+        Layer.merge(
+          handlers,
+          RpcAuthorization.layer([AuthAccessWriteScope, AuthTerminalOperateScope]),
+        ),
+      ),
+    );
+    const states = yield* Stream.runCollect(authorized[WS_METHODS.hostGuardSubscribe]({}));
+    expect(states).toEqual([{ listening: true, pending: [] }]);
+    expect(
+      yield* authorized[WS_METHODS.hostGuardResolve]({ requestId: "req-1", decision: "approve" }),
+    ).toEqual({ resolved: false });
+  }).pipe(Effect.scoped),
+);

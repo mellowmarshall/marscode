@@ -3,7 +3,9 @@ import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { m } from "~/i18n/messages";
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import {
+  AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
+  AuthTerminalOperateScope,
   type EnvironmentId,
   type ProviderApprovalDecision,
   type RuntimeRequestId,
@@ -60,10 +62,16 @@ import {
   type PendingUserInput,
 } from "../../session-logic";
 import { readEnvironmentScope } from "../../state/session";
+import { serverEnvironment } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { toastManager } from "../ui/toast";
+import {
+  EMPTY_HOST_GUARD_APPROVALS,
+  isHostGuardApprovalRequestId,
+  type ThreadHostGuardApproval,
+} from "../../lib/hostGuardApprovals";
 
 import type { ChatComposerHandle } from "./ChatComposer";
 
@@ -276,6 +284,7 @@ export function usePendingThreadRequests(input: {
   readonly environmentId: EnvironmentId;
   readonly activeThreadId: ThreadId | null;
   readonly serverProjection: ThreadStructure | null;
+  readonly hostGuardApprovals?: ReadonlyArray<ThreadHostGuardApproval> | undefined;
   readonly supportsQuestionAttachments: boolean;
   readonly composerDraftTarget: ScopedThreadRef | DraftId;
   readonly setComposerDraftPrompt: (target: ScopedThreadRef | DraftId, prompt: string) => void;
@@ -287,6 +296,7 @@ export function usePendingThreadRequests(input: {
     environmentId,
     activeThreadId,
     serverProjection,
+    hostGuardApprovals = EMPTY_HOST_GUARD_APPROVALS,
     supportsQuestionAttachments,
     composerDraftTarget,
     setComposerDraftPrompt,
@@ -297,6 +307,9 @@ export function usePendingThreadRequests(input: {
   const respondToThreadApproval = useOrchestrationCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
+  const resolveHostGuard = useAtomCommand(serverEnvironment.resolveHostGuard, {
+    reportFailure: false,
+  });
   const respondToThreadUserInput = useOrchestrationCommand(threadEnvironment.respondToUserInput, {
     reportFailure: false,
   });
@@ -304,6 +317,7 @@ export function usePendingThreadRequests(input: {
     reportFailure: false,
   });
   const userInputResponsesInFlight = useRef(new Set<string>());
+  const hostGuardResponsesInFlight = useRef(new Set<string>());
   // In the order the text went into the thread draft, which is how a copy is found again.
   const displacedAnswers = useRef<
     Array<{ readonly draft: string; readonly key: string; readonly text: string }>
@@ -329,6 +343,10 @@ export function usePendingThreadRequests(input: {
     pendingRequests.approvals.length === 0
       ? NO_PENDING_APPROVALS
       : derivePendingApprovals(pendingRequests.approvals);
+  const timelinePendingApprovals =
+    hostGuardApprovals.length === 0
+      ? pendingApprovals
+      : [...pendingApprovals, ...hostGuardApprovals.map((entry) => entry.approval)];
   const pendingUserInputs =
     pendingRequests.userInputs.length === 0
       ? NO_PENDING_USER_INPUTS
@@ -350,12 +368,60 @@ export function usePendingThreadRequests(input: {
       respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
   const activePendingApproval = pendingApprovals[0] ?? null;
+  const activeTimelinePendingApproval = timelinePendingApprovals[0] ?? null;
 
   const onRespondToApproval = async (
     requestId: RuntimeRequestId,
     decision: ProviderApprovalDecision,
     feedback?: string,
   ) => {
+    if (isHostGuardApprovalRequestId(requestId)) {
+      if (
+        !activeThreadId ||
+        !readEnvironmentScope(environmentId, AuthAccessWriteScope) ||
+        !readEnvironmentScope(environmentId, AuthTerminalOperateScope)
+      ) {
+        return;
+      }
+      const entry = hostGuardApprovals.find((candidate) => candidate.requestId === requestId);
+      if (
+        !entry ||
+        hostGuardResponsesInFlight.current.has(requestId) ||
+        respondingRequestIds.includes(requestId)
+      ) {
+        return;
+      }
+      hostGuardResponsesInFlight.current.add(requestId);
+      setRespondingRequestIds((existing) =>
+        existing.includes(requestId) ? existing : [...existing, requestId],
+      );
+      const result = await resolveHostGuard({
+        environmentId,
+        input: {
+          requestId: entry.request.requestId,
+          decision: decision === "accept" ? "approve" : "deny",
+          ...(decision === "accept" && entry.request.proposedReason
+            ? { reason: entry.request.proposedReason }
+            : {}),
+        },
+      });
+      hostGuardResponsesInFlight.current.delete(requestId);
+      setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThreadId,
+          thrownErrorMessage(error, m) ?? m(msg("Failed to resolve host guard request.")),
+        );
+      } else if (result._tag === "Success" && !result.value.resolved) {
+        setThreadError(
+          activeThreadId,
+          m(msg("Host guard request expired or was already resolved.")),
+        );
+      }
+      return result;
+    }
+
     if (!activeThreadId || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope))
       return;
     if (
@@ -663,12 +729,15 @@ export function usePendingThreadRequests(input: {
 
   return {
     pendingApprovals,
+    timelinePendingApprovals,
     pendingUserInputs,
     activePendingApproval,
+    activeTimelinePendingApproval,
     activePendingUserInput,
     activePendingIsResponding,
     respondingRequestIds,
     onRespondToApproval: onRespondToApprovalStable,
+    onResolveHostGuard: resolveHostGuard,
     onDismissUserInput: onDismissUserInputStable,
     onSelectActivePendingUserInputOption: onSelectActivePendingUserInputOptionStable,
     onChangeActivePendingUserInputCustomAnswer,

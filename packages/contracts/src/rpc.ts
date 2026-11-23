@@ -483,6 +483,12 @@ import {
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
 import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
+import {
+  HostGuardResolveInput,
+  HostGuardResolveResult,
+  HostGuardState,
+  HostGuardSubscribeInput,
+} from "./hostGuard.ts";
 
 export const WS_METHODS = {
   projectsListEntries: "projects.listEntries",
@@ -739,6 +745,9 @@ export const WS_METHODS = {
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+
+  hostGuardSubscribe: "hostGuard.subscribe",
+  hostGuardResolve: "hostGuard.resolve",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -2461,6 +2470,19 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
+const WsHostGuardSubscribeRpc = Rpc.make(WS_METHODS.hostGuardSubscribe, {
+  payload: HostGuardSubscribeInput,
+  success: HostGuardState,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsHostGuardResolveRpc = Rpc.make(WS_METHODS.hostGuardResolve, {
+  payload: HostGuardResolveInput,
+  success: HostGuardResolveResult,
+  error: EnvironmentAuthorizationError,
+});
+
 export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthorization>()(
   "t3/contracts/RpcScopeAuthorization",
   { error: EnvironmentAuthorizationError },
@@ -2702,6 +2724,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsHostGuardSubscribeRpc,
+  WsHostGuardResolveRpc,
   WsOrchestrationV2DispatchCommandRpc,
   WsOrchestrationV2GetWorkflowScriptRpc,
   WsOrchestrationV2GetNativeChildWorkRpc,

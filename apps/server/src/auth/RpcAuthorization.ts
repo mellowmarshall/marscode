@@ -6,6 +6,7 @@ import {
   authScopeRequiredResponse,
   AssetCreateUrlInput,
   AuthAccessReadScope,
+  AuthAccessWriteScope,
   ServerSettingsPatch,
   ProviderInstanceMutation,
   requiredScopesForServerSettingsPatch,
@@ -247,6 +248,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeServerConfig]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeServerLifecycle]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeAuthAccess]: AuthAccessReadScope,
+  [WS_METHODS.hostGuardSubscribe]: AuthAccessWriteScope,
+  [WS_METHODS.hostGuardResolve]: AuthAccessWriteScope,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {
@@ -317,6 +320,9 @@ const requiredScopesForRpcCall = (
 ): ReadonlyArray<AuthEnvironmentScope> => {
   if (method === WS_METHODS.serverRetryResourceTelemetry) {
     return [AuthEnvironmentMaintainScope, AuthDiagnosticsReadScope];
+  }
+  if (method === WS_METHODS.hostGuardSubscribe || method === WS_METHODS.hostGuardResolve) {
+    return [AuthAccessWriteScope, AuthTerminalOperateScope];
   }
   if (method === WS_METHODS.assetsCreateUrl) {
     const { resource } = decodeAssetCreateUrlInput(payload);
