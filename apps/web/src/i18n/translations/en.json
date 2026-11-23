@@ -71,6 +71,7 @@
   "cd03eb1b84271c02": "Agent",
   "bfe1a60f3f9c60fb": "Turn {turn} · {what}",
   "dfdaa6255a416140": "Outline of {turns, plural, one {{turns} recent turn} other {{turns} recent turns}}, {textTurns, plural, =0 {no message text} one {message text of the last turn} other {message text of the last {textTurns} turns}}{truncated, select, yes {, shortened to fit} other {}}",
+  "260c6b45f52d2f27": "Adds the text of your messages and the agent's replies in the last {textTurns, plural, one {turn} other {{textTurns} turns}}.",
   "afac52a5cc2dc801": "Could not send your answer. Try again.",
   "79d776428f4d0650": "The file could not be loaded. Reconnect and try again.",
   "3ea34cbb1ca5ba9b": "Preview cancelled.",
@@ -1863,6 +1864,7 @@
   "f1db0a234c777a1d": "Use T3 Code in another app (MCP)",
   "6050f22f63e2bcb5": "Open workflows",
   "a0cc19e60dd99851": "Open usage",
+  "994c7433ab124603": "Open machines",
   "46694969044eee98": "Focus Next Workspace Area",
   "0a1011328ba42eef": "Focus Previous Workspace Area",
   "90896a7348c4e7ce": "Open settings",
@@ -3634,7 +3636,6 @@
   "4e0710d19dfc2e7e": "Send this report to the T3 team?",
   "87d0ae0723ba75d1": "This is everything that leaves your machine. Nothing is sent unless you press Send.",
   "bf19826f81484328": "Include the conversation",
-  "260c6b45f52d2f27": "Adds the text of your messages and the agent's replies in the last {textTurns, plural, one {turn} other {{textTurns} turns}}.",
   "ddb7e6f8ce99e657": "Only someone who can run agents on this machine can send or decline it.",
   "03c1eb603c112f47": "Don't send",
   "653405e4ed498d9f": "Send",
@@ -6009,6 +6010,144 @@
   "c9cae7bac5f42342": "Load more",
   "54f59582f641cbaf": "Issues",
   "01e7836447bcad93": "Issues Assigned to Me",
+  "46bb281c89d40594": "{count, plural, one {# thread} other {# threads}}",
+  "65964946aced5181": "CPU",
+  "2f890e1e55af5ae5": "Memory",
+  "3cd12d64d6700a4a": "{count} needs attention",
+  "7f99aaba0befc867": "Machines",
+  "8742386d1cdd43de": "Primary",
+  "1c383546ae7350ec": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " working"
+  ],
+  "9aa8187759c9d552": [
+    "Add remote servers, Tailscale hosts, or T3 Connect machines in",
+    " ",
+    {
+      "t": "Link",
+      "i": 1,
+      "c": "Settings → Connections"
+    },
+    "."
+  ],
+  "d88f0e58022cef77": "PID {pid}",
+  "d27f4c181a424585": "Local servers",
+  "38da8090d78d7fd3": "No local servers",
+  "c56e7c71048bc87b": "Dev servers started in terminals or by agents on this machine appear here.",
+  "115c69de3202f664": "Open",
+  "522ffc4b4eb3ae41": [
+    "Open in the thread browser. ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " for your browser."
+  ],
+  "c1671ec7918a98d9": "Open in your browser",
+  "5ab174fd6b33dcf6": "Forward to this machine",
+  "0fd202d5c2e87e87": "Host utilization",
+  "20d7f42bb7ec32e0": "GPU {index}",
+  "129d601c223507ec": "GPU",
+  "07f569310cdb62c7": "{used} / {total} VRAM",
+  "90983e62ac63de67": "{total} VRAM",
+  "4823d4360f627d97": "GPU utilization",
+  "8973838e88ca3901": "{count, plural, one {# volume} other {# volumes}}",
+  "9011b69cf6ac2dbf": "{available} free",
+  "ee028b4f46a2c336": "CPU",
+  "a9827dbd12d19bc8": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " cores"
+  ],
+  "24a886bb3faee87f": [
+    "Load ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " ·",
+    " ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    " ·",
+    " ",
+    {
+      "i": 3,
+      "k": "_gt_value_3",
+      "v": "v"
+    }
+  ],
+  "55ac6a72a5d4de68": [
+    "Up ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "09cc0b4b5cb9b64b": "Memory",
+  "02d4adaf546f4ec6": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " available"
+  ],
+  "0b1c25913a24f66d": "Storage",
+  "e7c18f33bc1326f7": "Setting up",
+  "ad78fae7d373cf21": "Working",
+  "32ac331a7b1e7efd": "Approval",
+  "a484e4248b460c95": "Input",
+  "0ab9086d50e83ca7": "Request",
+  "4ad56740ee2f814b": "Limited",
+  "37ffec8201f153c1": "Failed",
+  "0a260c7744afd0be": "Waiting",
+  "7de6cc7b1fe0d9e6": "Threads",
+  "2b9bc0c6a51dc3e9": "No active threads",
+  "7e61e915ef92a44a": "Active and recent threads running on this machine appear here.",
+  "f2fb1f0a2ea18d27": "Machines breadcrumb",
+  "f447e60202695043": "Refresh machine metrics",
+  "a70f917deb12729e": "Machine view",
+  "18b1d4d42b945b34": "Machines",
+  "c076ce7d8d3a91ed": "No machines connected",
+  "677f67b58fe43d21": [
+    "Connect a local or remote T3 Code environment in",
+    " ",
+    {
+      "t": "Link",
+      "i": 1,
+      "c": "Settings → Connections"
+    },
+    "."
+  ],
+  "29f0824614831f53": "Overview",
+  "965c943eed7e2529": "Processes",
+  "bd2529dcc47b49a5": "Servers",
+  "98b89f86231093e8": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " is not connected"
+  ],
+  "65fba702ccd60420": "Open connections",
+  "c78a0d39c46a1624": "Unable to display machine view",
+  "2bb3abf4f2e615b8": "Try refreshing or switching tabs to reload diagnostics for this machine.",
+  "5f6f9c2b1b858070": "Process telemetry unavailable",
   "3a883fbaed8d7561": "App",
   "3cc7159b902f36ec": "Access",
   "a6615c82020deb59": "Connect",
@@ -6355,7 +6494,6 @@
   "880ccf5aa9af9214": "No preview yet",
   "3131370acd047db2": "Type a URL above, or run a dev script. Local servers this thread starts will show up here automatically.",
   "b40c8b13dee08ca5": "Recently used",
-  "d27f4c181a424585": "Local servers",
   "455002c606a67b6d": "Select a live local server to open it in this browser tab.",
   "eaf6f27975bef5ea": "Find in page",
   "83e4757dcf97c692": "Listening",
@@ -8395,9 +8533,7 @@
   "8285f89d29299305": "Live Processes",
   "2d79aa7c2b0e14a6": "Refresh process diagnostics",
   "9459726f99d0d8b2": "Child Processes",
-  "65964946aced5181": "CPU",
   "faced12be6d1df3c": "Total CPU across live child processes of the current server process. The desktop shell and other parent processes are not included.",
-  "2f890e1e55af5ae5": "Memory",
   "b2109a1810b48460": "Total resident memory across live child processes of the current server process. The desktop shell and other parent processes are not included.",
   "53da9cef488e1c03": "Server PID",
   "0543ac8dca9dd4ba": "Loading live processes...",
@@ -8446,8 +8582,6 @@
   "dc81fa2b1e43b197": "Average",
   "2f39da125f98bb6c": "Max",
   "1a1d53a00017a889": "Loading span names...",
-  "ee028b4f46a2c336": "CPU",
-  "09cc0b4b5cb9b64b": "Memory",
   "eb630eef24d5c30a": "PID",
   "6d1395f41c06e0c9": "Type",
   "a2d779b25fa4a143": "Kill",
@@ -8759,9 +8893,13 @@
   "ed83b25c71c98a20": "Pick one or more {tracker} {scope}s for each project. Their issues list beside the repository's own, and agents file new issues in the first one unless asked for another.",
   "19c2d5e81ff8f89a": "{tracker} {scope} for {project}",
   "68e061510b765772": "Not bound",
+  "99d51127f573296b": "Another account",
+  "8ec2c57414669b79": "Connect a second {tracker} workspace or user.",
+  "99963c0142e17f00": "For the new {tracker} account.",
   "a2d95d39d3398bda": "Credential rejected",
   "9eae463720500113": "Stored on the server.",
   "b6e27ab2537ef874": "Create one",
+  "6d8e4ebc889bace9": "Add account",
   "13ef526271b0f5d4": "Clear all conditions",
   "d1938a629f039515": "Remove condition",
   "84a605b241ce65b7": "Remove group and its conditions",
@@ -8982,7 +9120,6 @@
   "b550d04490078bda": "Agents here can then launch, message and wait on threads on each machine you pick. Each appears under Authorized clients in that machine's Sharing & access, where it can be revoked.",
   "e1c2c3bd84d7bcd7": "This app is not connected to any of the machines you picked.",
   "c2553b323479499a": "This app knows no other machines. Add them under Environments first.",
-  "18b1d4d42b945b34": "Machines",
   "03860d65c4052ab5": "Checking which machines are already linked…",
   "4cea6be0fe6be16f": "Could not load linked environments",
   "25b74062dc03079e": "No linked environments",
@@ -12059,15 +12196,7 @@
   "9d9d32b401d2931a": "{count, plural, one {{count} terminal process running} other {{count} terminal processes running}}",
   "ade06f6723949b39": "Error occurred",
   "021fe65858278fe9": "Snooze thread",
-  "e7c18f33bc1326f7": "Setting up",
   "26375cafb52d0503": "Goal",
-  "ad78fae7d373cf21": "Working",
-  "0a260c7744afd0be": "Waiting",
-  "32ac331a7b1e7efd": "Approval",
-  "a484e4248b460c95": "Input",
-  "0ab9086d50e83ca7": "Request",
-  "4ad56740ee2f814b": "Limited",
-  "37ffec8201f153c1": "Failed",
   "984b361806ce8d25": "Woke",
   "c6e8abc00ae470d2": "Done",
   "f31a95961de19433": "Issue {key}: {title}, {state}",
@@ -12467,7 +12596,6 @@
   "672a3dae06b39402": "Open on its own page",
   "7755500a4cde5066": "Close the pane",
   "b8dcbc93a2ca1861": "This run no longer lists it.",
-  "115c69de3202f664": "Open",
   "644eafa9048b62df": "{count, plural, =1 {1st try} =2 {2nd try} =3 {3rd try} other {{count}th try}}",
   "e39f89c909df4db0": "Could not resume the run",
   "865f034346b82f47": "Cancel {title}? Its agents stop and the run cannot be resumed.",
@@ -12608,6 +12736,16 @@
   "156ff7b625287a1e": "Hide skipped",
   "69b985b97ab45e6b": "Show {count} skipped",
   "2400254d362de84d": "Loading workflow runs…",
+  "cae5c3205c01d062": [
+    {
+      "t": "span",
+      "i": 1,
+      "c": "A workflow file has a problem."
+    },
+    " ",
+    "The last version that did keeps running."
+  ],
+  "ed8ce6ebc73dc12d": "Open the file",
   "145e1f7503ba3b2c": [
     "This environment has no run with that link.",
     " ",
@@ -12633,16 +12771,6 @@
       "c": "Read the guide"
     }
   ],
-  "cae5c3205c01d062": [
-    {
-      "t": "span",
-      "i": 1,
-      "c": "A workflow file has a problem."
-    },
-    " ",
-    "The last version that did keeps running."
-  ],
-  "ed8ce6ebc73dc12d": "Open the file",
   "5d8d278ff828102d": "All workflows",
   "39459da07479f482": "Agent",
   "7741243632056b81": "{step} · transcript",
@@ -12786,9 +12914,5 @@
   "27d76249d09eb69f": "Review guide ready",
   "faa3bb26abb39c93": "Review guide failed",
   "b7df38b7d8792d78": "Open guide",
-  "9e91e9a77b664e4e": "Could not start a review guide",
-  "99d51127f573296b": "Another account",
-  "8ec2c57414669b79": "Connect a second {tracker} workspace or user.",
-  "99963c0142e17f00": "For the new {tracker} account.",
-  "6d8e4ebc889bace9": "Add account"
+  "9e91e9a77b664e4e": "Could not start a review guide"
 }

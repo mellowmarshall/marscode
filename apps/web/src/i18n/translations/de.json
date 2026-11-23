@@ -71,6 +71,7 @@
   "cd03eb1b84271c02": "Agent",
   "bfe1a60f3f9c60fb": "Runde {turn} · {what}",
   "dfdaa6255a416140": "Übersicht über {turns, plural, one {{turns} letzte Runde} other {{turns} letzte Runden}}, {textTurns, plural, =0 {ohne Nachrichtentext} one {mit dem Nachrichtentext der letzten Runde} other {mit den Nachrichtentexten der letzten {textTurns} Runden}}{truncated, select, yes {, passend gekürzt} other {}}",
+  "260c6b45f52d2f27": "Fügt den Text deiner Nachrichten und der Antworten des Agenten aus {textTurns, plural, one {der letzten Runde} other {den letzten {textTurns} Runden}} hinzu.",
   "afac52a5cc2dc801": "Deine Antwort konnte nicht gesendet werden. Versuche es erneut.",
   "79d776428f4d0650": "Die Datei konnte nicht geladen werden. Verbinde dich erneut und versuch es noch einmal.",
   "3ea34cbb1ca5ba9b": "Vorschau abgebrochen.",
@@ -1862,6 +1863,7 @@
   "f1db0a234c777a1d": "T3 Code in einer anderen App verwenden (MCP)",
   "6050f22f63e2bcb5": "Workflows öffnen",
   "a0cc19e60dd99851": "Nutzung öffnen",
+  "994c7433ab124603": "Rechner öffnen",
   "46694969044eee98": "Nächsten Arbeitsbereich fokussieren",
   "0a1011328ba42eef": "Vorherigen Arbeitsbereich fokussieren",
   "90896a7348c4e7ce": "Einstellungen öffnen",
@@ -3635,7 +3637,6 @@
   "4e0710d19dfc2e7e": "Diesen Bericht an das T3-Team senden?",
   "87d0ae0723ba75d1": "Das ist alles, was deinen Rechner verlässt. Erst wenn du auf Senden klickst, wird etwas gesendet.",
   "bf19826f81484328": "Unterhaltung mitsenden",
-  "260c6b45f52d2f27": "Fügt den Text deiner Nachrichten und der Antworten des Agenten aus {textTurns, plural, one {der letzten Runde} other {den letzten {textTurns} Runden}} hinzu.",
   "ddb7e6f8ce99e657": "Nur wer auf diesem Rechner Agenten ausführen kann, kann den Bericht senden oder ablehnen.",
   "03c1eb603c112f47": "Nicht senden",
   "653405e4ed498d9f": "Senden",
@@ -6008,6 +6009,144 @@
   "c9cae7bac5f42342": "Mehr laden",
   "54f59582f641cbaf": "Issues",
   "01e7836447bcad93": "Mir zugewiesene Issues",
+  "46bb281c89d40594": "{count, plural, one {# Thread} other {# Threads}}",
+  "65964946aced5181": "CPU",
+  "2f890e1e55af5ae5": "Arbeitsspeicher",
+  "3cd12d64d6700a4a": "{count} benötigt Aufmerksamkeit",
+  "7f99aaba0befc867": "Rechner",
+  "8742386d1cdd43de": "Primär",
+  "1c383546ae7350ec": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " aktiv"
+  ],
+  "9aa8187759c9d552": [
+    "Füge Remote-Server, Tailscale-Hosts oder T3 Connect-Rechner hinzu unter",
+    " ",
+    {
+      "t": "Link",
+      "i": 1,
+      "c": "Einstellungen → Verbindungen"
+    },
+    "."
+  ],
+  "d88f0e58022cef77": "PID {pid}",
+  "d27f4c181a424585": "Lokale Server",
+  "38da8090d78d7fd3": "Keine lokalen Server",
+  "c56e7c71048bc87b": "Dev-Server, die in Terminals oder von Agenten auf diesem Rechner gestartet werden, erscheinen hier.",
+  "115c69de3202f664": "Öffnen",
+  "522ffc4b4eb3ae41": [
+    "Im Thread-Browser öffnen. ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " für deinen Browser."
+  ],
+  "c1671ec7918a98d9": "Im Browser öffnen",
+  "5ab174fd6b33dcf6": "An diesen Rechner weiterleiten",
+  "0fd202d5c2e87e87": "Host-Auslastung",
+  "20d7f42bb7ec32e0": "GPU {index}",
+  "129d601c223507ec": "GPU",
+  "07f569310cdb62c7": "{used} / {total} VRAM",
+  "90983e62ac63de67": "{total} VRAM",
+  "4823d4360f627d97": "GPU-Auslastung",
+  "8973838e88ca3901": "{count, plural, one {# Volume} other {# Volumes}}",
+  "9011b69cf6ac2dbf": "{available} frei",
+  "ee028b4f46a2c336": "CPU",
+  "a9827dbd12d19bc8": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " Kerne"
+  ],
+  "24a886bb3faee87f": [
+    "Last ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " ·",
+    " ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    " ·",
+    " ",
+    {
+      "i": 3,
+      "k": "_gt_value_3",
+      "v": "v"
+    }
+  ],
+  "55ac6a72a5d4de68": [
+    "Laufzeit ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "09cc0b4b5cb9b64b": "Arbeitsspeicher",
+  "02d4adaf546f4ec6": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " verfügbar"
+  ],
+  "0b1c25913a24f66d": "Speicherplatz",
+  "e7c18f33bc1326f7": "Wird eingerichtet",
+  "ad78fae7d373cf21": "Arbeitet",
+  "32ac331a7b1e7efd": "Genehmigung",
+  "a484e4248b460c95": "Eingabe",
+  "0ab9086d50e83ca7": "Anfrage",
+  "4ad56740ee2f814b": "Limitiert",
+  "37ffec8201f153c1": "Fehlgeschlagen",
+  "0a260c7744afd0be": "Wartet",
+  "7de6cc7b1fe0d9e6": "Threads",
+  "2b9bc0c6a51dc3e9": "Keine aktiven Threads",
+  "7e61e915ef92a44a": "Aktive und kürzliche Threads auf diesem Rechner erscheinen hier.",
+  "f2fb1f0a2ea18d27": "Rechner-Brotkrumen",
+  "f447e60202695043": "Rechnermetriken aktualisieren",
+  "a70f917deb12729e": "Rechneransicht",
+  "18b1d4d42b945b34": "Rechner",
+  "c076ce7d8d3a91ed": "Keine Rechner verbunden",
+  "677f67b58fe43d21": [
+    "Verbinde eine lokale oder entfernte T3 Code-Umgebung unter",
+    " ",
+    {
+      "t": "Link",
+      "i": 1,
+      "c": "Einstellungen → Verbindungen"
+    },
+    "."
+  ],
+  "29f0824614831f53": "Übersicht",
+  "965c943eed7e2529": "Prozesse",
+  "bd2529dcc47b49a5": "Server",
+  "98b89f86231093e8": [
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " ist nicht verbunden"
+  ],
+  "65fba702ccd60420": "Verbindungen öffnen",
+  "c78a0d39c46a1624": "Rechneransicht konnte nicht angezeigt werden",
+  "2bb3abf4f2e615b8": "Versuche zu aktualisieren oder den Tab zu wechseln, um die Diagnose für diesen Rechner neu zu laden.",
+  "5f6f9c2b1b858070": "Prozesstelemetrie nicht verfügbar",
   "3a883fbaed8d7561": "App",
   "3cc7159b902f36ec": "Zugriff",
   "a6615c82020deb59": "Verbinden",
@@ -6351,7 +6490,6 @@
   "880ccf5aa9af9214": "Noch keine Vorschau",
   "3131370acd047db2": "Gib oben eine URL ein oder führe ein Dev-Skript aus. Lokale Server, die dieser Thread startet, erscheinen hier automatisch.",
   "b40c8b13dee08ca5": "Zuletzt verwendet",
-  "d27f4c181a424585": "Lokale Server",
   "455002c606a67b6d": "Wähle einen laufenden lokalen Server, um ihn in diesem Browser-Tab zu öffnen.",
   "eaf6f27975bef5ea": "Auf der Seite suchen",
   "83e4757dcf97c692": "Lauscht",
@@ -8387,9 +8525,7 @@
   "8285f89d29299305": "Laufende Prozesse",
   "2d79aa7c2b0e14a6": "Prozessdiagnose aktualisieren",
   "9459726f99d0d8b2": "Unterprozesse",
-  "65964946aced5181": "CPU",
   "faced12be6d1df3c": "Gesamte CPU-Last aller laufenden Unterprozesse des aktuellen Serverprozesses. Die Desktop-Shell und andere übergeordnete Prozesse sind nicht enthalten.",
-  "2f890e1e55af5ae5": "Arbeitsspeicher",
   "b2109a1810b48460": "Gesamter residenter Speicher aller laufenden Unterprozesse des aktuellen Serverprozesses. Die Desktop-Shell und andere übergeordnete Prozesse sind nicht enthalten.",
   "53da9cef488e1c03": "Server-PID",
   "0543ac8dca9dd4ba": "Laufende Prozesse werden geladen...",
@@ -8438,8 +8574,6 @@
   "dc81fa2b1e43b197": "Durchschnitt",
   "2f39da125f98bb6c": "Max.",
   "1a1d53a00017a889": "Span-Namen werden geladen...",
-  "ee028b4f46a2c336": "CPU",
-  "09cc0b4b5cb9b64b": "Arbeitsspeicher",
   "eb630eef24d5c30a": "PID",
   "6d1395f41c06e0c9": "Typ",
   "a2d779b25fa4a143": "Beenden",
@@ -8751,9 +8885,13 @@
   "ed83b25c71c98a20": "Wähle für jedes Projekt ein oder mehrere {scope}s in {tracker}. Ihre Issues erscheinen neben denen des Repositorys, und Agenten legen neue Issues im ersten an, sofern kein anderes verlangt wird.",
   "19c2d5e81ff8f89a": "{tracker} {scope} für {project}",
   "68e061510b765772": "Nicht zugeordnet",
+  "99d51127f573296b": "Weiteres Konto",
+  "8ec2c57414669b79": "Verbinde einen zweiten {tracker}-Workspace oder -Nutzer.",
+  "99963c0142e17f00": "Für das neue {tracker}-Konto.",
   "a2d95d39d3398bda": "Anmeldedaten abgelehnt",
   "9eae463720500113": "Auf dem Server gespeichert.",
   "b6e27ab2537ef874": "Erstellen",
+  "6d8e4ebc889bace9": "Konto hinzufügen",
   "13ef526271b0f5d4": "Alle Bedingungen löschen",
   "d1938a629f039515": "Bedingung entfernen",
   "84a605b241ce65b7": "Gruppe und ihre Bedingungen entfernen",
@@ -8974,7 +9112,6 @@
   "b550d04490078bda": "Agenten hier können dann auf jedem ausgewählten Rechner Threads starten, ihnen Nachrichten senden und auf sie warten. Jede Verknüpfung erscheint unter „Autorisierte Clients“ in „Freigabe & Zugriff“ des jeweiligen Rechners und kann dort widerrufen werden.",
   "e1c2c3bd84d7bcd7": "Diese App ist mit keinem der ausgewählten Rechner verbunden.",
   "c2553b323479499a": "Diese App kennt keine anderen Rechner. Füge sie zuerst unter „Umgebungen“ hinzu.",
-  "18b1d4d42b945b34": "Rechner",
   "03860d65c4052ab5": "Es wird geprüft, welche Rechner bereits verknüpft sind…",
   "4cea6be0fe6be16f": "Verknüpfte Umgebungen konnten nicht geladen werden",
   "25b74062dc03079e": "Keine verknüpften Umgebungen",
@@ -12051,15 +12188,7 @@
   "9d9d32b401d2931a": "{count, plural, one {{count} Terminal-Prozess läuft} other {{count} Terminal-Prozesse laufen}}",
   "ade06f6723949b39": "Fehler aufgetreten",
   "021fe65858278fe9": "Thread zurückstellen",
-  "e7c18f33bc1326f7": "Wird eingerichtet",
   "26375cafb52d0503": "Ziel",
-  "ad78fae7d373cf21": "Arbeitet",
-  "0a260c7744afd0be": "Wartet",
-  "32ac331a7b1e7efd": "Genehmigung",
-  "a484e4248b460c95": "Eingabe",
-  "0ab9086d50e83ca7": "Anfrage",
-  "4ad56740ee2f814b": "Limitiert",
-  "37ffec8201f153c1": "Fehlgeschlagen",
   "984b361806ce8d25": "Aufgeweckt",
   "c6e8abc00ae470d2": "Fertig",
   "f31a95961de19433": "Issue {key}: {title}, {state}",
@@ -12459,7 +12588,6 @@
   "672a3dae06b39402": "Auf eigener Seite öffnen",
   "7755500a4cde5066": "Bereich schließen",
   "b8dcbc93a2ca1861": "Diese Ausführung führt es nicht mehr auf.",
-  "115c69de3202f664": "Öffnen",
   "644eafa9048b62df": "{count, plural, =1 {1. Versuch} =2 {2. Versuch} =3 {3. Versuch} other {{count}. Versuch}}",
   "e39f89c909df4db0": "Die Ausführung konnte nicht fortgesetzt werden",
   "865f034346b82f47": "{title} abbrechen? Die Agenten stoppen und die Ausführung kann nicht fortgesetzt werden.",
@@ -12600,6 +12728,16 @@
   "156ff7b625287a1e": "Übersprungene ausblenden",
   "69b985b97ab45e6b": "{count} übersprungene anzeigen",
   "2400254d362de84d": "Workflow-Ausführungen werden geladen…",
+  "cae5c3205c01d062": [
+    {
+      "t": "span",
+      "i": 1,
+      "c": "Eine Workflow-Datei hat ein Problem."
+    },
+    " ",
+    "Die letzte funktionierende Version läuft weiter."
+  ],
+  "ed8ce6ebc73dc12d": "Datei öffnen",
   "145e1f7503ba3b2c": [
     "Diese Umgebung hat keinen Lauf mit diesem Link.",
     " ",
@@ -12625,16 +12763,6 @@
       "c": "Anleitung lesen"
     }
   ],
-  "cae5c3205c01d062": [
-    {
-      "t": "span",
-      "i": 1,
-      "c": "Eine Workflow-Datei hat ein Problem."
-    },
-    " ",
-    "Die letzte funktionierende Version läuft weiter."
-  ],
-  "ed8ce6ebc73dc12d": "Datei öffnen",
   "5d8d278ff828102d": "Alle Workflows",
   "39459da07479f482": "Agent",
   "7741243632056b81": "{step} · Transkript",
@@ -12777,9 +12905,5 @@
   "27d76249d09eb69f": "Review-Leitfaden bereit",
   "faa3bb26abb39c93": "Review-Leitfaden fehlgeschlagen",
   "b7df38b7d8792d78": "Leitfaden öffnen",
-  "9e91e9a77b664e4e": "Review-Leitfaden konnte nicht gestartet werden",
-  "99d51127f573296b": "Weiteres Konto",
-  "8ec2c57414669b79": "Verbinde einen zweiten {tracker}-Workspace oder -Nutzer.",
-  "99963c0142e17f00": "Für das neue {tracker}-Konto.",
-  "6d8e4ebc889bace9": "Konto hinzufügen"
+  "9e91e9a77b664e4e": "Review-Leitfaden konnte nicht gestartet werden"
 }

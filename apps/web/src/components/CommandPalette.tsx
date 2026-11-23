@@ -80,6 +80,7 @@ import {
   PinIcon,
   PinOffIcon,
   PlugIcon,
+  ServerIcon,
   SquarePenIcon,
   TextSearchIcon,
   UserPlusIcon,
@@ -1774,6 +1775,28 @@ function OpenCommandPaletteDialog(props: {
     shortcutCommand: "usage.open",
     run: async () => {
       await navigate({ to: "/usage" });
+    },
+  });
+  actionItems.push({
+    kind: "action",
+    value: "action:machines",
+    searchTerms: [
+      "machines",
+      "hosts",
+      "servers",
+      "fleet",
+      "hardware",
+      "cpu",
+      "memory",
+      "gpu",
+      "disk",
+      "processes",
+      "ports",
+    ],
+    title: gt("Open machines"),
+    icon: <ServerIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/machines" });
     },
   });
 

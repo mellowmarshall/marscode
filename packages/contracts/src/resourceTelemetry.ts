@@ -15,6 +15,37 @@ export const HostResourcesSnapshot = Schema.Struct({
 });
 export type HostResourcesSnapshot = typeof HostResourcesSnapshot.Type;
 
+export const HostDiskVolume = Schema.Struct({
+  mount: TrimmedNonEmptyString,
+  totalBytes: NonNegativeInt,
+  availableBytes: NonNegativeInt,
+  usedBytes: NonNegativeInt,
+});
+export type HostDiskVolume = typeof HostDiskVolume.Type;
+
+export const HostGpuMetrics = Schema.Struct({
+  index: NonNegativeInt,
+  name: TrimmedNonEmptyString,
+  utilization: Schema.NullOr(Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 }))),
+  memoryUsedBytes: Schema.NullOr(NonNegativeInt),
+  memoryTotalBytes: Schema.NullOr(NonNegativeInt),
+  temperatureC: Schema.NullOr(Schema.Number),
+});
+export type HostGpuMetrics = typeof HostGpuMetrics.Type;
+
+export const HostHardwareDetails = Schema.Struct({
+  sampledAt: NonNegativeInt,
+  cpuUtilization: Schema.NullOr(Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 }))),
+  cpuCount: NonNegativeInt,
+  availableMemoryBytes: NonNegativeInt,
+  totalMemoryBytes: NonNegativeInt,
+  uptimeSeconds: Schema.NullOr(NonNegativeInt),
+  loadAverage: Schema.NullOr(Schema.Tuple([Schema.Number, Schema.Number, Schema.Number])),
+  disks: Schema.Array(HostDiskVolume),
+  gpus: Schema.Array(HostGpuMetrics),
+});
+export type HostHardwareDetails = typeof HostHardwareDetails.Type;
+
 export const ResourceTelemetryIoSemantics = Schema.Literals([
   "storage",
   "logical",
