@@ -1,6 +1,7 @@
 import type { EnvironmentId, UsageLimitsReport } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { limitsNotice } from "@t3tools/shared/usageLimitsCopy";
+import { isHiddenAntigravityThirdPartyWindow } from "@t3tools/shared/usageLimitsHealth";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { GaugeIcon } from "lucide-react";
 
@@ -158,7 +159,9 @@ function UsageLimitsBannerBody({
                   compact
                   driver={account.driver}
                   accentColor={account.accentColor}
-                  windows={account.limits.windows}
+                  windows={account.limits.windows.filter(
+                    (window) => !isHiddenAntigravityThirdPartyWindow(account.driver, window),
+                  )}
                   now={now}
                 />
               )}

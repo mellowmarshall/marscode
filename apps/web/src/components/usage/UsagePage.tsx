@@ -102,8 +102,8 @@ import {
   rankProvidersByMetric,
 } from "./usageProviders";
 import {
+  patchUsagePagePreferences,
   readUsagePagePreferences,
-  saveUsagePagePreferences,
   type UsagePagePreferences,
 } from "./usagePagePreferences";
 
@@ -236,9 +236,8 @@ export function UsagePage() {
   );
 
   const updatePreferences = (patch: Partial<UsagePagePreferences>) => {
-    const nextPreferences = { ...preferences, ...patch };
+    const nextPreferences = patchUsagePagePreferences(patch);
     setPreferences(nextPreferences);
-    saveUsagePagePreferences(nextPreferences);
   };
   const selectWindow = (days: number) => {
     if (!isUsageWindowDays(days)) return;

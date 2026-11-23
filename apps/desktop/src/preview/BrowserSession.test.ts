@@ -53,6 +53,7 @@ vi.mock("electron", () => ({
 
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
+import { providerAuthWebviewPartition } from "@t3tools/shared/usageLimitsHealth";
 import * as BrowserSession from "./BrowserSession.ts";
 
 const { showMessageBox, showErrorBox } = vi.hoisted(() => ({
@@ -200,6 +201,7 @@ describe("BrowserSession", () => {
       assert.notStrictEqual(nondefaultProfile, legacyDefault);
       assert.isTrue(browserSessions.isPartition(legacyDefault));
       assert.isTrue(browserSessions.isPartition(nondefaultProfile));
+      assert.isTrue(browserSessions.isPartition(providerAuthWebviewPartition("flow-123")));
     }).pipe(Effect.provide(layer)),
   );
 

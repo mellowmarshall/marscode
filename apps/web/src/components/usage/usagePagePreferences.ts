@@ -8,6 +8,8 @@ const UsagePagePreferencesSchema = Schema.Struct({
   metric: Schema.Literals(["cost", "tokens", "limits"]),
   windowDays: Schema.Literals([1, 7, 30, 90]),
   hiddenProviders: Schema.optional(Schema.Array(UsageProviderKind)),
+  combinedLimitDrivers: Schema.optional(Schema.Array(Schema.String)),
+  limitAccountNames: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 });
 export type UsagePagePreferences = typeof UsagePagePreferencesSchema.Type;
 
@@ -28,4 +30,12 @@ export function saveUsagePagePreferences(preferences: UsagePagePreferences): voi
   } catch (error) {
     console.error("Could not save Usage page preferences.", error);
   }
+}
+
+export function patchUsagePagePreferences(
+  patch: Partial<UsagePagePreferences>,
+): UsagePagePreferences {
+  const next = { ...readUsagePagePreferences(), ...patch };
+  saveUsagePagePreferences(next);
+  return next;
 }
