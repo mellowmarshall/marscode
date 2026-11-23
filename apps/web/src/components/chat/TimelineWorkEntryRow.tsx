@@ -34,6 +34,7 @@ import {
   workLogEntryIsToolLike,
 } from "../../session-logic";
 import ChatMarkdown from "../ChatMarkdown";
+import { TerminalOutputText } from "./TerminalOutputText";
 import { ChatMarkdownAssetImage } from "./ChatMarkdownMedia";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 import { workGroupImageGallery } from "./markdownImageGallery";
@@ -590,6 +591,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
                   )}
                   cwd={ctx.markdownCwd}
                   parseRawHtml={false}
+                  outputHighlightingMode="off"
                   extensions={
                     workEntry.toolLifecycleStatus === "inProgress"
                       ? thoughtPreviewMarkdown(gt("Thinking"))
@@ -721,7 +723,9 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
           ) : (
             <>
               {expandedBody ? (
-                <pre className={toolCallExpandedBodyClassName}>{expandedBody}</pre>
+                <pre className={toolCallExpandedBodyClassName}>
+                  <TerminalOutputText text={expandedBody} />
+                </pre>
               ) : null}
               {plainOutputFetches && workEntry.projectedItem ? (
                 <FetchedToolOutput

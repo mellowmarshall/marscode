@@ -30,6 +30,7 @@ import { type ExpandedImageItem, ExpandedImagePreview } from "./ExpandedImagePre
 import { type AssistantCitationTarget } from "./AssistantCitationSource";
 import { type MessagesTimelineRow, type WorkGroupScrollAnchor } from "./MessagesTimeline.logic";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
+import type { TuiProviderKey } from "../../lib/tuiOutputPalette";
 import type { TurnItemDetailSource } from "../../state/queries";
 import { type HandoffTimelineRun } from "./V2LifecycleRow";
 
@@ -66,6 +67,10 @@ export interface TimelineRowSharedState {
   skills: ReadonlyArray<ServerProviderSkill>;
   runs: ReadonlyArray<HandoffTimelineRun>;
   activeThreadEnvironmentId: EnvironmentId;
+  tuiProviderByInstanceId: ReadonlyMap<string, TuiProviderKey>;
+  tuiProviderByRunId: ReadonlyMap<RunId, TuiProviderKey>;
+  providerTuiPalettes: boolean;
+  defaultTuiProvider: TuiProviderKey;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   onSendAppMessage: ((text: string) => Promise<void>) | undefined;

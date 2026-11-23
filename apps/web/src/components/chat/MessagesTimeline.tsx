@@ -144,8 +144,16 @@ import {
 } from "./timelineViewport";
 import { useThreadFindPositionReader } from "./useThreadFindPositionReader";
 import { ThreadActivityAnnouncer } from "./ThreadActivityAnnouncer";
+import { useAtomValue } from "@effect/atom-react";
 import { useStableHandoffRuns, useIncrementalTimelineRows, useStableRows } from "./useTimelineRows";
 import { useClientSettings } from "../../hooks/useSettings";
+import { serverEnvironment } from "../../state/server";
+import { resolveEffectiveTuiProvider, type TuiProviderKey } from "../../lib/tuiOutputPalette";
+import {
+  resolveInstanceTuiProvider,
+  resolveRowTuiProvider,
+  TuiProviderContext,
+} from "./TuiProviderContext";
 
 function timelineListStateFor(identity: string): {
   readonly identity: string;
@@ -492,6 +500,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
   }
   const citationThreadRef = parseScopedThreadKey(routeThreadKey);
   const openPullRequest = useOpenPrLink(citationThreadRef ?? undefined);
+  const providerTuiPalettes = useClientSettings((settings) => settings.providerTuiPalettes);
+  const environmentProviders = useAtomValue(
+    serverEnvironment.providersValueAtom(activeThreadEnvironmentId),
+  );
   const [minimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
   const normalizedFindQuery = findQuery.trim();
   const findActive = findExpanded;
@@ -1113,6 +1125,27 @@ const ConversationTimeline = memo(function ConversationTimeline({
       .filter(isVisiblePendingApproval)
       .map((approval) => [approval.requestId, approval]),
   );
+  const tuiProviderByInstanceId = new Map<string, TuiProviderKey>(
+    (environmentProviders ?? []).map((provider) => [
+      provider.instanceId,
+      resolveEffectiveTuiProvider(provider.driver, providerTuiPalettes),
+    ]),
+  );
+  const tuiProviderByRunId = new Map<RunId, TuiProviderKey>(
+    runs.map((run) => [
+      run.id,
+      resolveInstanceTuiProvider(
+        run.providerInstanceId,
+        tuiProviderByInstanceId,
+        providerTuiPalettes,
+      ),
+    ]),
+  );
+  const defaultTuiProvider = resolveInstanceTuiProvider(
+    runs.at(-1)?.providerInstanceId,
+    tuiProviderByInstanceId,
+    providerTuiPalettes,
+  );
   const sharedState: TimelineRowSharedState = {
     pendingApprovals: pendingApprovalsByRequestId,
     respondingRequestIds,
@@ -1130,6 +1163,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
     skills,
     runs,
     activeThreadEnvironmentId,
+    tuiProviderByInstanceId,
+    tuiProviderByRunId,
+    providerTuiPalettes,
+    defaultTuiProvider,
     onRevertToTurnCount,
     onRunShellCommand,
     findActive,
@@ -1649,6 +1686,8 @@ function getItemType(item: MessagesTimelineRow) {
 }
 
 const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
+  const ctx = use(TimelineRowCtx);
+  const rowProvider = resolveRowTuiProvider(row, ctx);
   const isExpandedToolGroup = row.kind === "work" && row.isExpandedToolGroup;
   const isSubagentGroup = row.kind === "event" && row.projectedItem.item.type === "subagent";
   const isWorkLogRow =
@@ -1661,79 +1700,84 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
     row.expanded === true;
 
   return (
-    <div
-      className={cn(
-        isWorkLogRow || isSubagentGroup
-          ? undefined
-          : row.kind === "turn-fold" || row.kind === "working"
-            ? "pb-1.5"
-            : row.kind === "message" && row.groupedWithNext
-              ? "pb-1"
-              : (row.kind === "message" &&
-                    row.message.role === "assistant" &&
-                    !row.showAssistantMeta) ||
-                  row.kind === "worktree-setup" ||
-                  row.kind === "event" ||
-                  row.kind === "attempt-fold" ||
-                  row.kind === "html-render" ||
-                  row.kind === "sent-message" ||
-                  row.kind === "mcp-app" ||
-                  row.kind === "viewed-images"
-                ? "pb-2"
-                : "pb-4",
-        (row.kind === "message" && row.message.role === "assistant") ||
-          row.kind === "assistant-meta"
-          ? "group/assistant"
-          : null,
-      )}
-      data-timeline-row-id={row.id}
-      data-timeline-row-kind={row.kind}
-      data-message-id={
-        row.kind === "message" || row.kind === "assistant-meta" ? row.message.id : undefined
-      }
-      data-message-role={row.kind === "message" ? row.message.role : undefined}
-    >
-      {isWorkLogRow ? (
-        <WorkLogBlock
-          continues={row.continuesWorkLog}
-          layout={
-            isExpandedToolGroup
-              ? "group-content"
-              : isExpandedToolGroupHeader
-                ? "group-header"
-                : "standalone"
-          }
-        >
-          {row.kind === "work" ? (
-            <WorkGroupSection
-              anchorKey={row.id}
-              groupedEntries={row.groupedEntries}
-              isExpandedToolGroup={row.isExpandedToolGroup}
-              displayLabel={row.displayLabel}
-            />
-          ) : null}
-          {row.kind === "work-live" ? <LiveWorkEntryTimelineRow row={row} /> : null}
-          {row.kind === "work-toggle" ? <WorkGroupToggleTimelineRow row={row} /> : null}
-          {row.kind === "thinking" ? <ThinkingTimelineRow row={row} /> : null}
-        </WorkLogBlock>
-      ) : null}
-      {row.kind === "turn-fold" ? <TurnFoldTimelineRow key={row.id} row={row} /> : null}
-      {row.kind === "attempt-fold" ? <AttemptFoldTimelineRow row={row} /> : null}
-      {row.kind === "context-compaction" ? <ContextCompactionTimelineRow row={row} /> : null}
-      {row.kind === "message" && row.message.role === "user" ? <UserMessageRow row={row} /> : null}
-      {row.kind === "message" && row.message.role === "assistant" ? (
-        <AssistantTimelineRow row={row} />
-      ) : null}
-      {row.kind === "assistant-meta" ? <AssistantMetaTimelineRow row={row} /> : null}
-      {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
-      {row.kind === "html-render" ? <HtmlRenderTimelineRow row={row} /> : null}
-      {row.kind === "sent-message" ? <SentMessageTimelineRow row={row} /> : null}
-      {row.kind === "viewed-images" ? <ViewedImagesTimelineRow row={row} /> : null}
-      {row.kind === "mcp-app" ? <McpAppTimelineRow row={row} /> : null}
-      {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
-      {row.kind === "worktree-setup" ? <WorktreeSetupTimelineRow row={row} /> : null}
-      {row.kind === "event" ? <V2EventTimelineRow row={row} /> : null}
-    </div>
+    <TuiProviderContext value={rowProvider ?? "default"}>
+      <div
+        className={cn(
+          isWorkLogRow || isSubagentGroup
+            ? undefined
+            : row.kind === "turn-fold" || row.kind === "working"
+              ? "pb-1.5"
+              : row.kind === "message" && row.groupedWithNext
+                ? "pb-1"
+                : (row.kind === "message" &&
+                      row.message.role === "assistant" &&
+                      !row.showAssistantMeta) ||
+                    row.kind === "worktree-setup" ||
+                    row.kind === "event" ||
+                    row.kind === "attempt-fold" ||
+                    row.kind === "html-render" ||
+                    row.kind === "sent-message" ||
+                    row.kind === "mcp-app" ||
+                    row.kind === "viewed-images"
+                  ? "pb-2"
+                  : "pb-4",
+          (row.kind === "message" && row.message.role === "assistant") ||
+            row.kind === "assistant-meta"
+            ? "group/assistant"
+            : null,
+        )}
+        data-provider={rowProvider}
+        data-timeline-row-id={row.id}
+        data-timeline-row-kind={row.kind}
+        data-message-id={
+          row.kind === "message" || row.kind === "assistant-meta" ? row.message.id : undefined
+        }
+        data-message-role={row.kind === "message" ? row.message.role : undefined}
+      >
+        {isWorkLogRow ? (
+          <WorkLogBlock
+            continues={row.continuesWorkLog}
+            layout={
+              isExpandedToolGroup
+                ? "group-content"
+                : isExpandedToolGroupHeader
+                  ? "group-header"
+                  : "standalone"
+            }
+          >
+            {row.kind === "work" ? (
+              <WorkGroupSection
+                anchorKey={row.id}
+                groupedEntries={row.groupedEntries}
+                isExpandedToolGroup={row.isExpandedToolGroup}
+                displayLabel={row.displayLabel}
+              />
+            ) : null}
+            {row.kind === "work-live" ? <LiveWorkEntryTimelineRow row={row} /> : null}
+            {row.kind === "work-toggle" ? <WorkGroupToggleTimelineRow row={row} /> : null}
+            {row.kind === "thinking" ? <ThinkingTimelineRow row={row} /> : null}
+          </WorkLogBlock>
+        ) : null}
+        {row.kind === "turn-fold" ? <TurnFoldTimelineRow key={row.id} row={row} /> : null}
+        {row.kind === "attempt-fold" ? <AttemptFoldTimelineRow row={row} /> : null}
+        {row.kind === "context-compaction" ? <ContextCompactionTimelineRow row={row} /> : null}
+        {row.kind === "message" && row.message.role === "user" ? (
+          <UserMessageRow row={row} />
+        ) : null}
+        {row.kind === "message" && row.message.role === "assistant" ? (
+          <AssistantTimelineRow row={row} />
+        ) : null}
+        {row.kind === "assistant-meta" ? <AssistantMetaTimelineRow row={row} /> : null}
+        {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
+        {row.kind === "html-render" ? <HtmlRenderTimelineRow row={row} /> : null}
+        {row.kind === "sent-message" ? <SentMessageTimelineRow row={row} /> : null}
+        {row.kind === "viewed-images" ? <ViewedImagesTimelineRow row={row} /> : null}
+        {row.kind === "mcp-app" ? <McpAppTimelineRow row={row} /> : null}
+        {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
+        {row.kind === "worktree-setup" ? <WorktreeSetupTimelineRow row={row} /> : null}
+        {row.kind === "event" ? <V2EventTimelineRow row={row} /> : null}
+      </div>
+    </TuiProviderContext>
   );
 });
 

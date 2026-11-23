@@ -1,13 +1,12 @@
 import type { CommandOutputView } from "@t3tools/client-runtime/state/command-output";
 import type { EnvironmentId, ThreadId, TurnItemId } from "@t3tools/contracts";
-import { TERMINAL_PALETTES, terminalOutputSpans } from "@t3tools/shared/terminalOutput";
 import { T, Var } from "gt-react";
 import { useLayoutEffect, useRef } from "react";
 
-import { useTheme } from "../../hooks/useTheme";
 import { useServerConfigs } from "../../state/entities";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useEnvironmentQuery } from "../../state/query";
+import { TerminalOutputText } from "./TerminalOutputText";
 import { useInitialOutputReady, type TurnItemSource } from "./timelineRowContext";
 
 const FOLLOW_SLACK_PX = 8;
@@ -41,7 +40,6 @@ export function CommandOutputPanel(props: {
   const scrollRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
   const text = data?.output.text ?? "";
-  const { resolvedTheme } = useTheme();
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- pins the output scroller's scrollTop to the bottom after each commit while the user follows
   useLayoutEffect(() => {
@@ -73,7 +71,6 @@ export function CommandOutputPanel(props: {
     );
   }
   // Parse after all hooks to preserve the text/theme compiler cache.
-  const spans = terminalOutputSpans(text, TERMINAL_PALETTES[resolvedTheme]);
   return (
     <div
       ref={scrollRef}
@@ -89,17 +86,7 @@ export function CommandOutputPanel(props: {
           <T>Earlier output not shown</T>
         </div>
       ) : null}
-      {spans.map((span, index) =>
-        span.style === null ? (
-          span.text
-        ) : (
-          // Spans never reorder and are rebuilt on each update.
-          // oxlint-disable-next-line react/no-array-index-key
-          <span key={index} style={span.style}>
-            {span.text}
-          </span>
-        ),
-      )}
+      <TerminalOutputText text={text} preNormalized />
     </div>
   );
 }

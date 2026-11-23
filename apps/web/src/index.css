@@ -1,6 +1,7 @@
 /* Clerk injects its component styles into the clerk layer (clerkAppearance.cssLayerName). */
 @layer theme, base, clerk, components, utilities;
 @import "tailwindcss";
+@import "./tuiOutput.css";
 
 @custom-variant dark (&:is(.dark, .dark *));
 @custom-variant light (&:not(.dark, .dark *));
@@ -2244,7 +2245,7 @@ code {
     [data-language="plaintext" i]
   ) {
   &,
-  & :is(pre, pre *) {
+  & :is(pre, pre :not(.tui-term-output, .tui-term-output *)) {
     color: inherit !important;
   }
 }

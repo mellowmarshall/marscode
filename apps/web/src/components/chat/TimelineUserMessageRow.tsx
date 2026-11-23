@@ -1305,6 +1305,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       extensions={USER_MESSAGE_MARKDOWN}
       renderContextReference={props.renderContextReference}
       headingLevelOffset={MESSAGE_HEADING_LEVEL}
+      outputHighlightingMode="off"
     />
   );
 });

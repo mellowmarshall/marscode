@@ -72,6 +72,11 @@ export const DiffLayout = Schema.Literals(["stacked", "split"]);
 export type DiffLayout = typeof DiffLayout.Type;
 const DEFAULT_DIFF_LAYOUT: DiffLayout = "stacked";
 
+export const OutputHighlightingMode = Schema.Literals(["semantic", "ansi", "off"]);
+export type OutputHighlightingMode = typeof OutputHighlightingMode.Type;
+const DEFAULT_PROVIDER_TUI_PALETTES = true;
+const DEFAULT_OUTPUT_HIGHLIGHTING_MODE: OutputHighlightingMode = "semantic";
+
 export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_at", "manual"]);
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
 export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "updated_at";
@@ -610,6 +615,12 @@ export const ClientSettingsSchema = Schema.Struct({
   // Opt-in TeX typesetting in rendered Markdown. Off keeps math parsing and
   // KaTeX out of the render path entirely.
   mathRenderingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  providerTuiPalettes: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_TUI_PALETTES)),
+  ),
+  outputHighlightingMode: OutputHighlightingMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_OUTPUT_HIGHLIGHTING_MODE)),
+  ),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
@@ -2161,5 +2172,7 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
   wordWrap: Schema.optionalKey(Schema.Boolean),
   mathRenderingEnabled: Schema.optionalKey(Schema.Boolean),
+  providerTuiPalettes: Schema.optionalKey(Schema.Boolean),
+  outputHighlightingMode: Schema.optionalKey(OutputHighlightingMode),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

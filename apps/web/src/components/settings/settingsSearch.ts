@@ -403,6 +403,18 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("latex tex katex equations formulas markdown")],
   },
   {
+    id: "provider-tui-palettes",
+    title: msg("Provider TUI palettes"),
+    to: "/settings/appearance",
+    searchTerms: [msg("claude codex antigravity muse colors theme palette terminal output")],
+  },
+  {
+    id: "output-highlighting",
+    title: msg("Output highlighting"),
+    to: "/settings/appearance",
+    searchTerms: [msg("semantic ansi terminal log json diff inline code syntax highlight")],
+  },
+  {
     id: "panel-animations",
     title: msg("Panel animations"),
     to: "/settings/appearance",

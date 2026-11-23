@@ -518,6 +518,12 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.mathRenderingEnabled !== DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled
       ? [gt("Render math")]
       : []),
+    ...(settings.providerTuiPalettes !== DEFAULT_UNIFIED_SETTINGS.providerTuiPalettes
+      ? [gt("Provider TUI palettes")]
+      : []),
+    ...(settings.outputHighlightingMode !== DEFAULT_UNIFIED_SETTINGS.outputHighlightingMode
+      ? [gt("Output highlighting")]
+      : []),
     ...(settings.panelAnimationDurationMs !== DEFAULT_UNIFIED_SETTINGS.panelAnimationDurationMs
       ? [gt("Panel animations")]
       : []),
@@ -711,6 +717,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       chatWidth: DEFAULT_UNIFIED_SETTINGS.chatWidth,
       effortDisplay: DEFAULT_UNIFIED_SETTINGS.effortDisplay,
       mathRenderingEnabled: DEFAULT_UNIFIED_SETTINGS.mathRenderingEnabled,
+      providerTuiPalettes: DEFAULT_UNIFIED_SETTINGS.providerTuiPalettes,
+      outputHighlightingMode: DEFAULT_UNIFIED_SETTINGS.outputHighlightingMode,
       language: DEFAULT_UNIFIED_SETTINGS.language,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,

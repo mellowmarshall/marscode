@@ -555,3 +555,20 @@ describe("server model preferences", () => {
     expect(decodeServerSettingsPatch(input)).toEqual(input);
   });
 });
+
+describe("ClientSettings TUI output preferences", () => {
+  it("defaults provider palettes and semantic highlighting and validates patch values", () => {
+    const defaults = decodeClientSettings({});
+    expect(defaults.providerTuiPalettes).toBe(true);
+    expect(defaults.outputHighlightingMode).toBe("semantic");
+
+    expect(decodeClientSettings({ providerTuiPalettes: false }).providerTuiPalettes).toBe(false);
+    expect(decodeClientSettings({ outputHighlightingMode: "ansi" }).outputHighlightingMode).toBe(
+      "ansi",
+    );
+    expect(decodeClientSettingsPatch({ outputHighlightingMode: "off" })).toEqual({
+      outputHighlightingMode: "off",
+    });
+    expect(() => decodeClientSettingsPatch({ outputHighlightingMode: "invalid" })).toThrow();
+  });
+});
