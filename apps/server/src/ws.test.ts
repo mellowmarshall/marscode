@@ -98,6 +98,7 @@ import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as HostHardware from "./resourceTelemetry/HostHardware.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import * as CernoRunService from "./cerno/CernoRunService.ts";
 import * as HostGuardBroker from "./hostGuard/HostGuardBroker.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
 import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
@@ -857,6 +858,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(GitWorkflowService.GitWorkflowService)({}),
   Layer.mock(HostHardware.HostHardware)({}),
   Layer.mock(HostResources.HostResources)({}),
+  Layer.mock(CernoRunService.CernoRunService)({}),
   Layer.mock(HostGuardBroker.HostGuardBroker)({
     preapprove: () => ({ ok: false, error: "unused" }),
   }),

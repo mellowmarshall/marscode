@@ -34,6 +34,7 @@ import {
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
   AuthAccessWriteScope,
+  AuthDiagnosticsReadScope,
   AuthOrchestrationOperateScope,
   AuthProvidersManageScope,
   type AuthEnvironmentScope,
@@ -258,6 +259,7 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as HostHardware from "./resourceTelemetry/HostHardware.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import * as CernoRunService from "./cerno/CernoRunService.ts";
 import * as HostGuardBroker from "./hostGuard/HostGuardBroker.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
@@ -1624,6 +1626,7 @@ export const layerWsRpc = (
       const triage = yield* TriageService.TriageService;
       const hostHardware = yield* HostHardware.HostHardware;
       const hostResources = yield* HostResources.HostResources;
+      const cernoRunService = yield* CernoRunService.CernoRunService;
       const hostGuardBroker = yield* HostGuardBroker.HostGuardBroker;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
@@ -2818,6 +2821,10 @@ export const layerWsRpc = (
         [WS_METHODS.serverGetProcessDiagnostics]: (_input) => processDiagnostics.read,
         [WS_METHODS.serverGetHostResources]: (_input) => hostResources.read,
         [WS_METHODS.serverGetHostHardware]: (_input) => hostHardware.read,
+        [WS_METHODS.serverListCernoRuns]: (_input) =>
+          isPeerOrMcpSubject(currentSession.subject)
+            ? Effect.fail(rpcAuthorizationError(AuthDiagnosticsReadScope))
+            : cernoRunService.listRuns,
         [WS_METHODS.hostGuardSubscribe]: (_input) =>
           isPeerOrMcpSubject(currentSession.subject)
             ? Stream.fail(rpcAuthorizationError(AuthAccessWriteScope))

@@ -2,6 +2,7 @@ import type { OrchestrationV2PendingBackgroundTask } from "@t3tools/contracts";
 import { msg } from "gt-react";
 
 import { m } from "../../i18n/messages";
+import { flattenShellContinuations, unwrapCernoTokens } from "./cernoCommand";
 
 export interface ParsedJobProgress {
   readonly current: number;
@@ -372,19 +373,18 @@ export function formatCompactElapsed(elapsedMs: number): string {
 }
 
 function summarizeShellCommand(rawCommand: string): string {
+  const flat = flattenShellContinuations(rawCommand);
   const firstLine =
-    rawCommand
+    flat
       .split(/\r?\n/u)
-      .map((line) => line.trim())
-      .find((line) => line.length > 0 && !line.startsWith("#")) ?? "";
+      .map((l) => l.trim())
+      .find((l) => l.length > 0 && !l.startsWith("#")) ?? "";
   if (!firstLine) return "";
 
   const tokens = firstLine.split(/\s+/u).filter(Boolean);
   let idx = 0;
-  while (idx < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[idx]!)) {
-    idx += 1;
-  }
-  const rest = tokens.slice(idx);
+  while (idx < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[idx]!)) idx += 1;
+  const rest = unwrapCernoTokens(tokens.slice(idx));
   if (rest.length === 0) return firstLine;
 
   const execRaw = rest[0]!;
@@ -392,14 +392,19 @@ function summarizeShellCommand(rawCommand: string): string {
   const meaningful: string[] = [execName];
 
   for (let i = 1; i < rest.length && meaningful.length < 3; i += 1) {
-    const token = rest[i]!;
+    const token = rest[i]!.replace(/^['"]|['"]$/gu, "");
+    if (!token || token === "\\") continue;
+    if (
+      execName === "ssh" &&
+      meaningful.length >= 2 &&
+      (token === "set" || token === "cd" || token === "export")
+    )
+      break;
     if (token === "-m" && i + 1 < rest.length) {
-      meaningful.push(rest[i + 1]!);
-      i += 1;
+      meaningful.push(rest[++i]!);
       continue;
     }
     if (token.startsWith("-")) {
-      // Once an executable and target script/module are captured, omit trailing flags and values.
       if (meaningful.length >= 2) break;
       if (
         token.startsWith("--") &&

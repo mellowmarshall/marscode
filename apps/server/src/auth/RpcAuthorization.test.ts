@@ -898,3 +898,41 @@ it.effect("requires access write and terminal operate scopes for host-guard brok
     ).toEqual({ resolved: false });
   }).pipe(Effect.scoped),
 );
+
+it.effect("requires diagnostics read scope for serverListCernoRuns", () =>
+  Effect.gen(function* () {
+    const cernoRpcs = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          typeof WS_METHODS.serverListCernoRuns
+        > => tag !== WS_METHODS.serverListCernoRuns,
+      ),
+    );
+    const handler = cernoRpcs.toLayerHandler(WS_METHODS.serverListCernoRuns, () =>
+      Effect.succeed({ sampledAt: 1_795_458_330_000, runs: [] }),
+    );
+
+    const mcpClient = yield* RpcTest.makeClient(cernoRpcs).pipe(
+      Effect.provide(
+        Layer.merge(
+          handler,
+          RpcAuthorization.layer([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
+        ),
+      ),
+    );
+    expect(yield* mcpClient[WS_METHODS.serverListCernoRuns]({}).pipe(Effect.flip)).toMatchObject({
+      requiredPermission: AuthDiagnosticsReadScope,
+    });
+
+    const diagnosticsClient = yield* RpcTest.makeClient(cernoRpcs).pipe(
+      Effect.provide(Layer.merge(handler, RpcAuthorization.layer([AuthDiagnosticsReadScope]))),
+    );
+    expect(yield* diagnosticsClient[WS_METHODS.serverListCernoRuns]({})).toEqual({
+      sampledAt: 1_795_458_330_000,
+      runs: [],
+    });
+  }).pipe(Effect.scoped),
+);

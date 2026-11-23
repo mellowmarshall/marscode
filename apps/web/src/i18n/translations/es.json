@@ -13022,5 +13022,110 @@
   "d16d1fadc799a3d3": "Los comandos esperados, monitores y subagentes que se ejecutan en esta máquina aparecen aquí.",
   "4ec08221fabd1a8e": "Sin tareas coincidentes",
   "c3e0406e0c3fc92f": "Cambia el filtro superior para inspeccionar otro trabajo en segundo plano.",
-  "ddd088819f44be6f": "Tareas"
+  "ddd088819f44be6f": "Tareas",
+  "2f37984196595af4": "{verdict} ({percent}%)",
+  "2f68903e720df20f": "Certeza {level} ({percent}%)",
+  "4fb8c2a2f3d547ab": "Última actividad: {liveness}",
+  "69f59326fd98f9f8": "Última salida del registro",
+  "2a6087a554838ab5": "Detalles del modelo (cabezas SSM, umbrales, espera del kernel)",
+  "17b39507d37ba2c5": [
+    "estado: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " (",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    "%,",
+    " ",
+    {
+      "i": 3,
+      "k": "_gt_value_3",
+      "v": "v"
+    },
+    ")"
+  ],
+  "9dc78129b0f77bea": [
+    "umbral de fallo: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    "% (aviso",
+    " ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    "%, despertar",
+    " ",
+    {
+      "i": 3,
+      "k": "_gt_value_3",
+      "v": "v"
+    },
+    "%)"
+  ],
+  "09684436a5d4c0af": [
+    "wchan: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "2826df0905b0d682": [
+    "salida: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "d719c1fa3b0050fe": "socket remoto",
+  "a4a298846f578b73": "flock externo",
+  "39871ca2f10ec613": "Alta",
+  "a9eca1d56541263e": "Media",
+  "fe3d00aba14e859e": "Baja",
+  "8ce54cdc99e4bd64": "hace {age}",
+  "68dfdf67e5a1a23d": "Requiere entrada",
+  "fa5f68fa573e5e79": "stdin bloqueado",
+  "ea04b05997a7f2b5": "El proceso está bloqueado esperando credenciales o una entrada interactiva.",
+  "31558959276f8ece": "El proceso está bloqueado leyendo stdin y no terminará sin entrada.",
+  "a0ab41e71c5f05cc": "Detén el proceso o proporciona entrada.",
+  "cf2f069f057565b6": "Estancado",
+  "6aef28ef15f339cb": "{age} en silencio",
+  "e9ff8e88df3597af": "Sin salida ni avance de CPU; el proceso parece atascado o en bucle.",
+  "e0f2a81a2cce7fd6": "Revisa el registro o detén el hilo.",
+  "76e49b20799aa96d": "Fallando",
+  "7dfa2151adcd54d1": "Probable fallo",
+  "4963c6fbfb44d51f": "Se detectaron señales de fallo en la salida; revisa el registro o detén antes.",
+  "466e055ec20f0475": "Se alcanzó el umbral de fallo confirmado.",
+  "3234bda871df9912": "Se cruzó el umbral de aviso; supervisando confirmación.",
+  "74850366251097c1": "Servidor listo",
+  "997a39afaa8c1337": "escuchando",
+  "847473cda5ea2431": "El servidor indicó estar listo y abrió un socket de escucha.",
+  "b3615cbbea47931e": "El servicio está activo.",
+  "25a3dea59c763d02": "Esperando bloqueo",
+  "7f52a6fb675131fb": "flock · {age}",
+  "eb11510fa9b0634c": "Esperando un bloqueo de archivo externo de otro proceso; alerta de estancamiento suprimida.",
+  "9583ad6fb49462dd": "Se reanudará automáticamente al liberarse el bloqueo.",
+  "8b9851eeab222a02": "Correcto",
+  "496e82349064fb41": "activo",
+  "788025d36890db45": "La salida del proceso indica que finalizó correctamente.",
+  "28fde0985cdcf46b": "Esperando la salida del proceso.",
+  "c44d52591b16a1ce": "Incierto",
+  "a1921db505bcf710": "La confianza del modelo aún es baja; recopilando más señales de salida.",
+  "8ea5c52bbba6b016": "La supervisión continúa; cerno avisa ante fallo confirmado o estancamiento.",
+  "198d25fac5860ab8": "Saludable",
+  "fffc815c2fc3403f": "El proceso remoto está activo sin señales de fallo ni bucle.",
+  "59acfbc91b96355a": "El proceso se ejecuta normalmente sin señales de fallo ni bucle.",
+  "140a0ad6d78e822e": "No requiere acción; cerno avisa ante fallo confirmado o estancamiento."
 }

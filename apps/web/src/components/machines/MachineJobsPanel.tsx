@@ -1,4 +1,8 @@
-import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
+import {
+  scopedProjectKey,
+  scopeProjectRef,
+  scopeThreadRef,
+} from "@t3tools/client-runtime/environment";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import type { CommandOutputView } from "@t3tools/client-runtime/state/command-output";
 import {
@@ -6,6 +10,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  AuthDiagnosticsReadScope,
   AuthOrchestrationOperateScope,
   type EnvironmentId,
   type OrchestrationV2PendingBackgroundTask,
@@ -20,7 +25,12 @@ import { useEffect, useState } from "react";
 import { useRelativeTimeState } from "../../hooks/useRelativeTimeState";
 import { m } from "../../i18n/messages";
 import { cn } from "../../lib/utils";
-import { useProjects, useServerConfigs, useVisibleThreadShells } from "../../state/entities";
+import {
+  useProjects,
+  useServerConfigs,
+  useThreadVisibleTurnItems,
+  useVisibleThreadShells,
+} from "../../state/entities";
 import { useEnvironment } from "../../state/environments";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useEnvironmentQuery } from "../../state/query";
@@ -30,6 +40,7 @@ import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { useCommandOutputStreaming } from "../chat/CommandOutputPanel";
 import { BackgroundWorkInspectorDialog } from "../jobs/BackgroundWorkInspector";
+import { isCernoCommand } from "../jobs/cernoCommand";
 import { JobSparkline } from "../jobs/JobMetricCharts";
 import {
   detectSilentStallSeconds,
@@ -197,6 +208,7 @@ export function MachineJobsPanel({ environmentId }: { readonly environmentId: En
   const projects = useProjects();
   const serverConfigs = useServerConfigs();
   const canOperate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
+  const canReadDiagnostics = useEnvironmentScope(environmentId, AuthDiagnosticsReadScope);
   const interruptTurn = useOrchestrationCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
@@ -216,6 +228,27 @@ export function MachineJobsPanel({ environmentId }: { readonly environmentId: En
       : 0;
 
   const entries = selectEnvironmentBackgroundJobs(allThreads, environmentId);
+  const inspectedEntry = inspectedKey
+    ? (entries.find((candidate) => candidate.key === inspectedKey) ?? null)
+    : null;
+  const inspectedProjectedItems = useThreadVisibleTurnItems(
+    inspectedEntry ? scopeThreadRef(environmentId, inspectedEntry.thread.id) : null,
+  );
+  const inspectedTurnItems = inspectedProjectedItems.map((projected) => projected.item);
+  const hasCernoJobs =
+    entries.some((entry) => isCernoCommand(entry.task.command)) ||
+    inspectedTurnItems.some(
+      (item) =>
+        item.type === "command_execution" &&
+        item.status === "running" &&
+        isCernoCommand(item.input),
+    );
+  const cernoQuery = useEnvironmentQuery(
+    canReadDiagnostics && hasCernoJobs
+      ? serverEnvironment.cernoRuns({ environmentId, input: {} })
+      : null,
+  );
+  const cernoRuns = cernoQuery.data?.runs ?? [];
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- poll 5s clock only while background jobs exist on this machine
   useEffect(() => {
@@ -237,9 +270,6 @@ export function MachineJobsPanel({ environmentId }: { readonly environmentId: En
     return true;
   });
 
-  const inspectedEntry = inspectedKey
-    ? (entries.find((candidate) => candidate.key === inspectedKey) ?? null)
-    : null;
   const inspectedThreadTasks = inspectedEntry
     ? entries
         .filter((candidate) => candidate.thread.id === inspectedEntry.thread.id)
@@ -387,7 +417,8 @@ export function MachineJobsPanel({ environmentId }: { readonly environmentId: En
           environmentId={environmentId}
           threadId={inspectedEntry.thread.id}
           tasks={inspectedThreadTasks}
-          turnItems={[]}
+          turnItems={inspectedTurnItems}
+          cernoRuns={cernoRuns}
           initialTaskId={inspectedEntry.task.taskId}
           assumeLiveWithoutItems
           showHostHardware

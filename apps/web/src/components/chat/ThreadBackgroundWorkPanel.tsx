@@ -1,9 +1,11 @@
 import type { CommandOutputView } from "@t3tools/client-runtime/state/command-output";
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
-import type {
-  EnvironmentId,
-  OrchestrationV2PendingBackgroundTask,
-  ThreadId,
+import {
+  AuthDiagnosticsReadScope,
+  type CernoLiveRun,
+  type EnvironmentId,
+  type OrchestrationV2PendingBackgroundTask,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as DateTime from "effect/DateTime";
@@ -15,14 +17,29 @@ import { cn } from "../../lib/utils";
 import { useEnvironment } from "../../state/environments";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
+import { useEnvironmentScope } from "../../state/session";
 import {
   BackgroundWorkInspectorDialog,
   resolveBackgroundTaskTurnItem,
 } from "../jobs/BackgroundWorkInspector";
+import { isCernoCommand } from "../jobs/cernoCommand";
+import {
+  CernoCertaintyPips,
+  cernoToneDotClass,
+  cernoToneTextClass,
+} from "../jobs/CernoRunAssessment";
+import {
+  formatCernoElapsed,
+  matchCernoRunsToTasks,
+  mergeRunningCernoTurnTasks,
+  presentCernoRun,
+  selectCommandOutputMetrics,
+  type CernoOperatorTone,
+} from "../jobs/cernoRunPresentation";
 import {
   detectSilentStallSeconds,
   formatCompactElapsed,
-  parseCommandOutputMetrics,
   shortJobLabel,
 } from "../jobs/jobOutputParser";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -42,6 +59,7 @@ function BackgroundWorkRailRow({
   threadId,
   task,
   turnItems,
+  cernoRun,
   nowMs,
   onInspect,
 }: {
@@ -49,6 +67,7 @@ function BackgroundWorkRailRow({
   readonly threadId: ThreadId;
   readonly task: OrchestrationV2PendingBackgroundTask;
   readonly turnItems: ThreadStructure["turnItems"];
+  readonly cernoRun: CernoLiveRun | null;
   readonly nowMs: number;
   readonly onInspect: (taskId: string) => void;
 }) {
@@ -76,10 +95,10 @@ function BackgroundWorkRailRow({
       : null,
   );
 
-  const outputText =
+  const rawStreamText =
     outputQuery.data?.output.text ??
     (item?.type === "command_execution" ? (item.output ?? "") : "");
-  const metrics = outputText ? parseCommandOutputMetrics(outputText) : null;
+  const metrics = selectCommandOutputMetrics(rawStreamText, cernoRun?.logTail);
   const progress = metrics?.progress ?? null;
   const pct = progress ? Math.max(0, Math.min(100, Math.round(progress.fraction * 100))) : null;
 
@@ -87,13 +106,107 @@ function BackgroundWorkRailRow({
   const itemUpdatedMs =
     item && "updatedAt" in item && item.updatedAt ? DateTime.toEpochMillis(item.updatedAt) : null;
   const lastActivityMs = outputQuery.dataUpdatedAt > 0 ? outputQuery.dataUpdatedAt : itemUpdatedMs;
-  const silentSeconds = detectSilentStallSeconds(lastActivityMs, nowMs, isRunningOutput);
+  const silentSeconds = cernoRun
+    ? null
+    : detectSilentStallSeconds(lastActivityMs, nowMs, isRunningOutput);
 
   const label = shortJobLabel(task, command);
   const fullName = task.description?.trim() || command?.split(/\r?\n/u)[0]?.trim() || label;
-  const elapsedText = item?.startedAt
-    ? formatCompactElapsed(Math.max(0, nowMs - DateTime.toEpochMillis(item.startedAt)))
-    : null;
+  const elapsedText = cernoRun
+    ? formatCernoElapsed(cernoRun, nowMs)
+    : item?.startedAt
+      ? formatCompactElapsed(Math.max(0, nowMs - DateTime.toEpochMillis(item.startedAt)))
+      : null;
+
+  if (cernoRun) {
+    const view = presentCernoRun(cernoRun);
+    const tipParts = [
+      fullName,
+      gt("{verdict} ({percent}%)", {
+        verdict: view.verdict,
+        percent: view.confidencePct,
+      }),
+      view.liveness,
+      pct !== null ? `${pct}%` : null,
+      progress?.etaText ? gt("ETA {eta}", { eta: progress.etaText }) : null,
+    ].filter(Boolean);
+
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          delay={200}
+          render={
+            <ThreadDetailsControl
+              size="sm"
+              variant="ghost"
+              part="row"
+              multiline
+              onClick={() => onInspect(task.taskId)}
+            />
+          }
+        >
+          <div className="flex w-full min-w-0 flex-col gap-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <span
+                aria-hidden
+                className={cn("size-1.5 shrink-0 rounded-full", cernoToneDotClass(view.tone))}
+              />
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate font-mono text-xs text-foreground/90",
+                  THREAD_DETAILS_PANEL_LABEL_CLASS,
+                )}
+              >
+                {label}
+              </span>
+              <span className="shrink-0 font-mono text-2xs text-muted-foreground tabular-nums">
+                {elapsedText}
+              </span>
+            </div>
+            <div className="flex min-w-0 items-center justify-between gap-2 ps-3.5 text-2xs">
+              <span className="inline-flex min-w-0 items-center gap-1.5">
+                <span className={cn("truncate font-medium", cernoToneTextClass(view.tone))}>
+                  {view.verdict}
+                </span>
+                <CernoCertaintyPips pips={view.pips} tone={view.tone} />
+                <span className="font-mono text-muted-foreground tabular-nums">
+                  {view.confidencePct}%
+                </span>
+              </span>
+              <span className="shrink-0 font-mono text-muted-foreground tabular-nums">
+                {view.liveness}
+              </span>
+            </div>
+            {pct !== null && progress ? (
+              <div className="flex items-center gap-2 ps-3.5 font-mono text-2xs text-muted-foreground tabular-nums">
+                <span
+                  aria-hidden
+                  className="block h-[3px] flex-1 overflow-hidden rounded-full bg-muted-foreground/20"
+                >
+                  <span
+                    className={cn(
+                      "block h-full rounded-full transition-[width] duration-300",
+                      view.tone === "warning" || view.tone === "destructive"
+                        ? "bg-warning"
+                        : "bg-info",
+                    )}
+                    style={{ width: `${pct}%` }}
+                  />
+                </span>
+                <span className="shrink-0">
+                  {`${pct}% · ${Math.round(progress.current)}/${Math.round(progress.total)}`}
+                </span>
+              </div>
+            ) : null}
+          </div>
+        </TooltipTrigger>
+        <TooltipPopup side="left" className="max-w-xs">
+          {tipParts.join(" · ")}
+        </TooltipPopup>
+      </Tooltip>
+    );
+  }
+
   const waiting = backgroundWorkHoldsCompletion([task]);
   const rightMetric =
     silentSeconds !== null
@@ -186,6 +299,7 @@ export function ThreadBackgroundWorkPanel({
   threadId,
   tasks,
   turnItems,
+  cwd,
   branch,
   stopDisabled,
   stopping,
@@ -197,6 +311,7 @@ export function ThreadBackgroundWorkPanel({
   readonly threadId: ThreadId;
   readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
   readonly turnItems: ThreadStructure["turnItems"];
+  readonly cwd?: string | null | undefined;
   readonly branch?: string | null | undefined;
   readonly stopDisabled: boolean;
   readonly stopping: boolean;
@@ -205,19 +320,60 @@ export function ThreadBackgroundWorkPanel({
 }) {
   const gt = useGT();
   const environment = useEnvironment(environmentId);
+  const canReadDiagnostics = useEnvironmentScope(environmentId, AuthDiagnosticsReadScope);
   const [inspectTaskId, setInspectTaskId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
+  const mergedTasks = mergeRunningCernoTurnTasks(tasks, turnItems);
+  const taskCandidates = mergedTasks.map((task) => {
+    const item = resolveBackgroundTaskTurnItem(task, turnItems);
+    return {
+      taskId: task.taskId,
+      command: task.command ?? (item?.type === "command_execution" ? item.input : undefined),
+    };
+  });
+  const hasCernoCandidate = taskCandidates.some((candidate) => isCernoCommand(candidate.command));
+
+  const cernoQuery = useEnvironmentQuery(
+    canReadDiagnostics && hasCernoCandidate
+      ? serverEnvironment.cernoRuns({ environmentId, input: {} })
+      : null,
+  );
+  const cernoRuns = cernoQuery.data?.runs ?? [];
+
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- poll 5s clock while active background tasks render in the thread rail
   useEffect(() => {
-    if (tasks.length === 0) return;
+    if (mergedTasks.length === 0) return;
     const id = window.setInterval(() => setNowMs(Date.now()), 5_000);
     return () => window.clearInterval(id);
-  }, [tasks.length]);
+  }, [mergedTasks.length]);
 
-  if (tasks.length === 0) return null;
+  if (mergedTasks.length === 0) return null;
 
-  const showInlineRows = density === "full" && tasks.length <= MAX_INLINE_RAIL_JOBS;
+  const matchedByTaskId = matchCernoRunsToTasks(taskCandidates, cernoRuns, cwd);
+
+  let worstTone: CernoOperatorTone = "info";
+  let worstVerdict: string | null = null;
+  let worstRank = -1;
+  for (const run of matchedByTaskId.values()) {
+    if (!run) continue;
+    const view = presentCernoRun(run);
+    const rank =
+      view.tone === "destructive"
+        ? 4
+        : view.tone === "warning"
+          ? 3
+          : view.tone === "info" || view.tone === "success"
+            ? 2
+            : 1;
+    if (rank > worstRank) {
+      worstRank = rank;
+      worstTone = view.tone;
+      worstVerdict = view.verdict;
+    }
+  }
+
+  const showInlineRows = density === "full" && mergedTasks.length <= MAX_INLINE_RAIL_JOBS;
 
   return (
     <ThreadDetailsSection
@@ -227,13 +383,14 @@ export function ThreadBackgroundWorkPanel({
     >
       <div data-thread-details-background-work className="flex flex-col">
         {showInlineRows ? (
-          tasks.map((task) => (
+          mergedTasks.map((task) => (
             <BackgroundWorkRailRow
               key={task.taskId}
               environmentId={environmentId}
               threadId={threadId}
               task={task}
               turnItems={turnItems}
+              cernoRun={matchedByTaskId.get(task.taskId) ?? null}
               nowMs={nowMs}
               onInspect={(taskId) => setInspectTaskId(taskId)}
             />
@@ -243,15 +400,20 @@ export function ThreadBackgroundWorkPanel({
             size="sm"
             variant="ghost"
             part="row"
-            onClick={() => setInspectTaskId(tasks[0]?.taskId ?? null)}
+            onClick={() => setInspectTaskId(mergedTasks[0]?.taskId ?? null)}
           >
             <TerminalIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
             <span className={cn("min-w-0 flex-1 truncate", THREAD_DETAILS_PANEL_LABEL_CLASS)}>
               <T>Background work</T>
             </span>
             <span className="flex shrink-0 items-center gap-1.5 font-mono text-xs text-muted-foreground tabular-nums">
-              <span aria-hidden className="size-1.5 rounded-full bg-info" />
-              <span>{tasks.length}</span>
+              <span
+                aria-hidden
+                className={cn("size-1.5 rounded-full", cernoToneDotClass(worstTone))}
+              />
+              <span>
+                {worstVerdict ? `${mergedTasks.length} · ${worstVerdict}` : mergedTasks.length}
+              </span>
               <ChevronRightIcon aria-hidden className={THREAD_DETAILS_PANEL_CHEVRON_CLASS} />
             </span>
           </ThreadDetailsControl>
@@ -265,13 +427,15 @@ export function ThreadBackgroundWorkPanel({
         }}
         environmentId={environmentId}
         threadId={threadId}
-        tasks={tasks}
+        tasks={mergedTasks}
         turnItems={turnItems}
+        cernoRuns={cernoRuns}
         initialTaskId={inspectTaskId}
         assumeLiveWithoutItems
         showHostHardware
         hostLabel={environment?.label}
         branch={branch}
+        worktreePath={cwd}
         stopDisabled={stopDisabled}
         stopping={stopping}
         onStop={onStop}

@@ -37,6 +37,7 @@ import { ThreadDetailsItemsMenuItems } from "./ThreadDetailsItemsMenu";
 import { resolveThreadDetailsVisibility, THREAD_DETAILS_ITEMS } from "./threadDetailsItems";
 import { useClientSettings } from "../../hooks/useSettings";
 import { ThreadBackgroundWorkPanel } from "./ThreadBackgroundWorkPanel";
+import { mergeRunningCernoTurnTasks } from "../jobs/cernoRunPresentation";
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import type { OrchestrationV2PendingBackgroundTask } from "@t3tools/contracts";
 import { useProject, useServerConfigs } from "../../state/entities";
@@ -321,13 +322,15 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               {!props.draftId &&
               visible.backgroundWork &&
               props.backgroundWork &&
-              props.backgroundWork.tasks.length > 0 ? (
+              mergeRunningCernoTurnTasks(props.backgroundWork.tasks, props.backgroundWork.turnItems)
+                .length > 0 ? (
                 <ThreadBackgroundWorkPanel
                   density={density}
                   environmentId={props.environmentId}
                   threadId={props.threadId}
                   tasks={props.backgroundWork.tasks}
                   turnItems={props.backgroundWork.turnItems}
+                  cwd={props.gitCwd}
                   branch={props.backgroundWork.branch}
                   stopDisabled={props.backgroundWork.stopDisabled}
                   stopping={props.backgroundWork.stopping}

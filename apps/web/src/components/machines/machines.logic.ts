@@ -1,5 +1,11 @@
-import type { EnvironmentId, OrchestrationV2PendingBackgroundTask } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  HostGpuMetrics,
+  OrchestrationV2PendingBackgroundTask,
+} from "@t3tools/contracts";
+import type { useGT } from "gt-react";
 
+import { formatBytes } from "../../lib/formatBytes";
 import { resolveSidebarThreadStatus, type SidebarThreadStatus } from "../Sidebar.logic";
 import type { EnvironmentPresentation } from "../../state/environments";
 import type { SidebarThreadSummary } from "../../types";
@@ -175,4 +181,27 @@ export function selectEnvironmentBackgroundJobs(
     return left.key.localeCompare(right.key);
   });
   return entries;
+}
+
+export function formatHostGpuSummary(
+  gpu: HostGpuMetrics | null,
+  gt: ReturnType<typeof useGT>,
+): string | null {
+  if (!gpu) return null;
+  const parts: string[] = [];
+  if (gpu.utilization !== null) {
+    parts.push(gt("{percent}% GPU", { percent: Math.round(gpu.utilization * 100) }));
+  }
+  if (gpu.memoryUsedBytes !== null && gpu.memoryTotalBytes !== null && gpu.memoryTotalBytes > 0) {
+    parts.push(
+      gt("{used} / {total} VRAM", {
+        used: formatBytes(gpu.memoryUsedBytes),
+        total: formatBytes(gpu.memoryTotalBytes),
+      }),
+    );
+  }
+  if (gpu.temperatureC !== null) {
+    parts.push(`${Math.round(gpu.temperatureC)}°C`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : null;
 }

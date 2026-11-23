@@ -13036,5 +13036,110 @@
   "d16d1fadc799a3d3": "Awaited commands, monitors, and subagents running on this machine appear here.",
   "4ec08221fabd1a8e": "No matching jobs",
   "c3e0406e0c3fc92f": "Switch the filter above to inspect other running background work.",
-  "ddd088819f44be6f": "Jobs"
+  "ddd088819f44be6f": "Jobs",
+  "2f37984196595af4": "{verdict} ({percent}%)",
+  "2f68903e720df20f": "{level} certainty ({percent}%)",
+  "4fb8c2a2f3d547ab": "Last activity: {liveness}",
+  "69f59326fd98f9f8": "Latest log output",
+  "2a6087a554838ab5": "Model internals (SSM heads, cutoffs, kernel wait)",
+  "17b39507d37ba2c5": [
+    "state: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " (",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    "%,",
+    " ",
+    {
+      "i": 3,
+      "k": "_gt_value_3",
+      "v": "v"
+    },
+    ")"
+  ],
+  "9dc78129b0f77bea": [
+    "fail gate: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    "% (warn",
+    " ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    "%, wake",
+    " ",
+    {
+      "i": 3,
+      "k": "_gt_value_3",
+      "v": "v"
+    },
+    "%)"
+  ],
+  "09684436a5d4c0af": [
+    "wchan: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "2826df0905b0d682": [
+    "output: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "d719c1fa3b0050fe": "remote socket",
+  "a4a298846f578b73": "external flock",
+  "39871ca2f10ec613": "High",
+  "a9eca1d56541263e": "Medium",
+  "fe3d00aba14e859e": "Low",
+  "8ce54cdc99e4bd64": "{age} ago",
+  "68dfdf67e5a1a23d": "Needs input",
+  "fa5f68fa573e5e79": "stdin blocked",
+  "ea04b05997a7f2b5": "Process is blocked waiting on credentials or an interactive prompt.",
+  "31558959276f8ece": "Process is blocked reading stdin and will not finish without input.",
+  "a0ab41e71c5f05cc": "Stop or supply input.",
+  "cf2f069f057565b6": "Stalled",
+  "6aef28ef15f339cb": "{age} silent",
+  "e9ff8e88df3597af": "No output or CPU progress detected; process appears stuck or looping.",
+  "e0f2a81a2cce7fd6": "Inspect log output or stop the thread.",
+  "76e49b20799aa96d": "Failing",
+  "7dfa2151adcd54d1": "Likely failing",
+  "4963c6fbfb44d51f": "Failure signals detected in the stream; watch log output or stop early.",
+  "466e055ec20f0475": "Confirmed failure threshold reached.",
+  "3234bda871df9912": "Warning threshold crossed; monitoring for confirmation.",
+  "74850366251097c1": "Server ready",
+  "997a39afaa8c1337": "listening",
+  "847473cda5ea2431": "Server reported ready and opened a listening socket.",
+  "b3615cbbea47931e": "Service is up.",
+  "25a3dea59c763d02": "Waiting on lock",
+  "7f52a6fb675131fb": "flock · {age}",
+  "eb11510fa9b0634c": "Waiting on an external file lock held by another process; stall alert suppressed.",
+  "9583ad6fb49462dd": "Will resume automatically when the lock clears.",
+  "8b9851eeab222a02": "Succeeded",
+  "496e82349064fb41": "active",
+  "788025d36890db45": "Process output indicates successful completion.",
+  "28fde0985cdcf46b": "Waiting for process exit.",
+  "c44d52591b16a1ce": "Uncertain",
+  "a1921db505bcf710": "Model confidence is still low; collecting more output signals.",
+  "8ea5c52bbba6b016": "Monitoring continues; cerno wakes on confirmed failure or stall.",
+  "198d25fac5860ab8": "Healthy",
+  "fffc815c2fc3403f": "Remote process is active with no failure or loop signals detected.",
+  "59acfbc91b96355a": "Process is running normally with no failure or loop signals detected.",
+  "140a0ad6d78e822e": "No action needed; cerno wakes on confirmed failure or stall."
 }

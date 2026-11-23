@@ -489,6 +489,7 @@ import {
   HostGuardState,
   HostGuardSubscribeInput,
 } from "./hostGuard.ts";
+import { CernoLiveRunsResult } from "./cerno.ts";
 
 export const WS_METHODS = {
   projectsListEntries: "projects.listEntries",
@@ -630,6 +631,7 @@ export const WS_METHODS = {
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetHostResources: "server.getHostResources",
   serverGetHostHardware: "server.getHostHardware",
+  serverListCernoRuns: "server.listCernoRuns",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
@@ -1146,6 +1148,12 @@ const WsServerGetHostResourcesRpc = Rpc.make(WS_METHODS.serverGetHostResources, 
 const WsServerGetHostHardwareRpc = Rpc.make(WS_METHODS.serverGetHostHardware, {
   payload: Schema.Struct({}),
   success: HostHardwareDetails,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsServerListCernoRunsRpc = Rpc.make(WS_METHODS.serverListCernoRuns, {
+  payload: Schema.Struct({}),
+  success: CernoLiveRunsResult,
   error: EnvironmentAuthorizationError,
 });
 
@@ -2562,6 +2570,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetHostResourcesRpc,
   WsServerGetHostHardwareRpc,
+  WsServerListCernoRunsRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,

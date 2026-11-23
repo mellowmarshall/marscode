@@ -13034,5 +13034,110 @@
   "d16d1fadc799a3d3": "Väntade kommandon, övervakare och subagenter som körs på den här datorn visas här.",
   "4ec08221fabd1a8e": "Inga matchande jobb",
   "c3e0406e0c3fc92f": "Byt filter ovan för att granska annat körande bakgrundsarbete.",
-  "ddd088819f44be6f": "Jobb"
+  "ddd088819f44be6f": "Jobb",
+  "2f37984196595af4": "{verdict} ({percent}%)",
+  "2f68903e720df20f": "{level} säkerhet ({percent}%)",
+  "4fb8c2a2f3d547ab": "Senaste aktivitet: {liveness}",
+  "69f59326fd98f9f8": "Senaste loggutdata",
+  "2a6087a554838ab5": "Modellinternt (SSM-huvuden, trösklar, kärnväntan)",
+  "17b39507d37ba2c5": [
+    "tillstånd: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " (",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    "%,",
+    " ",
+    {
+      "i": 3,
+      "k": "_gt_value_3",
+      "v": "v"
+    },
+    ")"
+  ],
+  "9dc78129b0f77bea": [
+    "felgräns: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    "% (varning",
+    " ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    "%, väck",
+    " ",
+    {
+      "i": 3,
+      "k": "_gt_value_3",
+      "v": "v"
+    },
+    "%)"
+  ],
+  "09684436a5d4c0af": [
+    "wchan: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "2826df0905b0d682": [
+    "utdata: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "d719c1fa3b0050fe": "fjärrsocket",
+  "a4a298846f578b73": "extern flock",
+  "39871ca2f10ec613": "Hög",
+  "a9eca1d56541263e": "Medel",
+  "fe3d00aba14e859e": "Låg",
+  "8ce54cdc99e4bd64": "för {age} sedan",
+  "68dfdf67e5a1a23d": "Kräver indata",
+  "fa5f68fa573e5e79": "stdin blockerad",
+  "ea04b05997a7f2b5": "Processen väntar på inloggningsuppgifter eller en interaktiv prompt.",
+  "31558959276f8ece": "Processen är blockerad vid läsning av stdin och avslutas inte utan indata.",
+  "a0ab41e71c5f05cc": "Stoppa eller ange indata.",
+  "cf2f069f057565b6": "Avstannad",
+  "6aef28ef15f339cb": "tyst i {age}",
+  "e9ff8e88df3597af": "Inga utdata eller CPU-framsteg upptäckta; processen verkar ha hängt sig eller fastnat i en loop.",
+  "e0f2a81a2cce7fd6": "Granska loggutdata eller stoppa tråden.",
+  "76e49b20799aa96d": "Misslyckas",
+  "7dfa2151adcd54d1": "Troligen fel",
+  "4963c6fbfb44d51f": "Felsignaler upptäckta i strömmen; granska loggen eller stoppa tidigt.",
+  "466e055ec20f0475": "Tröskel för bekräftat fel uppnådd.",
+  "3234bda871df9912": "Varningströskel passerad; övervakar för bekräftelse.",
+  "74850366251097c1": "Server redo",
+  "997a39afaa8c1337": "lyssnar",
+  "847473cda5ea2431": "Servern rapporterade redo och öppnade en lyssnande socket.",
+  "b3615cbbea47931e": "Tjänsten är igång.",
+  "25a3dea59c763d02": "Väntar på lås",
+  "7f52a6fb675131fb": "flock · {age}",
+  "eb11510fa9b0634c": "Väntar på ett externt fillås som hålls av en annan process; avstanningslarm dämpat.",
+  "9583ad6fb49462dd": "Återupptas automatiskt när låset släpps.",
+  "8b9851eeab222a02": "Lyckades",
+  "496e82349064fb41": "aktiv",
+  "788025d36890db45": "Processutdata tyder på att körningen lyckades.",
+  "28fde0985cdcf46b": "Väntar på att processen avslutas.",
+  "c44d52591b16a1ce": "Osäker",
+  "a1921db505bcf710": "Modellens säkerhet är fortfarande låg; samlar in fler utdatasignaler.",
+  "8ea5c52bbba6b016": "Övervakningen fortsätter; cerno väcker vid bekräftat fel eller avstanning.",
+  "198d25fac5860ab8": "Frisk",
+  "fffc815c2fc3403f": "Fjärrprocessen är aktiv utan upptäckta fel- eller loopsignaler.",
+  "59acfbc91b96355a": "Processen körs normalt utan upptäckta fel- eller loopsignaler.",
+  "140a0ad6d78e822e": "Ingen åtgärd behövs; cerno väcker vid bekräftat fel eller avstanning."
 }

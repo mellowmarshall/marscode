@@ -1631,6 +1631,14 @@ export function createServerEnvironmentAtoms<R, E>(
       execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverGetHostHardware>) =>
         request(WS_METHODS.serverGetHostHardware, input).pipe(Effect.timeout("5 seconds")),
     }),
+    cernoRuns: createEnvironmentQueryAtomFamily(runtime, {
+      label: "environment-data:server:cerno-runs",
+      idleTtlMs: 0,
+      staleTimeMs: 2_000,
+      refreshIntervalMs: 3_000,
+      execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverListCernoRuns>) =>
+        request(WS_METHODS.serverListCernoRuns, input).pipe(Effect.timeout("5 seconds")),
+    }),
     processResourceHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:process-resource-history",
       tag: WS_METHODS.serverGetProcessResourceHistory,

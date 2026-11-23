@@ -6,6 +6,7 @@ import {
   RunId,
   ThreadId,
   TurnItemId,
+  type CernoLiveRun,
   type OrchestrationV2PendingBackgroundTask,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -13,13 +14,58 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
 import { render } from "../../../test/render";
+import { CernoRunAssessment } from "../jobs/CernoRunAssessment";
 import { TooltipProvider } from "../ui/tooltip";
 import { ThreadBackgroundWorkPanel } from "./ThreadBackgroundWorkPanel";
+
+const mockState = vi.hoisted(() => ({
+  canReadDiagnostics: true,
+  cernoRuns: [] as ReadonlyArray<CernoLiveRun>,
+  cernoQueryRequests: 0,
+}));
 
 vi.mock("./CommandOutputPanel", () => ({
   CommandOutputPanel: () => <div>Command output stream</div>,
   useCommandOutputStreaming: () => true,
 }));
+
+vi.mock("../../state/session", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/session")>();
+  return {
+    ...actual,
+    useEnvironmentScope: (_environmentId: unknown, scope: string) =>
+      scope === "diagnostics:read" ? mockState.canReadDiagnostics : true,
+  };
+});
+
+vi.mock("../../state/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/server")>();
+  return {
+    ...actual,
+    serverEnvironment: {
+      ...actual.serverEnvironment,
+      cernoRuns: (args: unknown) => ({ __mockCernoRuns: true, args }),
+    },
+  };
+});
+
+vi.mock("../../state/query", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/query")>();
+  return {
+    ...actual,
+    useEnvironmentQuery: (atom: unknown) => {
+      if (atom && typeof atom === "object" && "__mockCernoRuns" in atom) {
+        mockState.cernoQueryRequests += 1;
+        return {
+          data: { sampledAt: 1_795_458_330_000, runs: mockState.cernoRuns },
+          dataUpdatedAt: 1_795_458_330_000,
+          isLoading: false,
+        };
+      }
+      return actual.useEnvironmentQuery(atom as never);
+    },
+  };
+});
 
 const environmentId = EnvironmentId.make("env-1");
 const threadId = ThreadId.make("thread-1");
@@ -87,8 +133,69 @@ const fourTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask> = [
   },
 ];
 
+const sampleCernoRun: CernoLiveRun = {
+  schemaVersion: 1,
+  pid: 951254,
+  childPid: 951256,
+  startedAtMs: 1_795_457_112_000,
+  updatedAtMs: 1_795_458_325_000,
+  elapsedSec: 1213,
+  mode: "watch-monitor",
+  engine: "cernibundus_c11_avx2_int8",
+  cwd: "/data/Dev/private-repo/worktrees/pass4-aaa",
+  command: "ssh dev-host-x Build.sh",
+  logPath: "/data/Dev/private-repo/logs/pass9_loop1_build.log",
+  state: "RUNNING",
+  confidence: 0.96,
+  margin: 4.8,
+  stateProbs: {
+    RUNNING: 0.96,
+    SUCCEEDED: 0,
+    FAILED: 0.01,
+    NEEDS_INPUT: 0.01,
+    STUCK_LOOP: 0.02,
+  },
+  outcome: "IN_PROGRESS",
+  pFail: 0.04,
+  failMargin: -3.1,
+  cutoffs: { suspThresh: 0.55, suspMargin: 0.5, confThresh: 0.82, confMargin: 1.8 },
+  prompt: false,
+  hangLoop: false,
+  serverReady: false,
+  authRequired: false,
+  resourceKill: "NORMAL",
+  gitConflict: "NORMAL",
+  wchan: "poll_schedule_timeout",
+  cpuActive: false,
+  hasRemoteSocket: true,
+  hasListenSocket: false,
+  hasExtFileLock: false,
+  silenceSec: 14,
+  stallTimeoutSec: 180,
+  bytesStdout: 20450,
+  bytesStderr: 0,
+  alert: null,
+  tail: "[416/2554] Compile Module.Engine.12.cpp",
+  logTail:
+    "[415/2554] Compile Module.MaterialEditor.2.cpp\n[416/2554] Compile Module.Engine.12.cpp",
+};
+
+function withResetCernoMock() {
+  mockState.canReadDiagnostics = true;
+  mockState.cernoRuns = [];
+  mockState.cernoQueryRequests = 0;
+  return {
+    [Symbol.dispose]() {
+      mockState.canReadDiagnostics = true;
+      mockState.cernoRuns = [];
+      mockState.cernoQueryRequests = 0;
+    },
+  };
+}
+
 describe("ThreadBackgroundWorkPanel", () => {
   it("renders sparse inline rows in full density with <= 3 tasks and opens the inspector cleanly", async () => {
+    using _mock = withResetCernoMock();
     const dateNowSpy = vi
       .spyOn(Date, "now")
       .mockReturnValue(Date.parse("2026-11-23T09:00:17.000Z"));
@@ -116,6 +223,8 @@ describe("ThreadBackgroundWorkPanel", () => {
       </TooltipProvider>,
     );
 
+    // Non-cerno tasks must not poll serverListCernoRuns
+    expect(mockState.cernoQueryRequests).toBe(0);
     expect(screen.container.querySelector("[data-thread-details-background-work]")).not.toBeNull();
     await expect.element(page.getByText("python train.py")).toBeVisible();
     await expect.element(page.getByText("60%")).toBeVisible();
@@ -205,5 +314,103 @@ describe("ThreadBackgroundWorkPanel", () => {
     );
 
     expect(emptyScreen.container.querySelector("[data-thread-details-background-work]")).toBeNull();
+  });
+
+  it("gates cerno polling on diagnostics scope, matches cerno runs inline, and shows summary verdicts", async () => {
+    using _mock = withResetCernoMock();
+    const cernoTask: OrchestrationV2PendingBackgroundTask = {
+      kind: "monitor",
+      taskId: "task-cerno-build",
+      awaited: true,
+      command:
+        "cerno watch --monitor --log /data/Dev/private-repo/logs/pass9_loop1_build.log -- ssh dev-host-x Build.sh",
+    };
+
+    // Without diagnostics:read scope, panel must not poll cernoRuns even for cerno tasks
+    mockState.canReadDiagnostics = false;
+    mockState.cernoRuns = [sampleCernoRun];
+    await using deniedScreen = await render(
+      <TooltipProvider>
+        <div style={{ width: 280 }}>
+          <ThreadBackgroundWorkPanel
+            density="full"
+            environmentId={environmentId}
+            threadId={threadId}
+            tasks={[cernoTask]}
+            turnItems={[]}
+            cwd={sampleCernoRun.cwd}
+            stopDisabled={false}
+            stopping={false}
+            onStop={async () => {}}
+            onOpenThread={() => {}}
+          />
+        </div>
+      </TooltipProvider>,
+    );
+    expect(mockState.cernoQueryRequests).toBe(0);
+    expect(deniedScreen.container.textContent).not.toContain("Healthy");
+
+    // With diagnostics:read scope, panel polls cernoRuns and renders inline verdict + logTail progress
+    mockState.canReadDiagnostics = true;
+    await using liveScreen = await render(
+      <TooltipProvider>
+        <div style={{ width: 280 }}>
+          <ThreadBackgroundWorkPanel
+            density="full"
+            environmentId={environmentId}
+            threadId={threadId}
+            tasks={[cernoTask]}
+            turnItems={[]}
+            cwd={sampleCernoRun.cwd}
+            stopDisabled={false}
+            stopping={false}
+            onStop={async () => {}}
+            onOpenThread={() => {}}
+          />
+        </div>
+      </TooltipProvider>,
+    );
+
+    expect(mockState.cernoQueryRequests).toBeGreaterThan(0);
+    expect(liveScreen.container.textContent).toContain("ssh dev-host-x");
+    expect(liveScreen.container.textContent).toContain("Healthy");
+    expect(liveScreen.container.textContent).toContain("96%");
+    expect(liveScreen.container.textContent).toContain("14s ago");
+    expect(liveScreen.container.textContent).toContain("16% · 416/2554");
+
+    // Compact summary row surfaces the worst matched cerno verdict
+    await using compactCernoScreen = await render(
+      <TooltipProvider>
+        <div style={{ width: 280 }}>
+          <ThreadBackgroundWorkPanel
+            density="compact"
+            environmentId={environmentId}
+            threadId={threadId}
+            tasks={[cernoTask]}
+            turnItems={[]}
+            cwd={sampleCernoRun.cwd}
+            stopDisabled={false}
+            stopping={false}
+            onStop={async () => {}}
+            onOpenThread={() => {}}
+          />
+        </div>
+      </TooltipProvider>,
+    );
+    expect(compactCernoScreen.container.textContent).toContain("1 · Healthy");
+  });
+
+  it("renders operator cerno assessment with collapsed model internals that expand on demand", async () => {
+    await using screen = await render(<CernoRunAssessment run={sampleCernoRun} />);
+
+    await expect.element(page.getByText("Healthy")).toBeVisible();
+    await expect.element(page.getByText(/High certainty \(96%\)/i)).toBeVisible();
+    await expect
+      .element(page.getByText(/\[416\/2554\] Compile Module\.Engine\.12\.cpp/))
+      .toBeVisible();
+    expect(screen.container.textContent).not.toContain("poll_schedule_timeout");
+
+    await page.getByRole("button", { name: /Model internals/i }).click();
+    await expect.element(page.getByText(/poll_schedule_timeout/)).toBeVisible();
   });
 });

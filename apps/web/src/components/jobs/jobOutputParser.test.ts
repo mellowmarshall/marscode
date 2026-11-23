@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { extractCernoLogPath, isCernoCommand, unwrapCernoCommand } from "./cernoCommand";
 import {
   detectSilentStallSeconds,
   formatCompactElapsed,
@@ -139,5 +140,38 @@ describe("jobOutputParser", () => {
     expect(detectSilentStallSeconds(100_000, 159_000, true, 60)).toBeNull();
     expect(detectSilentStallSeconds(100_000, 194_000, true, 60)).toBe(94);
     expect(detectSilentStallSeconds(100_000, 194_000, false, 60)).toBeNull();
+  });
+
+  it("unwraps multiline cerno watch/tail wrappers and extracts --log paths", () => {
+    const multilineCerno = [
+      "cerno watch --monitor --wake-on-alert --log /data/Dev/private-repo/logs/pass9_loop1_build.log -- \\",
+      "  ssh dev-host-x 'set -euo pipefail",
+      "  /data/Dev/eclipse-raid/tooling/UnrealEngine-5.8.4/Engine/Build/BatchFiles/Linux/Build.sh'",
+    ].join("\n");
+
+    expect(isCernoCommand(multilineCerno)).toBe(true);
+    expect(extractCernoLogPath(multilineCerno)).toBe(
+      "/data/Dev/private-repo/logs/pass9_loop1_build.log",
+    );
+    expect(shortJobLabel({ kind: "command", command: multilineCerno })).toBe("ssh dev-host-x");
+
+    const tailCmd = "cerno tail --monitor -F --pid 4219 /tmp/train_run.log";
+    expect(isCernoCommand(tailCmd)).toBe(true);
+    expect(extractCernoLogPath(tailCmd)).toBe("/tmp/train_run.log");
+    expect(shortJobLabel({ kind: "monitor", command: tailCmd })).toBe("tail /tmp/train_run.log");
+
+    // Positional log file before --pid flag must not return the PID
+    const tailPidAfter = "cerno tail /tmp/train_run.log --pid 4219";
+    expect(isCernoCommand(tailPidAfter)).toBe(true);
+    expect(extractCernoLogPath(tailPidAfter)).toBe("/tmp/train_run.log");
+    expect(unwrapCernoCommand(tailPidAfter)).toBe("tail /tmp/train_run.log");
+
+    // Subcommand unwrapping and false-positive rejection (rg / commit messages)
+    expect(unwrapCernoCommand("cd /repo && cerno watch --monitor -- pnpm test:e2e")).toBe(
+      "pnpm test:e2e",
+    );
+    expect(isCernoCommand('rg "cerno watch" apps/web')).toBe(false);
+    expect(isCernoCommand('git commit -m "fix cerno tail parsing"')).toBe(false);
+    expect(extractCernoLogPath('rg "cerno watch --log /tmp/fake.log"')).toBeNull();
   });
 });

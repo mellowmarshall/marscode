@@ -212,6 +212,7 @@ import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as HostHardware from "./resourceTelemetry/HostHardware.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import * as CernoRunService from "./cerno/CernoRunService.ts";
 import * as HostGuardBroker from "./hostGuard/HostGuardBroker.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -341,6 +342,7 @@ const layerHostResources = HostResources.layer;
 const layerResourceDiagnostics = Layer.mergeAll(
   layerHostResources,
   HostHardware.layer.pipe(Layer.provide(layerHostResources)),
+  CernoRunService.layer,
   layerResourceTelemetry,
   ProcessDiagnostics.layer.pipe(Layer.provide(layerResourceTelemetry)),
   ProcessResourceMonitor.layer.pipe(Layer.provide(layerResourceTelemetry)),

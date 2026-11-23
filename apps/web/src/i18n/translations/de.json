@@ -13027,5 +13027,110 @@
   "d16d1fadc799a3d3": "Erwartete Befehle, Monitore und Subagenten auf diesem Computer erscheinen hier.",
   "4ec08221fabd1a8e": "Keine passenden Jobs",
   "c3e0406e0c3fc92f": "Filter oben wechseln, um andere laufende Hintergrundarbeit anzuzeigen.",
-  "ddd088819f44be6f": "Jobs"
+  "ddd088819f44be6f": "Jobs",
+  "2f37984196595af4": "{verdict} ({percent}%)",
+  "2f68903e720df20f": "{level} Sicherheit ({percent}%)",
+  "4fb8c2a2f3d547ab": "Letzte Aktivität: {liveness}",
+  "69f59326fd98f9f8": "Aktuelle Protokollausgabe",
+  "2a6087a554838ab5": "Modellinterna (SSM-Köpfe, Schwellen, Kernel-Wartezeit)",
+  "17b39507d37ba2c5": [
+    "Status: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " (",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    "%,",
+    " ",
+    {
+      "i": 3,
+      "k": "_gt_value_3",
+      "v": "v"
+    },
+    ")"
+  ],
+  "9dc78129b0f77bea": [
+    "Fehlerschwelle: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    "% (Warnung",
+    " ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    "%, Wecken",
+    " ",
+    {
+      "i": 3,
+      "k": "_gt_value_3",
+      "v": "v"
+    },
+    "%)"
+  ],
+  "09684436a5d4c0af": [
+    "wchan: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "2826df0905b0d682": [
+    "Ausgabe: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "d719c1fa3b0050fe": "Remote-Socket",
+  "a4a298846f578b73": "externes flock",
+  "39871ca2f10ec613": "Hoch",
+  "a9eca1d56541263e": "Mittel",
+  "fe3d00aba14e859e": "Niedrig",
+  "8ce54cdc99e4bd64": "vor {age}",
+  "68dfdf67e5a1a23d": "Eingabe erforderlich",
+  "fa5f68fa573e5e79": "stdin blockiert",
+  "ea04b05997a7f2b5": "Der Prozess wartet auf Zugangsdaten oder eine interaktive Eingabe.",
+  "31558959276f8ece": "Der Prozess ist beim Lesen von stdin blockiert und endet ohne Eingabe nicht.",
+  "a0ab41e71c5f05cc": "Stoppen oder Eingabe bereitstellen.",
+  "cf2f069f057565b6": "Blockiert",
+  "6aef28ef15f339cb": "seit {age} stumm",
+  "e9ff8e88df3597af": "Keine Ausgabe oder CPU-Fortschritt erkannt; Prozess wirkt festgefahren oder in einer Schleife.",
+  "e0f2a81a2cce7fd6": "Protokollausgabe prüfen oder Thread stoppen.",
+  "76e49b20799aa96d": "Schlägt fehl",
+  "7dfa2151adcd54d1": "Schlägt wahrscheinlich fehl",
+  "4963c6fbfb44d51f": "Fehlersignale im Stream erkannt; Protokollausgabe prüfen oder früh stoppen.",
+  "466e055ec20f0475": "Bestätigte Fehlerschwelle erreicht.",
+  "3234bda871df9912": "Warnschwelle überschritten; warte auf Bestätigung.",
+  "74850366251097c1": "Server bereit",
+  "997a39afaa8c1337": "lauscht",
+  "847473cda5ea2431": "Der Server hat Bereitschaft gemeldet und einen Listening-Socket geöffnet.",
+  "b3615cbbea47931e": "Dienst läuft.",
+  "25a3dea59c763d02": "Wartet auf Sperre",
+  "7f52a6fb675131fb": "flock · {age}",
+  "eb11510fa9b0634c": "Wartet auf eine externe Dateisperre eines anderen Prozesses; Stillstandsalarm unterdrückt.",
+  "9583ad6fb49462dd": "Läuft automatisch weiter, sobald die Sperre freigegeben wird.",
+  "8b9851eeab222a02": "Erfolgreich",
+  "496e82349064fb41": "aktiv",
+  "788025d36890db45": "Die Prozessausgabe deutet auf einen erfolgreichen Abschluss hin.",
+  "28fde0985cdcf46b": "Warte auf Prozessende.",
+  "c44d52591b16a1ce": "Unsicher",
+  "a1921db505bcf710": "Die Modellsicherheit ist noch gering; weitere Ausgabesignale werden gesammelt.",
+  "8ea5c52bbba6b016": "Überwachung läuft weiter; cerno weckt bei bestätigtem Fehler oder Stillstand.",
+  "198d25fac5860ab8": "Stabil",
+  "fffc815c2fc3403f": "Remote-Prozess ist aktiv ohne erkannte Fehler- oder Schleifensignale.",
+  "59acfbc91b96355a": "Prozess läuft normal ohne erkannte Fehler- oder Schleifensignale.",
+  "140a0ad6d78e822e": "Keine Aktion nötig; cerno weckt bei bestätigtem Fehler oder Stillstand."
 }

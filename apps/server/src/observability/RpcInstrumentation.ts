@@ -96,6 +96,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverGetProcessDiagnostics]: "server",
   [WS_METHODS.serverGetHostResources]: "server",
   [WS_METHODS.serverGetHostHardware]: "server",
+  [WS_METHODS.serverListCernoRuns]: "server",
   [WS_METHODS.hostGuardSubscribe]: "server",
   [WS_METHODS.hostGuardResolve]: "server",
   [WS_METHODS.serverGetProcessResourceHistory]: "server",

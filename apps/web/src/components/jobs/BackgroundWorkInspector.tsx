@@ -1,6 +1,7 @@
 import type { CommandOutputView } from "@t3tools/client-runtime/state/command-output";
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import type {
+  CernoLiveRun,
   EnvironmentId,
   OrchestrationV2PendingBackgroundTask,
   ThreadId,
@@ -17,7 +18,6 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { formatBytes } from "../../lib/formatBytes";
 import { cn } from "../../lib/utils";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useEnvironmentQuery } from "../../state/query";
@@ -28,11 +28,10 @@ import { Badge } from "../ui/badge";
 import { Button, InlineButton } from "../ui/button";
 import { Dialog, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from "../ui/dialog";
 import { JobMetricChart } from "./JobMetricCharts";
-import {
-  detectSilentStallSeconds,
-  parseCommandOutputMetrics,
-  shortJobLabel,
-} from "./jobOutputParser";
+import { formatHostGpuSummary } from "../machines/machines.logic";
+import { CernoRunAssessment } from "./CernoRunAssessment";
+import { matchCernoRunsToTasks, selectCommandOutputMetrics } from "./cernoRunPresentation";
+import { detectSilentStallSeconds, shortJobLabel } from "./jobOutputParser";
 
 const CHART_COLORS = ["var(--chart-1)", "var(--chart-2)"] as const;
 
@@ -75,6 +74,7 @@ export function BackgroundWorkTaskSection({
   branch,
   worktreePath,
   gpuSummary,
+  cernoRun = null,
   nowMs,
   onOpenThread,
 }: {
@@ -87,6 +87,7 @@ export function BackgroundWorkTaskSection({
   readonly branch?: string | null | undefined;
   readonly worktreePath?: string | null | undefined;
   readonly gpuSummary?: string | null | undefined;
+  readonly cernoRun?: CernoLiveRun | null | undefined;
   readonly nowMs: number;
   readonly onOpenThread: (threadId: ThreadId) => void;
 }) {
@@ -125,7 +126,7 @@ export function BackgroundWorkTaskSection({
   const outputText =
     outputQuery.data?.output.text ??
     (item?.type === "command_execution" ? (item.output ?? "") : "");
-  const metrics = outputText ? parseCommandOutputMetrics(outputText) : null;
+  const metrics = selectCommandOutputMetrics(outputText, cernoRun?.logTail);
   const progress = metrics?.progress ?? null;
   const kpis = metrics?.kpis ?? [];
   const series = metrics?.series ?? [];
@@ -135,7 +136,9 @@ export function BackgroundWorkTaskSection({
   const itemUpdatedMs =
     item && "updatedAt" in item && item.updatedAt ? DateTime.toEpochMillis(item.updatedAt) : null;
   const lastActivityMs = outputQuery.dataUpdatedAt > 0 ? outputQuery.dataUpdatedAt : itemUpdatedMs;
-  const silentSeconds = detectSilentStallSeconds(lastActivityMs, nowMs, isRunningOutput);
+  const silentSeconds = cernoRun
+    ? null
+    : detectSilentStallSeconds(lastActivityMs, nowMs, isRunningOutput);
 
   const hasMetadata = Boolean(hostLabel || branch || worktreePath || gpuSummary);
 
@@ -178,6 +181,8 @@ export function BackgroundWorkTaskSection({
           ) : null}
         </div>
       ) : null}
+
+      {cernoRun ? <CernoRunAssessment run={cernoRun} /> : null}
 
       {silentSeconds !== null ? (
         <div className="flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning-foreground">
@@ -295,6 +300,7 @@ export function BackgroundWorkInspectorDialog({
   threadId,
   tasks,
   turnItems,
+  cernoRuns = [],
   initialTaskId,
   assumeLiveWithoutItems = false,
   showHostHardware = false,
@@ -313,6 +319,7 @@ export function BackgroundWorkInspectorDialog({
   readonly threadId: ThreadId;
   readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
   readonly turnItems: ThreadStructure["turnItems"];
+  readonly cernoRuns?: ReadonlyArray<CernoLiveRun> | undefined;
   readonly initialTaskId?: string | null | undefined;
   readonly assumeLiveWithoutItems?: boolean;
   readonly showHostHardware?: boolean;
@@ -343,28 +350,7 @@ export function BackgroundWorkInspectorDialog({
   const hardware = useEnvironmentQuery(
     open && showHostHardware ? serverEnvironment.hostHardware({ environmentId, input: {} }) : null,
   );
-  const primaryGpu = hardware.data?.gpus[0] ?? null;
-  const gpuParts: string[] = [];
-  if (primaryGpu?.utilization !== null && primaryGpu?.utilization !== undefined) {
-    gpuParts.push(gt("{percent}% GPU", { percent: Math.round(primaryGpu.utilization * 100) }));
-  }
-  if (
-    primaryGpu &&
-    primaryGpu.memoryUsedBytes !== null &&
-    primaryGpu.memoryTotalBytes !== null &&
-    primaryGpu.memoryTotalBytes > 0
-  ) {
-    gpuParts.push(
-      gt("{used} / {total} VRAM", {
-        used: formatBytes(primaryGpu.memoryUsedBytes),
-        total: formatBytes(primaryGpu.memoryTotalBytes),
-      }),
-    );
-  }
-  if (primaryGpu?.temperatureC !== null && primaryGpu?.temperatureC !== undefined) {
-    gpuParts.push(`${Math.round(primaryGpu.temperatureC)}°C`);
-  }
-  const gpuSummary = gpuParts.length > 0 ? gpuParts.join(" · ") : null;
+  const gpuSummary = formatHostGpuSummary(hardware.data?.gpus[0] ?? null, gt);
 
   const baseTaskId = initialTaskId ?? null;
   const pickedTaskId = selection.base === baseTaskId ? selection.picked : null;
@@ -375,6 +361,18 @@ export function BackgroundWorkInspectorDialog({
         ? baseTaskId
         : (tasks[0]?.taskId ?? null);
   const activeTask = tasks.find((task) => task.taskId === activeTaskId) ?? tasks[0] ?? null;
+  const matchedRuns = matchCernoRunsToTasks(
+    tasks.map((task) => {
+      const item = resolveBackgroundTaskTurnItem(task, turnItems);
+      return {
+        taskId: task.taskId,
+        command: task.command ?? (item?.type === "command_execution" ? item.input : undefined),
+      };
+    }),
+    cernoRuns,
+    worktreePath,
+  );
+  const activeCernoRun = activeTask ? (matchedRuns.get(activeTask.taskId) ?? null) : null;
 
   const handleOpenChange = (nextOpen: boolean) => {
     if (!nextOpen) {
@@ -472,6 +470,7 @@ export function BackgroundWorkInspectorDialog({
               branch={branch}
               worktreePath={worktreePath}
               gpuSummary={gpuSummary}
+              cernoRun={activeCernoRun}
               nowMs={nowMs}
               onOpenThread={(childId) => {
                 onOpenChange(false);

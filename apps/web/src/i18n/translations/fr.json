@@ -13027,5 +13027,110 @@
   "d16d1fadc799a3d3": "Les commandes attendues, moniteurs et sous-agents actifs sur cette machine apparaissent ici.",
   "4ec08221fabd1a8e": "Aucune tâche correspondante",
   "c3e0406e0c3fc92f": "Changez le filtre ci-dessus pour inspecter d’autres tâches en arrière-plan.",
-  "ddd088819f44be6f": "Tâches"
+  "ddd088819f44be6f": "Tâches",
+  "2f37984196595af4": "{verdict} ({percent} %)",
+  "2f68903e720df20f": "Certitude {level} ({percent}%)",
+  "4fb8c2a2f3d547ab": "Dernière activité : {liveness}",
+  "69f59326fd98f9f8": "Dernière sortie du journal",
+  "2a6087a554838ab5": "Détails du modèle (têtes SSM, seuils, attente noyau)",
+  "17b39507d37ba2c5": [
+    "état : ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " (",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    "%,",
+    " ",
+    {
+      "i": 3,
+      "k": "_gt_value_3",
+      "v": "v"
+    },
+    ")"
+  ],
+  "9dc78129b0f77bea": [
+    "seuil d'échec : ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    "% (alerte",
+    " ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    "%, réveil",
+    " ",
+    {
+      "i": 3,
+      "k": "_gt_value_3",
+      "v": "v"
+    },
+    "%)"
+  ],
+  "09684436a5d4c0af": [
+    "wchan : ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "2826df0905b0d682": [
+    "sortie : ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    }
+  ],
+  "d719c1fa3b0050fe": "socket distant",
+  "a4a298846f578b73": "flock externe",
+  "39871ca2f10ec613": "Élevée",
+  "a9eca1d56541263e": "Moyenne",
+  "fe3d00aba14e859e": "Faible",
+  "8ce54cdc99e4bd64": "il y a {age}",
+  "68dfdf67e5a1a23d": "Entrée requise",
+  "fa5f68fa573e5e79": "stdin bloqué",
+  "ea04b05997a7f2b5": "Le processus attend des identifiants ou une invite interactive.",
+  "31558959276f8ece": "Le processus est bloqué en lecture sur stdin et ne se terminera pas sans entrée.",
+  "a0ab41e71c5f05cc": "Arrêtez-le ou fournissez une entrée.",
+  "cf2f069f057565b6": "Bloqué",
+  "6aef28ef15f339cb": "silencieux ({age})",
+  "e9ff8e88df3597af": "Aucune sortie ni activité CPU détectée ; le processus semble bloqué ou en boucle.",
+  "e0f2a81a2cce7fd6": "Inspectez le journal ou arrêtez le fil.",
+  "76e49b20799aa96d": "En échec",
+  "7dfa2151adcd54d1": "Échec probable",
+  "4963c6fbfb44d51f": "Signaux d'échec détectés dans le flux ; surveillez le journal ou arrêtez tôt.",
+  "466e055ec20f0475": "Seuil d'échec confirmé atteint.",
+  "3234bda871df9912": "Seuil d'alerte dépassé ; surveillance en cours pour confirmation.",
+  "74850366251097c1": "Serveur prêt",
+  "997a39afaa8c1337": "en écoute",
+  "847473cda5ea2431": "Le serveur s'est déclaré prêt et a ouvert un socket en écoute.",
+  "b3615cbbea47931e": "Le service est démarré.",
+  "25a3dea59c763d02": "En attente de verrou",
+  "7f52a6fb675131fb": "flock · {age}",
+  "eb11510fa9b0634c": "En attente d'un verrou de fichier externe détenu par un autre processus ; alerte de blocage suspendue.",
+  "9583ad6fb49462dd": "Reprendra automatiquement à la libération du verrou.",
+  "8b9851eeab222a02": "Réussi",
+  "496e82349064fb41": "actif",
+  "788025d36890db45": "La sortie du processus indique une exécution réussie.",
+  "28fde0985cdcf46b": "En attente de la fin du processus.",
+  "c44d52591b16a1ce": "Incertain",
+  "a1921db505bcf710": "La confiance du modèle est encore faible ; collecte de signaux en cours.",
+  "8ea5c52bbba6b016": "La surveillance continue ; cerno réveille en cas d'échec confirmé ou de blocage.",
+  "198d25fac5860ab8": "Sain",
+  "fffc815c2fc3403f": "Le processus distant est actif sans signal d'échec ni de boucle.",
+  "59acfbc91b96355a": "Le processus s'exécute normalement sans signal d'échec ni de boucle.",
+  "140a0ad6d78e822e": "Aucune action requise ; cerno réveille en cas d'échec confirmé ou de blocage."
 }
