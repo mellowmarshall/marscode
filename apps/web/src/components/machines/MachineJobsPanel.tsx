@@ -36,6 +36,7 @@ import { orchestrationEnvironment } from "../../state/orchestration";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentScope } from "../../state/session";
+import { useShipQueueSnapshot } from "../../state/shipQueue";
 import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { useCommandOutputStreaming } from "../chat/CommandOutputPanel";
@@ -47,6 +48,7 @@ import {
   parseCommandOutputMetrics,
   shortJobLabel,
 } from "../jobs/jobOutputParser";
+import { isShipQueueCommand } from "../jobs/shipQueueBackgroundFilter";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
@@ -227,7 +229,17 @@ export function MachineJobsPanel({ environmentId }: { readonly environmentId: En
       ? workflowsLive.data.runs.filter((run) => run.endedAt === null).length
       : 0;
 
-  const entries = selectEnvironmentBackgroundJobs(allThreads, environmentId);
+  const shipQueueSupported =
+    serverConfigs.get(environmentId)?.environment.capabilities.shipQueue === true;
+  const shipQueueSnapshot = useShipQueueSnapshot(shipQueueSupported ? environmentId : null);
+  const knownShipJobIds =
+    shipQueueSupported && shipQueueSnapshot.available && shipQueueSnapshot.jobs.length > 0
+      ? new Set(shipQueueSnapshot.jobs.map((job) => job.id))
+      : undefined;
+  const entries = selectEnvironmentBackgroundJobs(allThreads, environmentId, {
+    excludeShipQueue: shipQueueSupported,
+    knownShipJobIds,
+  });
   const inspectedEntry = inspectedKey
     ? (entries.find((candidate) => candidate.key === inspectedKey) ?? null)
     : null;
@@ -241,6 +253,7 @@ export function MachineJobsPanel({ environmentId }: { readonly environmentId: En
       (item) =>
         item.type === "command_execution" &&
         item.status === "running" &&
+        !(shipQueueSupported && isShipQueueCommand(item.input)) &&
         isCernoCommand(item.input),
     );
   const cernoQuery = useEnvironmentQuery(

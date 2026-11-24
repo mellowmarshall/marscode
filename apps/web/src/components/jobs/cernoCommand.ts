@@ -19,7 +19,7 @@ export function flattenShellContinuations(rawCommand: string): string {
  * Splits a shell command line into top-level command segments separated by unquoted
  * `&&`, `||`, `;`, `|`, or newlines, tokenizing each segment with basic quote stripping.
  */
-function parseShellSegments(rawCommand: string): ReadonlyArray<ReadonlyArray<string>> {
+export function parseShellSegments(rawCommand: string): ReadonlyArray<ReadonlyArray<string>> {
   const flat = flattenShellContinuations(rawCommand);
   const segments: Array<Array<string>> = [];
   let currentSegment: Array<string> = [];
@@ -90,7 +90,7 @@ function parseShellSegments(rawCommand: string): ReadonlyArray<ReadonlyArray<str
   return segments;
 }
 
-function stripLeadingEnvPrefix(tokens: ReadonlyArray<string>): ReadonlyArray<string> {
+export function stripLeadingEnvPrefix(tokens: ReadonlyArray<string>): ReadonlyArray<string> {
   let idx = 0;
   while (idx < tokens.length) {
     const tok = tokens[idx]!;

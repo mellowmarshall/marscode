@@ -1,21 +1,69 @@
 import {
   EnvironmentId,
   ProjectId,
+  RunId,
   ThreadId,
+  TurnItemId,
+  type OrchestrationV2PendingBackgroundTask,
   type ScopedThreadRef,
+  type ShipQueueJob,
   type ThreadPullRequestLink,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import { AsyncResult, Atom } from "effect/reactivity";
+import type { ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
 const SCRATCH_ROOT = "/home/user/.t3/scratch";
+const FIXED_NOW_ISO = "2026-11-23T18:00:00.000Z";
+const FIXED_NOW_MS = Date.parse(FIXED_NOW_ISO);
 
 const state = vi.hoisted(() => ({
   workspaceRoot: "",
   folder: "",
   pullRequests: [] as unknown[],
   configLoaded: true,
+  shipQueue: false,
+  shipJobs: [] as ShipQueueJob[],
+}));
+
+vi.mock(import("~/hooks/useNowSecond"), () => ({
+  useNowSecond: () => FIXED_NOW_MS,
+}));
+
+vi.mock(import("~/hooks/useNowMinute"), () => ({
+  useNowMinute: () => FIXED_NOW_ISO,
+}));
+
+vi.mock(import("@tanstack/react-router"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  useNavigate: () => vi.fn(),
+}));
+
+vi.mock(import("~/state/shipQueue"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  useShipQueueSnapshot: () =>
+    state.shipQueue
+      ? {
+          available: true,
+          daemonRunning: true,
+          daemonPid: 777,
+          openCount: state.shipJobs.length,
+          totalCount: state.shipJobs.length,
+          jobs: state.shipJobs,
+          deps: [],
+        }
+      : {
+          available: false,
+          daemonRunning: false,
+          daemonPid: null,
+          openCount: 0,
+          totalCount: 0,
+          jobs: [],
+          deps: [],
+        },
+  useThreadShipJobs: () => (state.shipQueue ? state.shipJobs : []),
 }));
 
 vi.mock(import("~/state/entities"), async (importOriginal) => ({
@@ -50,7 +98,12 @@ vi.mock(import("~/state/entities"), async (importOriginal) => ({
               EnvironmentId.make("environment"),
               {
                 scratchWorkspaceRoot: SCRATCH_ROOT,
-                environment: { capabilities: { pullRequests: true } },
+                environment: {
+                  capabilities: {
+                    pullRequests: true,
+                    shipQueue: state.shipQueue,
+                  },
+                },
               },
             ],
           ]
@@ -84,6 +137,7 @@ vi.mock(import("~/state/vcs"), async (importOriginal) => {
 import { render } from "../../../test/render";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { PopoverCreateHandle } from "../ui/popover";
+import { TooltipProvider } from "../ui/tooltip";
 import { ChatCanvasContext } from "./ChatCanvasContext";
 import { resolveChatCanvasLayout } from "./chatCanvasLayout";
 import { ThreadDetailsPanel } from "./ThreadDetailsPanel";
@@ -110,11 +164,15 @@ function setup(input: {
   folder: string;
   pullRequests?: ThreadPullRequestLink[];
   configLoaded?: boolean;
+  shipQueue?: boolean;
+  shipJobs?: ShipQueueJob[];
 }) {
   state.configLoaded = input.configLoaded ?? true;
   state.workspaceRoot = input.workspaceRoot;
   state.folder = input.folder;
   state.pullRequests = input.pullRequests ?? [];
+  state.shipQueue = input.shipQueue ?? false;
+  state.shipJobs = input.shipJobs ?? [];
   useRightPanelStore.setState({ threadPanelVisibilityByThreadKey: {} });
   const anchor = document.createElement("div");
   document.body.append(anchor);
@@ -137,63 +195,71 @@ function Panel({
   fixture,
   draftEnvMode,
   onMachines = false,
+  backgroundWork,
+  cardHeight = placement.height,
 }: {
   fixture: ReturnType<typeof setup>;
   /** Renders an unsent draft in this mode instead of a started thread. */
   draftEnvMode?: "local" | "worktree";
   onMachines?: boolean;
+  backgroundWork?: ComponentProps<typeof ThreadDetailsPanel>["backgroundWork"];
+  cardHeight?: number;
 }) {
   const noop = () => {};
   const scriptResult = async () => ({ ok: true }) as never;
+  const cardPlacement = { ...placement, height: cardHeight };
   return (
-    <ChatCanvasContext
-      value={{
-        container,
-        lane: { padding: 48, minChatWidth: 640 },
-        layout: resolveChatCanvasLayout({ container, preview: null }),
-        previewKey: null,
-        registerTimeline: noop,
-        measureDetailsCard: noop,
-        detailsCardTopInset: 0,
-        preferredDetailsCard: placement,
-        detailsCardPlacement: placement,
-      }}
-    >
-      <ThreadDetailsPanel
-        anchor={fixture.anchor}
-        handle={fixture.handle}
-        environmentId={threadRef.environmentId}
-        threadId={threadRef.threadId}
-        projectId={ProjectId.make("project")}
-        composerDraftTarget={threadRef}
-        worktreePath={draftEnvMode === undefined ? state.folder : null}
-        isServerThread={draftEnvMode === undefined}
-        activeProjectName={state.workspaceRoot === SCRATCH_ROOT ? "No project" : "plain"}
-        activeProjectScripts={undefined}
-        preferredScriptId={null}
-        keybindings={[]}
-        availableEditors={[]}
-        showOpenInPicker={false}
-        openInShortcutEnabled={false}
-        gitCwd={state.folder}
-        workspaceMutationId={null}
-        isGitRepo={false}
-        offersWorkspaceModes={false}
-        envLocked={draftEnvMode === undefined}
-        availableEnvironments={onMachines ? machines : []}
-        {...(onMachines ? { onEnvironmentChange: noop } : {})}
-        onEnvModeChange={noop}
-        envMode={draftEnvMode ?? "local"}
-        startFromOrigin={false}
-        onStartFromOriginChange={noop}
-        onComposerFocusRequest={noop}
-        onRunProjectScript={noop}
-        onAddProjectScript={scriptResult}
-        onUpdateProjectScript={scriptResult}
-        onDeleteProjectScript={scriptResult}
-        usage={{} as never}
-      />
-    </ChatCanvasContext>
+    <TooltipProvider>
+      <ChatCanvasContext
+        value={{
+          container,
+          lane: { padding: 48, minChatWidth: 640 },
+          layout: resolveChatCanvasLayout({ container, preview: null }),
+          previewKey: null,
+          registerTimeline: noop,
+          measureDetailsCard: noop,
+          detailsCardTopInset: 0,
+          preferredDetailsCard: cardPlacement,
+          detailsCardPlacement: cardPlacement,
+        }}
+      >
+        <ThreadDetailsPanel
+          anchor={fixture.anchor}
+          handle={fixture.handle}
+          environmentId={threadRef.environmentId}
+          threadId={threadRef.threadId}
+          projectId={ProjectId.make("project")}
+          composerDraftTarget={threadRef}
+          worktreePath={draftEnvMode === undefined ? state.folder : null}
+          isServerThread={draftEnvMode === undefined}
+          activeProjectName={state.workspaceRoot === SCRATCH_ROOT ? "No project" : "plain"}
+          activeProjectScripts={undefined}
+          preferredScriptId={null}
+          keybindings={[]}
+          availableEditors={[]}
+          showOpenInPicker={false}
+          openInShortcutEnabled={false}
+          gitCwd={state.folder}
+          workspaceMutationId={null}
+          isGitRepo={false}
+          offersWorkspaceModes={false}
+          envLocked={draftEnvMode === undefined}
+          availableEnvironments={onMachines ? machines : []}
+          {...(onMachines ? { onEnvironmentChange: noop } : {})}
+          onEnvModeChange={noop}
+          envMode={draftEnvMode ?? "local"}
+          startFromOrigin={false}
+          onStartFromOriginChange={noop}
+          onComposerFocusRequest={noop}
+          onRunProjectScript={noop}
+          onAddProjectScript={scriptResult}
+          onUpdateProjectScript={scriptResult}
+          onDeleteProjectScript={scriptResult}
+          {...(backgroundWork ? { backgroundWork } : {})}
+          usage={{} as never}
+        />
+      </ChatCanvasContext>
+    </TooltipProvider>
   );
 }
 
@@ -250,4 +316,117 @@ it("offers no Initialize Git before the server config says where No project live
   await expect
     .element(page.getByRole("button", { name: "Initialize Git" }))
     .not.toBeInTheDocument();
+});
+
+it("deduplicates ship-queue tasks from the right rail while keeping unrelated background work", async () => {
+  const liveJob: ShipQueueJob = {
+    id: "10987",
+    repo: "devtools",
+    branch: "feat/s6",
+    title: "Ship S6 (#88)",
+    state: "running",
+    stage: "push",
+    pr: "88",
+    prRepo: "private-repo",
+    threadId: threadRef.threadId,
+    submittedAt: "2026-11-23T17:58:00.000Z",
+    lastMarker: "PUSHING job=10987",
+  };
+  const shipOnlyTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask> = [
+    {
+      kind: "command",
+      taskId: "sq-watch",
+      awaited: true,
+      command: "ship-queue watch 10987",
+    },
+    {
+      kind: "monitor",
+      taskId: "sq-cerno",
+      awaited: true,
+      command: "cerno watch --monitor --log /tmp/sq.log -- ship-queue submit /data/wt feat t b.md",
+    },
+    {
+      kind: "monitor",
+      taskId: "sq-empty",
+      awaited: true,
+      description: "ship-queue 10987 (#111)",
+    },
+  ];
+  const trainTask: OrchestrationV2PendingBackgroundTask = {
+    kind: "command",
+    taskId: "train-cmd",
+    awaited: true,
+    command: "python train.py --epochs 10",
+  };
+  const emptyTurnItems = [
+    {
+      id: TurnItemId.make("item-train"),
+      threadId: threadRef.threadId,
+      runId: RunId.make("run-1"),
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      type: "command_execution" as const,
+      status: "running" as const,
+      title: null,
+      input: "python train.py --epochs 10",
+      output: "",
+      startedAt: DateTime.makeUnsafe("2026-11-23T17:59:00.000Z"),
+      completedAt: null,
+      updatedAt: DateTime.makeUnsafe("2026-11-23T17:59:10.000Z"),
+    },
+  ];
+  const baseBackgroundWork = {
+    tasks: shipOnlyTasks,
+    turnItems: emptyTurnItems,
+    branch: "feat/s6",
+    stopDisabled: false,
+    stopping: false,
+    onStop: async () => {},
+    onOpenThread: () => {},
+  };
+
+  using fixture = setup({
+    workspaceRoot: "/work/plain",
+    folder: "/work/plain",
+    shipQueue: true,
+    shipJobs: [liveJob],
+  });
+
+  {
+    await using shipOnlyScreen = await render(
+      <Panel fixture={fixture} backgroundWork={baseBackgroundWork} cardHeight={700} />,
+    );
+    await expect.element(page.getByRole("region", { name: "Ship Queue" })).toBeVisible();
+    await expect.element(page.getByText("Shipping")).toBeVisible();
+    await expect.element(page.getByText("Merge", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("#88")).toBeVisible();
+    expect(
+      shipOnlyScreen.container.querySelector("[data-thread-details-background-work]"),
+    ).toBeNull();
+  }
+
+  {
+    await using mixedScreen = await render(
+      <Panel
+        fixture={fixture}
+        cardHeight={700}
+        backgroundWork={{
+          ...baseBackgroundWork,
+          tasks: [...shipOnlyTasks, trainTask],
+        }}
+      />,
+    );
+    await expect.element(page.getByRole("region", { name: "Ship Queue" })).toBeVisible();
+    await expect.element(page.getByText("python train.py")).toBeVisible();
+    const bgContainer = mixedScreen.container.querySelector(
+      "[data-thread-details-background-work]",
+    );
+    expect(bgContainer).not.toBeNull();
+    expect(bgContainer?.textContent).toContain("python train.py");
+    expect(bgContainer?.textContent).not.toContain("ship-queue");
+  }
 });

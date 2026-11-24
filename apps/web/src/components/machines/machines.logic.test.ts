@@ -218,4 +218,71 @@ describe("machines.logic", () => {
     const jobs = selectEnvironmentBackgroundJobs([tArchived, tBg, tAwaited, tOtherEnv], envA);
     expect(jobs.map((entry) => entry.key)).toEqual(["t-awaited:cmd-live", "t-bg:agent-1"]);
   });
+
+  it("excludes ship-queue commands and known ship-queue monitors when excludeShipQueue is enabled", () => {
+    const envA = EnvironmentId.make("env-a");
+    const tShip = makeThreadFixture({
+      id: ThreadId.make("t-ship"),
+      environmentId: envA,
+      updatedAt: "2026-11-23T09:15:00.000Z",
+      pendingBackgroundTasks: [
+        {
+          kind: "command",
+          taskId: "sq-cmd",
+          awaited: true,
+          command: "ship-queue watch 10987",
+        },
+        {
+          kind: "monitor",
+          taskId: "sq-mon",
+          awaited: true,
+          description: "Watch job 10987",
+        },
+        {
+          kind: "command",
+          taskId: "cargo-fix",
+          awaited: true,
+          command: "cargo test",
+          description: "Fix ship-queue watcher bug",
+        },
+        {
+          kind: "subagent",
+          taskId: "agent-sq",
+          description: "ship-queue review helper",
+        },
+      ],
+    });
+    const tPytest = makeThreadFixture({
+      id: ThreadId.make("t-pytest"),
+      environmentId: envA,
+      updatedAt: "2026-11-23T09:05:00.000Z",
+      pendingBackgroundTasks: [
+        {
+          kind: "command",
+          taskId: "cmd-live",
+          awaited: true,
+          command: "pytest -q",
+        },
+      ],
+    });
+
+    const filtered = selectEnvironmentBackgroundJobs([tShip, tPytest], envA, {
+      excludeShipQueue: true,
+      knownShipJobIds: new Set(["10987"]),
+    });
+    expect(filtered.map((entry) => entry.key)).toEqual([
+      "t-ship:cargo-fix",
+      "t-pytest:cmd-live",
+      "t-ship:agent-sq",
+    ]);
+
+    const unfiltered = selectEnvironmentBackgroundJobs([tShip, tPytest], envA);
+    expect(unfiltered.map((entry) => entry.key)).toEqual([
+      "t-ship:cargo-fix",
+      "t-ship:sq-cmd",
+      "t-ship:sq-mon",
+      "t-pytest:cmd-live",
+      "t-ship:agent-sq",
+    ]);
+  });
 });

@@ -185,9 +185,16 @@ export function MachinesPage() {
     ? shipQueueSnapshot.jobs.filter(isShipQueueJobLive).length +
       shipQueueSnapshot.deps.filter(isDepHoldActionable).length
     : 0;
+  const knownShipJobIds =
+    shipQueueSupported && shipQueueSnapshot.available && shipQueueSnapshot.jobs.length > 0
+      ? new Set(shipQueueSnapshot.jobs.map((job) => job.id))
+      : undefined;
   const activeJobsCount =
     selectedId && selectedConnected
-      ? selectEnvironmentBackgroundJobs(allThreads, selectedId).length
+      ? selectEnvironmentBackgroundJobs(allThreads, selectedId, {
+          excludeShipQueue: shipQueueSupported,
+          knownShipJobIds,
+        }).length
       : 0;
 
   return (

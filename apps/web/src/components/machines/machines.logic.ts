@@ -9,6 +9,7 @@ import { formatBytes } from "../../lib/formatBytes";
 import { resolveSidebarThreadStatus, type SidebarThreadStatus } from "../Sidebar.logic";
 import type { EnvironmentPresentation } from "../../state/environments";
 import type { SidebarThreadSummary } from "../../types";
+import { isShipQueueBackgroundTask } from "../jobs/shipQueueBackgroundFilter";
 
 export type MachinesTab = "overview" | "processes" | "jobs" | "ship-queue" | "servers";
 export type MetricTone = "default" | "warning" | "danger";
@@ -161,6 +162,10 @@ export interface MachineBackgroundJobEntry {
 export function selectEnvironmentBackgroundJobs(
   threads: ReadonlyArray<SidebarThreadSummary>,
   environmentId: EnvironmentId,
+  options?: {
+    readonly excludeShipQueue?: boolean | undefined;
+    readonly knownShipJobIds?: ReadonlySet<string> | undefined;
+  },
 ): ReadonlyArray<MachineBackgroundJobEntry> {
   const entries: Array<MachineBackgroundJobEntry> = [];
   for (const thread of threads) {
@@ -168,6 +173,12 @@ export function selectEnvironmentBackgroundJobs(
       continue;
     }
     for (const task of thread.pendingBackgroundTasks) {
+      if (
+        options?.excludeShipQueue &&
+        isShipQueueBackgroundTask(task, undefined, options.knownShipJobIds)
+      ) {
+        continue;
+      }
       entries.push({
         key: `${thread.id}:${task.taskId}`,
         thread,

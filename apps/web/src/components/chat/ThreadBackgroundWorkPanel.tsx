@@ -32,11 +32,11 @@ import {
 import {
   formatCernoElapsed,
   matchCernoRunsToTasks,
-  mergeRunningCernoTurnTasks,
   presentCernoRun,
   selectCommandOutputMetrics,
   type CernoOperatorTone,
 } from "../jobs/cernoRunPresentation";
+import { selectVisibleBackgroundWorkTasks } from "../jobs/shipQueueBackgroundFilter";
 import {
   detectSilentStallSeconds,
   formatCompactElapsed,
@@ -301,6 +301,8 @@ export function ThreadBackgroundWorkPanel({
   turnItems,
   cwd,
   branch,
+  excludeShipQueue,
+  knownShipJobIds,
   stopDisabled,
   stopping,
   onStop,
@@ -313,6 +315,8 @@ export function ThreadBackgroundWorkPanel({
   readonly turnItems: ThreadStructure["turnItems"];
   readonly cwd?: string | null | undefined;
   readonly branch?: string | null | undefined;
+  readonly excludeShipQueue?: boolean | undefined;
+  readonly knownShipJobIds?: ReadonlySet<string> | undefined;
   readonly stopDisabled: boolean;
   readonly stopping: boolean;
   readonly onStop: () => Promise<void>;
@@ -324,7 +328,12 @@ export function ThreadBackgroundWorkPanel({
   const [inspectTaskId, setInspectTaskId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
-  const mergedTasks = mergeRunningCernoTurnTasks(tasks, turnItems);
+  const mergedTasks = selectVisibleBackgroundWorkTasks({
+    tasks,
+    turnItems,
+    excludeShipQueue,
+    knownShipJobIds,
+  });
   const taskCandidates = mergedTasks.map((task) => {
     const item = resolveBackgroundTaskTurnItem(task, turnItems);
     return {

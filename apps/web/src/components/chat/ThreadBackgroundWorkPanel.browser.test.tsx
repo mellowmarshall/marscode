@@ -413,4 +413,120 @@ describe("ThreadBackgroundWorkPanel", () => {
     await page.getByRole("button", { name: /Model internals/i }).click();
     await expect.element(page.getByText(/poll_schedule_timeout/)).toBeVisible();
   });
+
+  it("hides ship-queue background tasks and suppresses cerno polling when excludeShipQueue is enabled", async () => {
+    using _mock = withResetCernoMock();
+    const shipTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask> = [
+      {
+        kind: "command",
+        taskId: "task-sq-watch",
+        awaited: true,
+        command: "ship-queue watch 10987",
+      },
+      {
+        kind: "monitor",
+        taskId: "task-sq-cerno",
+        awaited: true,
+        command: "cerno watch --monitor --log /tmp/sq.log -- ship-queue watch 10987",
+      },
+      {
+        kind: "monitor",
+        taskId: "task-sq-desc",
+        awaited: true,
+        description: "Watch job 10987",
+      },
+    ];
+    const shipTurnItems: ThreadStructure["turnItems"] = [
+      ...turnItems,
+      {
+        id: TurnItemId.make("item-sq-fg"),
+        threadId,
+        runId,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        type: "command_execution",
+        status: "running",
+        title: null,
+        input:
+          "cerno watch --monitor --log /tmp/sq-fg.log -- ship-queue submit /data/wt feat t b.md",
+        output: "",
+        startedAt: DateTime.makeUnsafe("2026-11-23T09:00:00.000Z"),
+        completedAt: null,
+        updatedAt: DateTime.makeUnsafe("2026-11-23T09:00:15.000Z"),
+      },
+    ];
+
+    await using onlyShipScreen = await render(
+      <TooltipProvider>
+        <div style={{ width: 280 }}>
+          <ThreadBackgroundWorkPanel
+            density="full"
+            environmentId={environmentId}
+            threadId={threadId}
+            tasks={shipTasks}
+            turnItems={shipTurnItems}
+            excludeShipQueue
+            knownShipJobIds={new Set(["10987"])}
+            stopDisabled={false}
+            stopping={false}
+            onStop={async () => {}}
+            onOpenThread={() => {}}
+          />
+        </div>
+      </TooltipProvider>,
+    );
+    expect(
+      onlyShipScreen.container.querySelector("[data-thread-details-background-work]"),
+    ).toBeNull();
+    expect(mockState.cernoQueryRequests).toBe(0);
+
+    await using mixedScreen = await render(
+      <TooltipProvider>
+        <div style={{ width: 280 }}>
+          <ThreadBackgroundWorkPanel
+            density="full"
+            environmentId={environmentId}
+            threadId={threadId}
+            tasks={[...shipTasks, twoTasks[0]!]}
+            turnItems={shipTurnItems}
+            excludeShipQueue
+            knownShipJobIds={new Set(["10987"])}
+            stopDisabled={false}
+            stopping={false}
+            onStop={async () => {}}
+            onOpenThread={() => {}}
+          />
+        </div>
+      </TooltipProvider>,
+    );
+    expect(
+      mixedScreen.container.querySelector("[data-thread-details-background-work]"),
+    ).not.toBeNull();
+    expect(mixedScreen.container.textContent).toContain("python train.py");
+    expect(mixedScreen.container.textContent).not.toContain("ship-queue");
+
+    await using unfilteredScreen = await render(
+      <TooltipProvider>
+        <div style={{ width: 280 }}>
+          <ThreadBackgroundWorkPanel
+            density="full"
+            environmentId={environmentId}
+            threadId={threadId}
+            tasks={[shipTasks[0]!]}
+            turnItems={[]}
+            excludeShipQueue={false}
+            stopDisabled={false}
+            stopping={false}
+            onStop={async () => {}}
+            onOpenThread={() => {}}
+          />
+        </div>
+      </TooltipProvider>,
+    );
+    expect(unfilteredScreen.container.textContent).toContain("ship-queue watch");
+  });
 });
