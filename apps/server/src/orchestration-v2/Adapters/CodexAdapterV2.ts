@@ -110,6 +110,7 @@ import { resolveAttachmentPath, resolveAttachmentPathById } from "../../attachme
 import * as PortScanner from "../../preview/PortScanner.ts";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
+import { managedCodexCommand, type ManagedCodexProfile } from "../../process/devleaseLaunch.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { buildCodexAdditionalContext } from "../../provider/CodexDeveloperInstructions.ts";
 import {
@@ -812,16 +813,19 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     readonly cyberAccess?: { readonly defaultProgram: string | undefined } | undefined;
     /** The user's `model_reasoning_summary` from the Codex config, when set. */
     readonly configuredReasoningSummary?: CodexSchema.V2TurnStartParams__ReasoningSummary;
+    readonly externallyManaged?: boolean;
   }) {
     const runtimeModeDefaults = codexRuntimeModeTurnDefaults(input.runtimePolicy.runtimeMode);
     const approvalPolicy =
       input.runtimePolicy.approvalPolicy === undefined
         ? runtimeModeDefaults.approvalPolicy
         : yield* decodeTurnApprovalPolicy(input.runtimePolicy.approvalPolicy);
-    const sandboxPolicy =
-      input.runtimePolicy.sandboxPolicy === undefined
-        ? runtimeModeDefaults.sandboxPolicy
-        : yield* decodeTurnSandboxPolicy(input.runtimePolicy.sandboxPolicy);
+    const sandboxPolicy: CodexSchema.V2TurnStartParams__SandboxPolicy =
+      input.externallyManaged === true
+        ? { type: "externalSandbox", networkAccess: "enabled" }
+        : input.runtimePolicy.sandboxPolicy === undefined
+          ? runtimeModeDefaults.sandboxPolicy
+          : yield* decodeTurnSandboxPolicy(input.runtimePolicy.sandboxPolicy);
     const selectedEffort =
       getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort") ??
       codexDefaultReasoningEffortOverride(input.modelSelection.model);
@@ -895,6 +899,7 @@ function providerSession(input: {
   readonly cwd: string | null;
   readonly model: string;
   readonly now: DateTime.Utc;
+  readonly capabilities: OrchestrationV2ProviderSession["capabilities"];
 }): OrchestrationV2ProviderSession {
   return {
     id: input.providerSessionId,
@@ -903,7 +908,7 @@ function providerSession(input: {
     status: "ready",
     cwd: input.cwd ?? process.cwd(),
     model: input.model,
-    capabilities: CodexProviderCapabilitiesV2,
+    capabilities: input.capabilities,
     createdAt: input.now,
     updatedAt: input.now,
     lastError: null,
@@ -1475,6 +1480,7 @@ export interface CodexAppServerClientFactoryShape {
     readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
     readonly settings: CodexSettings;
     readonly environment: NodeJS.ProcessEnv;
+    readonly managed?: ManagedCodexProfile;
   }) => Effect.Effect<
     CodexClient.CodexAppServerClient["Service"],
     ProviderAdapter.ProviderAdapterOpenSessionError,
@@ -1582,15 +1588,19 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
   readonly env?: NodeJS.ProcessEnv | undefined;
   readonly extendEnv?: boolean | undefined;
   readonly threadId?: string | undefined;
+  readonly managed?: ManagedCodexProfile & { readonly threadId: string };
 }) {
-  const launch = yield* (yield* AgentScope).wrap({
-    command: input.command,
-    args: input.args,
-    name: "codex",
-    threadId: input.threadId,
-    env: input.env,
-    shared: true,
-  });
+  const launch =
+    input.managed !== undefined
+      ? managedCodexCommand({ ...input.managed, command: input.command, args: input.args })
+      : yield* (yield* AgentScope).wrap({
+          command: input.command,
+          args: input.args,
+          name: "codex",
+          threadId: input.threadId,
+          env: input.env,
+          shared: true,
+        });
   const spawnCommand = yield* resolveSpawnCommand(launch.command, launch.args, {
     ...(input.env === undefined ? {} : { env: input.env }),
     ...(input.extendEnv === undefined ? {} : { extendEnv: input.extendEnv }),
@@ -1781,6 +1791,12 @@ export const layerAppServerClientFactory: Layer.Layer<
           ),
           env: environment,
           threadId: input.threadId,
+          ...(input.managed === undefined
+            ? {}
+            : {
+                managed: { ...input.managed, threadId: input.threadId },
+                cwd: input.runtimePolicy.cwd ?? undefined,
+              }),
         }).pipe(Effect.provideService(AgentScope, agentScope));
         const handle = yield* spawner.spawn(command).pipe(
           Effect.provideService(Scope.Scope, scope),
@@ -1840,6 +1856,7 @@ export const createCodexAdapterV2 = Effect.fn("CodexAdapterV2.createCodexAdapter
   const digest = yield* Digest.Digest;
   const fileSystem = yield* FileSystem.FileSystem;
   const hostEnvironment = yield* HostProcess.Environment;
+  const homeDirectory = yield* HostProcess.HomeDirectory;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const portDiscovery = yield* PortScanner.PortDiscovery;
   const serverConfig = yield* ServerConfig;
@@ -1875,6 +1892,16 @@ export const createCodexAdapterV2 = Effect.fn("CodexAdapterV2.createCodexAdapter
     serverConfig,
     continuationRequests,
     watchCommandStops: portDiscovery.watchAgentCommandStops,
+    ...(hostEnvironment.T3CODE_DEVLEASE_CODEX === "1"
+      ? {
+          managedProfile: {
+            authHome:
+              homeLayout.effectiveHomePath ??
+              hostEnvironment.CODEX_HOME ??
+              homeDirectory + "/.codex",
+          },
+        }
+      : {}),
     ...hooks,
   });
 });
@@ -1895,6 +1922,7 @@ export interface CodexAdapterV2Options {
   readonly fileSystem: FileSystem.FileSystem;
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly serverConfig: ServerConfig["Service"];
+  readonly managedProfile?: { readonly authHome: string };
   /** Omitting this leaves late completions projection-only. */
   readonly continuationRequests?: {
     readonly offer: (
@@ -1913,12 +1941,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
     threadId === null ? Effect.undefined : mcpSessions.read(threadId);
   const { clientFactory, digest, fileSystem, idAllocator, serverConfig } = adapterOptions;
   const continuationRequests = adapterOptions.continuationRequests;
+  const profile = adapterOptions.managedProfile;
+  const capabilities =
+    profile === undefined
+      ? CodexProviderCapabilitiesV2
+      : {
+          ...CodexProviderCapabilitiesV2,
+          sessions: {
+            ...CodexProviderCapabilitiesV2.sessions,
+            supportsMultipleProviderThreadsPerSession: false,
+            supportsRuntimeModeSwitchInSession: false,
+          },
+        };
 
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
     driver: CODEX_PROVIDER,
     getCapabilities: Effect.fn("CodexAdapterV2.getCapabilities")(function () {
-      return Effect.succeed(CodexProviderCapabilitiesV2);
+      return Effect.succeed(capabilities);
     }),
     planSelectionTransition: Effect.fn("CodexAdapterV2.planSelectionTransition")(function () {
       return Effect.succeed(turnScopedSelectionTransition());
@@ -1926,6 +1966,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
     openSession: Effect.fn("CodexAdapterV2.openSession")(
       function* (input) {
         const scope = yield* Scope.Scope;
+        if (
+          profile !== undefined &&
+          (input.runtimePolicy.cwd === null ||
+            input.runtimePolicy.sandboxPolicy !== undefined ||
+            adapterOptions.resolveRuntime !== undefined)
+        ) {
+          return yield* new ProviderAdapter.ProviderAdapterOpenSessionError({
+            driver: CODEX_PROVIDER,
+            providerSessionId: input.providerSessionId,
+            cause: new Error(
+              "Managed Codex requires a local auth file, a checkout, and a standard runtime policy.",
+            ),
+          });
+        }
         const resolvedRuntime =
           adapterOptions.resolveRuntime === undefined
             ? undefined
@@ -1946,6 +2000,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
           environment: resolvedRuntime?.environment ?? adapterOptions.environment,
+          ...(profile === undefined
+            ? {}
+            : {
+                managed: {
+                  stateDir: serverConfig.stateDir,
+                  authFile: profile.authHome + "/auth.json",
+                  readOnly: input.runtimePolicy.runtimeMode === "approval-required",
+                },
+              }),
         });
         const codexZone = codexTimeZone(resolvedRuntime?.environment ?? adapterOptions.environment);
         const additionalContextByThread = yield* Ref.make(
@@ -2066,6 +2129,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           cwd: input.runtimePolicy.cwd,
           model: input.modelSelection.model,
           now,
+          capabilities,
         });
         // Drain final notifications before the session manager retires the dead process.
         // Queue.fail lets readers take items already buffered before they see the failure.
@@ -7544,6 +7608,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               nativeThreadId: threadId,
               codexInput,
               runtimePolicy: turnInput.runtimePolicy,
+              externallyManaged: profile !== undefined,
               modelSelection: turnInput.modelSelection,
               hasT3Mcp: mcpSession !== undefined,
               browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,

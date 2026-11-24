@@ -68,12 +68,14 @@ const withFakeSystemd = <A, E>(
     leftovers = false,
     liveOwner = false,
     enrollment = false,
+    managedTerminal = false,
   }: {
     readonly oomPolicy?: boolean;
     readonly stopFails?: boolean;
     readonly leftovers?: boolean;
     readonly liveOwner?: boolean;
     readonly enrollment?: boolean;
+    readonly managedTerminal?: boolean;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -136,7 +138,13 @@ const withFakeSystemd = <A, E>(
       Effect.provideService(ProviderProcesses.ProviderProcesses, { hasOtherLiveOwner: liveOwner }),
       Effect.provideService(ProcessRunner.ProcessRunner, runner),
       Effect.provideService(HostProcess.Platform, "linux"),
-      Effect.provideService(HostProcess.Environment, { PATH: bin, XDG_RUNTIME_DIR: "/run/user/1" }),
+      Effect.provideService(HostProcess.Environment, {
+        PATH: bin,
+        XDG_RUNTIME_DIR: "/run/user/1",
+        ...(managedTerminal && {
+          T3CODE_DEVLEASE_TERMINALS: "1",
+        }),
+      }),
       Effect.provideService(FileSystem.FileSystem, {
         ...fileSystem,
         readFileString: (path, encoding) =>
@@ -362,6 +370,32 @@ describe("AgentScope service", () => {
           }),
         { enrollment: true },
       ),
+  );
+
+  it.effect("enrolls a managed terminal before starting the shell", () =>
+    withFakeSystemd(
+      ({ scope, stateDir }) =>
+        Effect.gen(function* () {
+          const launch = yield* scope.wrap({
+            command: "agent",
+            args: ["-i"],
+            name: "terminal",
+            terminalOwner: "thread/terminal",
+            terminalThreadId: "thread",
+          });
+          expect(launch.command).toMatch(/\/devlease-enroll$/);
+          expect(launch.args).toEqual([
+            "t3-terminal-run",
+            stateDir,
+            "thread",
+            "--",
+            expect.stringMatching(/\/agent$/),
+            "-i",
+          ]);
+          expect(launch.unit).toBeUndefined();
+        }),
+      { enrollment: true, managedTerminal: true },
+    ),
   );
 
   it.effect("caps agent memory and yields CPU, disk, and tasks to the server", () =>

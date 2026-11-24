@@ -18,6 +18,7 @@ import * as Semaphore from "effect/Semaphore";
 
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { managedTerminalCommand, observedCommand } from "./devleaseLaunch.ts";
 import * as ProviderProcesses from "./providerProcesses.ts";
 
 const AGENT_SLICE = "app-t3code-agents.slice";
@@ -422,11 +423,26 @@ export const make = Effect.gen(function* () {
       name,
       threadId,
       terminalOwner,
+      terminalThreadId,
       env,
       survivesRestart,
       shared,
     }) {
       const resolved = yield* resolve(command, env ?? hostEnvironment);
+      if (
+        name === "terminal" &&
+        terminalThreadId !== undefined &&
+        hostEnvironment.T3CODE_DEVLEASE_TERMINALS === "1"
+      ) {
+        const recorder = yield* resolve("devlease-enroll", hostEnvironment);
+        return managedTerminalCommand({
+          recorder,
+          command: resolved ?? command,
+          args,
+          stateDir,
+          threadId: terminalThreadId,
+        });
+      }
       if (resolved === null) return { command, args };
       const scope = yield* systemd;
       if (scope === undefined) return agentScopeCommand({ command: resolved, args });
@@ -453,34 +469,19 @@ export const make = Effect.gen(function* () {
           ...(owned ? [] : ["--collect"]),
         ],
       };
-      const attestation =
-        name === "terminal" && terminalOwner !== undefined
-          ? { kind: "terminal", owner: terminalOwner }
-          : name === "claude" && threadId !== undefined && shared !== true
-            ? { kind: "thread", owner: threadId }
-            : undefined;
+      const owner =
+        name === "terminal" ? terminalOwner : name === "claude" && !shared ? threadId : undefined;
       const recorder =
-        attestation === undefined ? null : yield* resolve("devlease-enroll", hostEnvironment);
-      if (attestation !== undefined && recorder !== null) {
-        return {
-          ...agentScopeCommand({
-            command: recorder,
-            args: [
-              "attest",
-              unit,
-              attestation.kind,
-              stateDir,
-              attestation.owner,
-              "--",
-              resolved,
-              ...args,
-            ],
-            scope: systemdScope,
-          }),
-          unit,
-        };
-      }
-      return { ...agentScopeCommand({ command: resolved, args, scope: systemdScope }), unit };
+        owner === undefined ? null : yield* resolve("devlease-enroll", hostEnvironment);
+      return observedCommand({
+        command: resolved,
+        args,
+        recorder,
+        owner,
+        stateDir,
+        scope: systemdScope,
+        kind: name === "terminal" ? "terminal" : "thread",
+      });
     }),
     oomKilled,
     stop,

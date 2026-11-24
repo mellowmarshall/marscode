@@ -2733,6 +2733,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       args: candidate.args ?? [],
       name: "terminal",
       terminalOwner: toSessionKey(session.threadId, session.terminalId),
+      terminalThreadId: session.threadId,
       env: spawnEnv,
       survivesRestart: true,
     });
