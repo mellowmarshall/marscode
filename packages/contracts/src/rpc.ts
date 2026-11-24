@@ -489,6 +489,14 @@ import {
   HostGuardState,
   HostGuardSubscribeInput,
 } from "./hostGuard.ts";
+import {
+  ShipQueueActionResult,
+  ShipQueueCancelInput,
+  ShipQueueDecideDepsInput,
+  ShipQueueScanDepsInput,
+  ShipQueueSnapshot,
+  ShipQueueSubscribeInput,
+} from "./shipQueue.ts";
 import { CernoLiveRunsResult } from "./cerno.ts";
 
 export const WS_METHODS = {
@@ -750,6 +758,10 @@ export const WS_METHODS = {
 
   hostGuardSubscribe: "hostGuard.subscribe",
   hostGuardResolve: "hostGuard.resolve",
+  shipQueueSubscribe: "shipQueue.subscribe",
+  shipQueueCancel: "shipQueue.cancel",
+  shipQueueDecideDeps: "shipQueue.decideDeps",
+  shipQueueScanDeps: "shipQueue.scanDeps",
 } as const;
 
 const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -2491,6 +2503,31 @@ const WsHostGuardResolveRpc = Rpc.make(WS_METHODS.hostGuardResolve, {
   error: EnvironmentAuthorizationError,
 });
 
+const WsShipQueueSubscribeRpc = Rpc.make(WS_METHODS.shipQueueSubscribe, {
+  payload: ShipQueueSubscribeInput,
+  success: ShipQueueSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+const WsShipQueueCancelRpc = Rpc.make(WS_METHODS.shipQueueCancel, {
+  payload: ShipQueueCancelInput,
+  success: ShipQueueActionResult,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsShipQueueDecideDepsRpc = Rpc.make(WS_METHODS.shipQueueDecideDeps, {
+  payload: ShipQueueDecideDepsInput,
+  success: ShipQueueActionResult,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsShipQueueScanDepsRpc = Rpc.make(WS_METHODS.shipQueueScanDeps, {
+  payload: ShipQueueScanDepsInput,
+  success: ShipQueueActionResult,
+  error: EnvironmentAuthorizationError,
+});
+
 export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthorization>()(
   "t3/contracts/RpcScopeAuthorization",
   { error: EnvironmentAuthorizationError },
@@ -2735,6 +2772,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeResourceTelemetryRpc,
   WsHostGuardSubscribeRpc,
   WsHostGuardResolveRpc,
+  WsShipQueueSubscribeRpc,
+  WsShipQueueCancelRpc,
+  WsShipQueueDecideDepsRpc,
+  WsShipQueueScanDepsRpc,
   WsOrchestrationV2DispatchCommandRpc,
   WsOrchestrationV2GetWorkflowScriptRpc,
   WsOrchestrationV2GetNativeChildWorkRpc,

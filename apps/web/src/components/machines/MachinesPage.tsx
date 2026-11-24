@@ -39,8 +39,12 @@ import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { MachineCardStrip } from "./MachineCardStrip";
 import { MachineJobsPanel } from "./MachineJobsPanel";
 import { MachineServersPanel } from "./MachineServersPanel";
+import { MachineShipQueuePanel } from "./MachineShipQueuePanel";
 import { MachineTelemetryCards } from "./MachineTelemetryCards";
 import { MachineThreadsPanel } from "./MachineThreadsPanel";
+import { isDepHoldActionable } from "../../lib/shipQueueApprovals";
+import { isShipQueueJobLive } from "../../lib/shipQueueSteps";
+import { useShipQueueSnapshot } from "../../state/shipQueue";
 import {
   type MachinesTab,
   readMachinesTab,
@@ -169,6 +173,18 @@ export function MachinesPage() {
   };
 
   const isRefreshing = selectedConnected && hardware.isPending;
+  const shipQueueSupported =
+    selectedEnvironment?.serverConfig?.environment.capabilities.shipQueue === true;
+  const activeTab: MachinesTab = tab === "ship-queue" && !shipQueueSupported ? "overview" : tab;
+  const shipQueueSnapshot = useShipQueueSnapshot(
+    selectedEnvironment && selectedConnected && shipQueueSupported
+      ? selectedEnvironment.environmentId
+      : null,
+  );
+  const shipQueueCount = shipQueueSnapshot.available
+    ? shipQueueSnapshot.jobs.filter(isShipQueueJobLive).length +
+      shipQueueSnapshot.deps.filter(isDepHoldActionable).length
+    : 0;
   const activeJobsCount =
     selectedId && selectedConnected
       ? selectEnvironmentBackgroundJobs(allThreads, selectedId).length
@@ -297,8 +313,9 @@ export function MachinesPage() {
                       {selectedConnected ? (
                         <ToggleGroup
                           aria-label={gt("Machine view")}
+                          className="max-w-full flex-wrap"
                           variant="segmented"
-                          value={[tab]}
+                          value={[activeTab]}
                           onValueChange={(next) => {
                             const value = next[0];
                             if (value) updateSearch({ tab: readMachinesTab(value) });
@@ -318,6 +335,16 @@ export function MachinesPage() {
                               </span>
                             ) : null}
                           </Toggle>
+                          {shipQueueSupported ? (
+                            <Toggle value="ship-queue">
+                              <T>Ship Queue</T>
+                              {shipQueueCount > 0 ? (
+                                <span className="text-2xs text-muted-foreground tabular-nums">
+                                  {shipQueueCount}
+                                </span>
+                              ) : null}
+                            </Toggle>
+                          ) : null}
                           <Toggle value="servers">
                             <T>Servers</T>
                           </Toggle>
@@ -374,7 +401,7 @@ export function MachinesPage() {
                           </div>
                         }
                       >
-                        {tab === "overview" ? (
+                        {activeTab === "overview" ? (
                           <div className="flex flex-col gap-4">
                             <MachineTelemetryCards
                               key={selectedEnvironment.environmentId}
@@ -391,7 +418,7 @@ export function MachinesPage() {
                               />
                             </div>
                           </div>
-                        ) : tab === "processes" ? (
+                        ) : activeTab === "processes" ? (
                           !diagnosticsAccess.canReadDiagnostics && !diagnosticsAccess.isPending ? (
                             <div className="rounded-xl border border-border/70 bg-card">
                               <Empty size="compact">
@@ -412,9 +439,14 @@ export function MachinesPage() {
                               environmentId={selectedEnvironment.environmentId}
                             />
                           )
-                        ) : tab === "jobs" ? (
+                        ) : activeTab === "jobs" ? (
                           <MachineJobsPanel
                             key={`jobs:${selectedEnvironment.environmentId}`}
+                            environmentId={selectedEnvironment.environmentId}
+                          />
+                        ) : activeTab === "ship-queue" && shipQueueSupported ? (
+                          <MachineShipQueuePanel
+                            key={`ship-queue:${selectedEnvironment.environmentId}`}
                             environmentId={selectedEnvironment.environmentId}
                           />
                         ) : (

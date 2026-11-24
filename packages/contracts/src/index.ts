@@ -73,6 +73,7 @@ export * from "./worktreeMcp.ts";
 export * from "./resourceTelemetry.ts";
 export * from "./cerno.ts";
 export * from "./hostGuard.ts";
+export * from "./shipQueue.ts";
 export * from "./rpc.ts";
 export * from "./worktreeSetup.ts";
 export * from "./secretRequest.ts";

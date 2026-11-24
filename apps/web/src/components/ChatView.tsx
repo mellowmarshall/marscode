@@ -54,6 +54,10 @@ import { useProjectScriptEditing } from "./chat/useProjectScriptEditing";
 import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
 import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
 import { useChildThreadHostGuardApprovals, useThreadHostGuardApprovals } from "../state/hostGuard";
+import {
+  useChildThreadShipQueueDepApprovals,
+  useThreadShipQueueDepApprovals,
+} from "../state/shipQueue";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { resolveWorktreeRepositorySelection } from "@t3tools/client-runtime/state/thread-repositories";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -1460,6 +1464,17 @@ export default function ChatView(props: ChatViewProps) {
   });
   const hostGuardApprovals = useThreadHostGuardApprovals(environmentId, activeThreadId);
   const childHostGuardApprovals = useChildThreadHostGuardApprovals(environmentId, activeThreadId);
+  const shipQueueDepApprovals = useThreadShipQueueDepApprovals({
+    environmentId,
+    threadId: activeThreadId,
+    branch: activeThread?.branch ?? null,
+    worktreePath: activeThread?.worktreePath ?? null,
+    gitCwd,
+  });
+  const childShipQueueDepApprovals = useChildThreadShipQueueDepApprovals(
+    environmentId,
+    activeThreadId,
+  );
   const {
     pendingApprovals,
     timelinePendingApprovals,
@@ -1471,6 +1486,8 @@ export default function ChatView(props: ChatViewProps) {
     respondingRequestIds,
     onRespondToApproval: onRespondToApprovalStable,
     onResolveHostGuard,
+    onDecideShipQueueDeps,
+    onScanShipQueueDeps,
     onDismissUserInput: onDismissUserInputStable,
     onSelectActivePendingUserInputOption: onSelectActivePendingUserInputOptionStable,
     onChangeActivePendingUserInputCustomAnswer,
@@ -1482,6 +1499,7 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadId,
     serverProjection,
     hostGuardApprovals,
+    shipQueueDepApprovals,
     supportsQuestionAttachments,
     composerDraftTarget,
     setComposerDraftPrompt,
@@ -3798,7 +3816,10 @@ export default function ChatView(props: ChatViewProps) {
                     <ChildThreadApprovals
                       threadRef={activeThreadRef}
                       hostGuardApprovals={childHostGuardApprovals}
+                      shipQueueDepApprovals={childShipQueueDepApprovals}
                       onResolveHostGuard={onResolveHostGuard}
+                      onDecideShipQueueDeps={onDecideShipQueueDeps}
+                      onScanShipQueueDeps={onScanShipQueueDeps}
                     />
                     <div className="relative">
                       <ComposerSurface.Shell contextRow={showComposerContextStrip}>

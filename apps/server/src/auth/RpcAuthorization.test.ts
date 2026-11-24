@@ -936,3 +936,89 @@ it.effect("requires diagnostics read scope for serverListCernoRuns", () =>
     });
   }).pipe(Effect.scoped),
 );
+
+it.effect("enforces required scopes for Ship Queue RPCs", () =>
+  Effect.gen(function* () {
+    const shipRpcs = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          | typeof WS_METHODS.shipQueueSubscribe
+          | typeof WS_METHODS.shipQueueCancel
+          | typeof WS_METHODS.shipQueueDecideDeps
+          | typeof WS_METHODS.shipQueueScanDeps
+        > =>
+          tag !== WS_METHODS.shipQueueSubscribe &&
+          tag !== WS_METHODS.shipQueueCancel &&
+          tag !== WS_METHODS.shipQueueDecideDeps &&
+          tag !== WS_METHODS.shipQueueScanDeps,
+      ),
+    );
+    const emptySnapshot = {
+      available: true,
+      daemonRunning: false,
+      daemonPid: null,
+      openCount: 0,
+      totalCount: 0,
+      jobs: [],
+      deps: [],
+    };
+    const handlers = Layer.mergeAll(
+      shipRpcs.toLayerHandler(WS_METHODS.shipQueueSubscribe, () => Stream.make(emptySnapshot)),
+      shipRpcs.toLayerHandler(WS_METHODS.shipQueueCancel, () => Effect.succeed({ ok: true })),
+      shipRpcs.toLayerHandler(WS_METHODS.shipQueueDecideDeps, () => Effect.succeed({ ok: true })),
+      shipRpcs.toLayerHandler(WS_METHODS.shipQueueScanDeps, () => Effect.succeed({ ok: true })),
+    );
+
+    const readOnly = yield* RpcTest.makeClient(shipRpcs).pipe(
+      Effect.provide(Layer.merge(handlers, RpcAuthorization.layer([AuthOrchestrationReadScope]))),
+    );
+    expect(yield* Stream.runCollect(readOnly[WS_METHODS.shipQueueSubscribe]({}))).toEqual([
+      emptySnapshot,
+    ]);
+    expect(
+      yield* readOnly[WS_METHODS.shipQueueCancel]({ jobId: "1" }).pipe(Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthTerminalOperateScope });
+    expect(
+      yield* readOnly[WS_METHODS.shipQueueDecideDeps]({
+        reportId: "repo:r1",
+        decision: "approve",
+      }).pipe(Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthAccessWriteScope });
+
+    const terminalOnly = yield* RpcTest.makeClient(shipRpcs).pipe(
+      Effect.provide(Layer.merge(handlers, RpcAuthorization.layer([AuthTerminalOperateScope]))),
+    );
+    expect(yield* terminalOnly[WS_METHODS.shipQueueCancel]({ jobId: "1" })).toEqual({ ok: true });
+    expect(yield* terminalOnly[WS_METHODS.shipQueueScanDeps]({ repo: "repo" })).toEqual({
+      ok: true,
+    });
+    expect(
+      yield* terminalOnly[WS_METHODS.shipQueueDecideDeps]({
+        reportId: "repo:r1",
+        decision: "approve",
+      }).pipe(Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthAccessWriteScope });
+
+    const humanFull = yield* RpcTest.makeClient(shipRpcs).pipe(
+      Effect.provide(
+        Layer.merge(
+          handlers,
+          RpcAuthorization.layer([
+            AuthOrchestrationReadScope,
+            AuthAccessWriteScope,
+            AuthTerminalOperateScope,
+          ]),
+        ),
+      ),
+    );
+    expect(
+      yield* humanFull[WS_METHODS.shipQueueDecideDeps]({
+        reportId: "repo:r1",
+        decision: "reject",
+      }),
+    ).toEqual({ ok: true });
+  }).pipe(Effect.scoped),
+);

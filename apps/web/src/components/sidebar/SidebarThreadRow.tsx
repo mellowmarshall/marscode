@@ -53,7 +53,9 @@ import {
   MessageCircleQuestionIcon,
   PinIcon,
   PinOffIcon,
+  RocketIcon,
   ShieldQuestionIcon,
+  ShipIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -81,6 +83,7 @@ import { useNowMinute } from "../../hooks/useNowMinute";
 import { useNowSecond } from "../../hooks/useNowSecond";
 import { vcsEnvironment, vcsBranchRevalidation } from "../../state/vcs";
 import { useThreadHasHostGuardApproval } from "../../state/hostGuard";
+import { useThreadHasShipQueueDepApproval, useThreadShipStatus } from "../../state/shipQueue";
 import { useSidebarLinkedIssueState } from "../../state/issues";
 import { useEnvironmentQuery } from "../../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
@@ -568,6 +571,8 @@ const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
 const TOP_STATUS_ICONS = {
   working: CircleDashedIcon,
   waiting: CircleDotDashedIcon,
+  shipping: ShipIcon,
+  deploying: RocketIcon,
   input: MessageCircleQuestionIcon,
   request: UserRoundIcon,
   approval: ShieldQuestionIcon,
@@ -778,9 +783,24 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     threadId: thread.id,
     enabled: leaseLiveStatus,
   });
+  const hasShipQueueDepApproval = useThreadHasShipQueueDepApproval({
+    environmentId: thread.environmentId,
+    threadId: thread.id,
+    enabled: leaseLiveStatus,
+  });
+  const shipStatus = useThreadShipStatus({
+    environmentId: thread.environmentId,
+    threadId: thread.id,
+    branch: thread.branch,
+    worktreePath: thread.worktreePath,
+    gitCwd: thread.worktreePath ?? props.project?.workspaceRoot ?? null,
+    enabled: leaseLiveStatus,
+  });
   const baseStatus = resolveSidebarRowStatus({ ...thread, lastVisitedAt });
   const status =
-    hasHostGuardApproval && baseStatus !== "approval" && baseStatus !== "input"
+    (hasHostGuardApproval || hasShipQueueDepApproval) &&
+    baseStatus !== "approval" &&
+    baseStatus !== "input"
       ? "approval"
       : baseStatus;
   const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
@@ -797,66 +817,78 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     isSelected,
   });
   const topStatus =
-    status === "preparing" || status === "working"
+    status === "approval"
       ? {
-          label:
-            status === "preparing"
-              ? gt("Setting up")
-              : thread.goal?.status === "active"
-                ? gt("Goal", { $context: "thread status: working on a goal" })
-                : gt("Working", { $context: "thread status" }),
-          icon: "working" as const,
-          className: "text-info-foreground",
+          label: gt("Approval", { $context: "thread status: needs approval" }),
+          icon: "approval" as const,
+          className: "text-warning-foreground",
         }
-      : status === "waiting"
+      : status === "input"
         ? {
-            label: gt("Waiting", { $context: "thread status" }),
-            icon: "waiting" as const,
-            className: "text-muted-foreground",
+            label: gt("Input", { $context: "thread status: needs user input" }),
+            icon: "input" as const,
+            className: "text-indigo-600 dark:text-indigo-300",
           }
-        : status === "approval"
+        : status === "request"
           ? {
-              label: gt("Approval", { $context: "thread status: needs approval" }),
-              icon: "approval" as const,
-              className: "text-warning-foreground",
+              label: gt("Request", { $context: "thread status: guest request" }),
+              icon: "request" as const,
+              className: "text-guest-foreground",
             }
-          : status === "input"
+          : status === "limited"
             ? {
-                label: gt("Input", { $context: "thread status: needs user input" }),
-                icon: "input" as const,
-                className: "text-indigo-600 dark:text-indigo-300",
+                label: gt("Limited", { $context: "thread status: usage limited" }),
+                icon: "failed" as const,
+                className: "text-warning-foreground",
               }
-            : status === "request"
+            : status === "failed"
               ? {
-                  label: gt("Request", { $context: "thread status: guest request" }),
-                  icon: "request" as const,
-                  className: "text-guest-foreground",
+                  label: gt("Failed", { $context: "thread status" }),
+                  icon: "failed" as const,
+                  className: "text-error-foreground",
                 }
-              : status === "limited"
+              : shipStatus?.phase === "deploying"
                 ? {
-                    label: gt("Limited", { $context: "thread status: usage limited" }),
-                    icon: "failed" as const,
-                    className: "text-warning-foreground",
+                    label: gt("Deploying", { $context: "thread status: deploying after merge" }),
+                    icon: "deploying" as const,
+                    className: "text-info-foreground",
                   }
-                : status === "failed"
+                : shipStatus?.phase === "shipping"
                   ? {
-                      label: gt("Failed", { $context: "thread status" }),
-                      icon: "failed" as const,
-                      className: "text-error-foreground",
+                      label: gt("Shipping", { $context: "thread status: running in ship queue" }),
+                      icon: "shipping" as const,
+                      className: "text-info-foreground",
                     }
-                  : isWoke
+                  : status === "preparing" || status === "working"
                     ? {
-                        label: gt("Woke", { $context: "thread status: woke from snooze" }),
-                        icon: "woke" as const,
-                        className: "text-warning-foreground",
+                        label:
+                          status === "preparing"
+                            ? gt("Setting up")
+                            : thread.goal?.status === "active"
+                              ? gt("Goal", { $context: "thread status: working on a goal" })
+                              : gt("Working", { $context: "thread status" }),
+                        icon: "working" as const,
+                        className: "text-info-foreground",
                       }
-                    : isUnread
+                    : status === "waiting"
                       ? {
-                          label: gt("Done", { $context: "thread status" }),
-                          icon: "done" as const,
-                          className: "text-success-foreground",
+                          label: gt("Waiting", { $context: "thread status" }),
+                          icon: "waiting" as const,
+                          className: "text-muted-foreground",
                         }
-                      : null;
+                      : isWoke
+                        ? {
+                            label: gt("Woke", { $context: "thread status: woke from snooze" }),
+                            icon: "woke" as const,
+                            className: "text-warning-foreground",
+                          }
+                        : isUnread
+                          ? {
+                              label: gt("Done", { $context: "thread status" }),
+                              icon: "done" as const,
+                              className: "text-success-foreground",
+                            }
+                          : null;
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
@@ -1638,14 +1670,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                             BackgroundThreadAnnouncer and the open thread's
                             timeline speak status changes instead. */}
                           {topStatus.label}
-                          {status === "preparing" || status === "working" ? (
+                          {topStatus.icon === "working" ? (
                             <span aria-hidden>
                               <WorkingDuration
                                 environmentId={thread.environmentId}
                                 startedAt={resolveWorkingStartedAt(thread)}
                               />
                             </span>
-                          ) : status === "waiting" ? (
+                          ) : topStatus.icon === "waiting" ? (
                             <span aria-hidden>
                               <WorkingDuration
                                 environmentId={thread.environmentId}

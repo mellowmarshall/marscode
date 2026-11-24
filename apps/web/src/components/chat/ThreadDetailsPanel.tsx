@@ -37,6 +37,7 @@ import { ThreadDetailsItemsMenuItems } from "./ThreadDetailsItemsMenu";
 import { resolveThreadDetailsVisibility, THREAD_DETAILS_ITEMS } from "./threadDetailsItems";
 import { useClientSettings } from "../../hooks/useSettings";
 import { ThreadBackgroundWorkPanel } from "./ThreadBackgroundWorkPanel";
+import { ThreadShipQueuePanel } from "./ThreadShipQueuePanel";
 import { mergeRunningCernoTurnTasks } from "../jobs/cernoRunPresentation";
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import type { OrchestrationV2PendingBackgroundTask } from "@t3tools/contracts";
@@ -317,6 +318,16 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                     ) : null}
                   </div>
                 </ThreadDetailsSection>
+              ) : null}
+
+              {!props.draftId && density !== "essential" ? (
+                <ThreadShipQueuePanel
+                  environmentId={props.environmentId}
+                  threadId={props.threadId}
+                  branch={props.backgroundWork?.branch ?? props.activeThreadBranchOverride ?? null}
+                  worktreePath={props.worktreePath}
+                  gitCwd={props.gitCwd}
+                />
               ) : null}
 
               {!props.draftId &&

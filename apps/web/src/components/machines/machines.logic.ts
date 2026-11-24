@@ -10,11 +10,13 @@ import { resolveSidebarThreadStatus, type SidebarThreadStatus } from "../Sidebar
 import type { EnvironmentPresentation } from "../../state/environments";
 import type { SidebarThreadSummary } from "../../types";
 
-export type MachinesTab = "overview" | "processes" | "jobs" | "servers";
+export type MachinesTab = "overview" | "processes" | "jobs" | "ship-queue" | "servers";
 export type MetricTone = "default" | "warning" | "danger";
 
 export function readMachinesTab(raw: unknown): MachinesTab {
-  if (raw === "processes" || raw === "jobs" || raw === "servers") return raw;
+  if (raw === "processes" || raw === "jobs" || raw === "ship-queue" || raw === "servers") {
+    return raw;
+  }
   return "overview";
 }
 

@@ -228,6 +228,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   issueTrackerAccounts: Schema.optionalKey(Schema.Boolean),
   /** Serves hostGuard.subscribe / hostGuard.resolve for local host-guard override requests. */
   hostGuardBroker: Schema.optionalKey(Schema.Boolean),
+  shipQueue: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

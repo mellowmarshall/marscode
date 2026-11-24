@@ -100,6 +100,7 @@ import * as HostHardware from "./resourceTelemetry/HostHardware.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as CernoRunService from "./cerno/CernoRunService.ts";
 import * as HostGuardBroker from "./hostGuard/HostGuardBroker.ts";
+import * as ShipQueueService from "./shipQueue/ShipQueueService.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
 import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
@@ -862,6 +863,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(HostGuardBroker.HostGuardBroker)({
     preapprove: () => ({ ok: false, error: "unused" }),
   }),
+  Layer.mock(ShipQueueService.ShipQueueService)({}),
   Layer.mock(McpAppRequests.McpAppRequests)({}),
   Layer.mock(McpSignIn.McpSignIn)({}),
   Layer.mock(ModelManifest.ModelManifest)({}),
@@ -2908,6 +2910,122 @@ it.effect(
           requestId: "t3r_123",
           decision: "approve",
           reason: "Trusted command",
+          approvedVia: "bearer-access-token:paired-owner",
+        },
+      ]);
+    }).pipe(Effect.provide(layerWorkflowRpcTest), Effect.scoped),
+);
+
+it.effect(
+  "rejects MCP and peer-link subjects from cancelling ship jobs or deciding dependencies",
+  () =>
+    Effect.gen(function* () {
+      const decidedInputs: Array<unknown> = [];
+      const cancelledInputs: Array<unknown> = [];
+      const shipRpcs = WsRpcGroup.omit(
+        ...[...WsRpcGroup.requests.keys()].filter(
+          (
+            tag,
+          ): tag is Exclude<
+            keyof typeof RpcAuthorization.RPC_REQUIRED_SCOPES,
+            | typeof WS_METHODS.shipQueueSubscribe
+            | typeof WS_METHODS.shipQueueCancel
+            | typeof WS_METHODS.shipQueueDecideDeps
+          > =>
+            tag !== WS_METHODS.shipQueueSubscribe &&
+            tag !== WS_METHODS.shipQueueCancel &&
+            tag !== WS_METHODS.shipQueueDecideDeps,
+        ),
+      );
+      const snapshotPayload = {
+        available: true,
+        daemonRunning: true,
+        daemonPid: 99,
+        openCount: 0,
+        totalCount: 0,
+        jobs: [],
+        deps: [],
+      };
+      const shipServices = Layer.mergeAll(
+        layerUnusedConfigRpcServices,
+        Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+        Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+        Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+        Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+        Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
+        Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+        Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+        Layer.mock(Workflows.Workflows)({}),
+        Layer.mock(ShipQueueService.ShipQueueService)({
+          snapshotStream: Stream.make(snapshotPayload),
+          cancelJob: (input) =>
+            Effect.sync(() => {
+              cancelledInputs.push(input);
+              return { ok: true };
+            }),
+          decideDeps: (input) =>
+            Effect.sync(() => {
+              decidedInputs.push(input);
+              return { ok: true, started: true };
+            }),
+        }),
+      );
+      const scopes: ReadonlyArray<AuthEnvironmentScope> = [
+        AuthOrchestrationReadScope,
+        AuthAccessWriteScope,
+        AuthTerminalOperateScope,
+      ];
+      const serverBrowser = yield* ServerBrowser.ServerBrowser;
+      const makeClient = (subject: string) =>
+        RpcTest.makeClient(shipRpcs).pipe(
+          Effect.provide(
+            layerWsRpc(
+              {
+                sessionId: AuthSessionId.make(`session-ship-${subject}`),
+                subject,
+                method: "bearer-access-token",
+                scopes: [...scopes],
+              },
+              {},
+              serverBrowser,
+              () => Effect.void,
+              { secretReferences: true },
+            ).pipe(Layer.provide(shipServices), Layer.merge(RpcAuthorization.layer(scopes))),
+          ),
+        );
+
+      for (const subject of ["mcp-client", "peer-link:peer-1"]) {
+        const restricted = yield* makeClient(subject);
+        const cancelError = yield* restricted[WS_METHODS.shipQueueCancel]({ jobId: "42" }).pipe(
+          Effect.flip,
+        );
+        const decideError = yield* restricted[WS_METHODS.shipQueueDecideDeps]({
+          reportId: "repo:r1",
+          decision: "approve",
+        }).pipe(Effect.flip);
+        assert.equal(cancelError._tag, "EnvironmentAuthorizationError");
+        assert.equal(decideError._tag, "EnvironmentAuthorizationError");
+      }
+
+      const human = yield* makeClient("paired-owner");
+      const snaps = yield* Stream.runCollect(human[WS_METHODS.shipQueueSubscribe]({}));
+      assert.deepEqual([...snaps], [snapshotPayload]);
+      const cancelled = yield* human[WS_METHODS.shipQueueCancel]({ jobId: "42" });
+      assert.deepEqual(cancelled, { ok: true });
+      const decided = yield* human[WS_METHODS.shipQueueDecideDeps]({
+        reportId: "repo:r1",
+        decision: "approve",
+        reason: "Looks safe",
+      });
+      assert.deepEqual(decided, { ok: true, started: true });
+      assert.deepEqual(cancelledInputs, [{ jobId: "42" }]);
+      assert.deepEqual(decidedInputs, [
+        {
+          reportId: "repo:r1",
+          decision: "approve",
+          reason: "Looks safe",
           approvedVia: "bearer-access-token:paired-owner",
         },
       ]);

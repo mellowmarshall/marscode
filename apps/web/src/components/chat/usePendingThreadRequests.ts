@@ -72,6 +72,16 @@ import {
   isHostGuardApprovalRequestId,
   type ThreadHostGuardApproval,
 } from "../../lib/hostGuardApprovals";
+import {
+  EMPTY_SHIP_QUEUE_DEP_APPROVALS,
+  isShipQueueDepApprovalRequestId,
+  type ThreadShipQueueDepApproval,
+} from "../../lib/shipQueueApprovals";
+import {
+  clearShipQueueRepoBusy,
+  findDepApprovalBusyReportKey,
+  markShipQueueRepoBusy,
+} from "../../state/shipQueue";
 
 import type { ChatComposerHandle } from "./ChatComposer";
 
@@ -285,6 +295,7 @@ export function usePendingThreadRequests(input: {
   readonly activeThreadId: ThreadId | null;
   readonly serverProjection: ThreadStructure | null;
   readonly hostGuardApprovals?: ReadonlyArray<ThreadHostGuardApproval> | undefined;
+  readonly shipQueueDepApprovals?: ReadonlyArray<ThreadShipQueueDepApproval> | undefined;
   readonly supportsQuestionAttachments: boolean;
   readonly composerDraftTarget: ScopedThreadRef | DraftId;
   readonly setComposerDraftPrompt: (target: ScopedThreadRef | DraftId, prompt: string) => void;
@@ -297,6 +308,7 @@ export function usePendingThreadRequests(input: {
     activeThreadId,
     serverProjection,
     hostGuardApprovals = EMPTY_HOST_GUARD_APPROVALS,
+    shipQueueDepApprovals = EMPTY_SHIP_QUEUE_DEP_APPROVALS,
     supportsQuestionAttachments,
     composerDraftTarget,
     setComposerDraftPrompt,
@@ -310,6 +322,12 @@ export function usePendingThreadRequests(input: {
   const resolveHostGuard = useAtomCommand(serverEnvironment.resolveHostGuard, {
     reportFailure: false,
   });
+  const decideShipQueueDeps = useAtomCommand(serverEnvironment.decideShipQueueDeps, {
+    reportFailure: false,
+  });
+  const scanShipQueueDeps = useAtomCommand(serverEnvironment.scanShipQueueDeps, {
+    reportFailure: false,
+  });
   const respondToThreadUserInput = useOrchestrationCommand(threadEnvironment.respondToUserInput, {
     reportFailure: false,
   });
@@ -318,6 +336,7 @@ export function usePendingThreadRequests(input: {
   });
   const userInputResponsesInFlight = useRef(new Set<string>());
   const hostGuardResponsesInFlight = useRef(new Set<string>());
+  const shipQueueDepResponsesInFlight = useRef(new Set<string>());
   // In the order the text went into the thread draft, which is how a copy is found again.
   const displacedAnswers = useRef<
     Array<{ readonly draft: string; readonly key: string; readonly text: string }>
@@ -344,9 +363,13 @@ export function usePendingThreadRequests(input: {
       ? NO_PENDING_APPROVALS
       : derivePendingApprovals(pendingRequests.approvals);
   const timelinePendingApprovals =
-    hostGuardApprovals.length === 0
+    hostGuardApprovals.length === 0 && shipQueueDepApprovals.length === 0
       ? pendingApprovals
-      : [...pendingApprovals, ...hostGuardApprovals.map((entry) => entry.approval)];
+      : [
+          ...pendingApprovals,
+          ...hostGuardApprovals.map((entry) => entry.approval),
+          ...shipQueueDepApprovals.map((entry) => entry.approval),
+        ];
   const pendingUserInputs =
     pendingRequests.userInputs.length === 0
       ? NO_PENDING_USER_INPUTS
@@ -420,6 +443,94 @@ export function usePendingThreadRequests(input: {
         );
       }
       return result;
+    }
+
+    if (isShipQueueDepApprovalRequestId(requestId)) {
+      if (
+        !activeThreadId ||
+        !readEnvironmentScope(environmentId, AuthAccessWriteScope) ||
+        !readEnvironmentScope(environmentId, AuthTerminalOperateScope)
+      ) {
+        return;
+      }
+      const entry = shipQueueDepApprovals.find((item) => item.requestId === requestId);
+      if (
+        !entry ||
+        entry.busy ||
+        shipQueueDepResponsesInFlight.current.has(requestId) ||
+        respondingRequestIds.includes(requestId)
+      ) {
+        return;
+      }
+      shipQueueDepResponsesInFlight.current.add(requestId);
+      setRespondingRequestIds((existing) =>
+        existing.includes(requestId) ? existing : [...existing, requestId],
+      );
+      const reportKey = findDepApprovalBusyReportKey(entry.hold);
+      const runScan = decision === "cancel" || (decision === "accept" && !entry.canApprove);
+      if (runScan) {
+        markShipQueueRepoBusy("scanning", entry.hold.repo, reportKey);
+        const result = await scanShipQueueDeps({
+          environmentId,
+          input: { repo: entry.hold.repo },
+        });
+        shipQueueDepResponsesInFlight.current.delete(requestId);
+        setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          clearShipQueueRepoBusy("scanning", entry.hold.repo, reportKey);
+          const error = squashAtomCommandFailure(result);
+          setThreadError(
+            activeThreadId,
+            thrownErrorMessage(error, m) ?? m(msg("Failed to start dependency scan.")),
+          );
+        } else if (result._tag === "Success" && !result.value.ok) {
+          clearShipQueueRepoBusy("scanning", entry.hold.repo, reportKey);
+          setThreadError(
+            activeThreadId,
+            result.value.error ?? m(msg("Failed to start dependency scan.")),
+          );
+        } else if (result._tag === "Success" && result.value.started !== true) {
+          clearShipQueueRepoBusy("scanning", entry.hold.repo, reportKey);
+        }
+        return result;
+      }
+
+      if (
+        (decision === "accept" && entry.canApprove && entry.hold.reportId) ||
+        (decision === "decline" && entry.canReject && entry.hold.reportId)
+      ) {
+        markShipQueueRepoBusy("deciding", entry.hold.repo, reportKey);
+        const result = await decideShipQueueDeps({
+          environmentId,
+          input: {
+            reportId: entry.hold.reportId,
+            decision: decision === "accept" ? "approve" : "reject",
+          },
+        });
+        shipQueueDepResponsesInFlight.current.delete(requestId);
+        setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          clearShipQueueRepoBusy("deciding", entry.hold.repo, reportKey);
+          const error = squashAtomCommandFailure(result);
+          setThreadError(
+            activeThreadId,
+            thrownErrorMessage(error, m) ?? m(msg("Failed to submit dependency decision.")),
+          );
+        } else if (result._tag === "Success" && !result.value.ok) {
+          clearShipQueueRepoBusy("deciding", entry.hold.repo, reportKey);
+          setThreadError(
+            activeThreadId,
+            result.value.error ?? m(msg("Failed to submit dependency decision.")),
+          );
+        } else if (result._tag === "Success" && result.value.started !== true) {
+          clearShipQueueRepoBusy("deciding", entry.hold.repo, reportKey);
+        }
+        return result;
+      }
+
+      shipQueueDepResponsesInFlight.current.delete(requestId);
+      setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
+      return;
     }
 
     if (!activeThreadId || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope))
@@ -738,6 +849,8 @@ export function usePendingThreadRequests(input: {
     respondingRequestIds,
     onRespondToApproval: onRespondToApprovalStable,
     onResolveHostGuard: resolveHostGuard,
+    onDecideShipQueueDeps: decideShipQueueDeps,
+    onScanShipQueueDeps: scanShipQueueDeps,
     onDismissUserInput: onDismissUserInputStable,
     onSelectActivePendingUserInputOption: onSelectActivePendingUserInputOptionStable,
     onChangeActivePendingUserInputCustomAnswer,

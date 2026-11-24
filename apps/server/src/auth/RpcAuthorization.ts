@@ -251,6 +251,10 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeAuthAccess]: AuthAccessReadScope,
   [WS_METHODS.hostGuardSubscribe]: AuthAccessWriteScope,
   [WS_METHODS.hostGuardResolve]: AuthAccessWriteScope,
+  [WS_METHODS.shipQueueSubscribe]: AuthOrchestrationReadScope,
+  [WS_METHODS.shipQueueCancel]: AuthTerminalOperateScope,
+  [WS_METHODS.shipQueueDecideDeps]: AuthAccessWriteScope,
+  [WS_METHODS.shipQueueScanDeps]: AuthTerminalOperateScope,
 } as const satisfies Readonly<Record<WsRpcMethod, AuthEnvironmentScope>>;
 
 export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope {
@@ -322,7 +326,11 @@ const requiredScopesForRpcCall = (
   if (method === WS_METHODS.serverRetryResourceTelemetry) {
     return [AuthEnvironmentMaintainScope, AuthDiagnosticsReadScope];
   }
-  if (method === WS_METHODS.hostGuardSubscribe || method === WS_METHODS.hostGuardResolve) {
+  if (
+    method === WS_METHODS.hostGuardSubscribe ||
+    method === WS_METHODS.hostGuardResolve ||
+    method === WS_METHODS.shipQueueDecideDeps
+  ) {
     return [AuthAccessWriteScope, AuthTerminalOperateScope];
   }
   if (method === WS_METHODS.assetsCreateUrl) {

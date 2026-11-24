@@ -1734,6 +1734,35 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input.requestId]),
       },
     }),
+    shipQueueLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:ship-queue:live",
+      tag: WS_METHODS.shipQueueSubscribe,
+      idleTtlMs: 0,
+    }),
+    cancelShipQueueJob: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:ship-queue:cancel",
+      tag: WS_METHODS.shipQueueCancel,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.jobId]),
+      },
+    }),
+    decideShipQueueDeps: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:ship-queue:decide-deps",
+      tag: WS_METHODS.shipQueueDecideDeps,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.reportId]),
+      },
+    }),
+    scanShipQueueDeps: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:ship-queue:scan-deps",
+      tag: WS_METHODS.shipQueueScanDeps,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.repo]),
+      },
+    }),
     resourceTelemetryHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry-history",
       tag: WS_METHODS.serverGetResourceTelemetryHistory,

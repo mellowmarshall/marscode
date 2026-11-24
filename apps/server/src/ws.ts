@@ -37,6 +37,7 @@ import {
   AuthDiagnosticsReadScope,
   AuthOrchestrationOperateScope,
   AuthProvidersManageScope,
+  AuthTerminalOperateScope,
   type AuthEnvironmentScope,
   type ScheduledTaskListResult,
   WorkflowRequestError,
@@ -261,6 +262,7 @@ import * as HostHardware from "./resourceTelemetry/HostHardware.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as CernoRunService from "./cerno/CernoRunService.ts";
 import * as HostGuardBroker from "./hostGuard/HostGuardBroker.ts";
+import * as ShipQueueService from "./shipQueue/ShipQueueService.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { commandFeatureUsage, featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
@@ -1628,6 +1630,7 @@ export const layerWsRpc = (
       const hostResources = yield* HostResources.HostResources;
       const cernoRunService = yield* CernoRunService.CernoRunService;
       const hostGuardBroker = yield* HostGuardBroker.HostGuardBroker;
+      const shipQueueService = yield* ShipQueueService.ShipQueueService;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
@@ -2836,6 +2839,19 @@ export const layerWsRpc = (
                 ...input,
                 approvedVia: `${currentSession.method}:${currentSession.subject}`,
               }),
+        [WS_METHODS.shipQueueSubscribe]: (_input) => shipQueueService.snapshotStream,
+        [WS_METHODS.shipQueueCancel]: (input) =>
+          isPeerOrMcpSubject(currentSession.subject)
+            ? Effect.fail(rpcAuthorizationError(AuthTerminalOperateScope))
+            : shipQueueService.cancelJob(input),
+        [WS_METHODS.shipQueueDecideDeps]: (input) =>
+          isPeerOrMcpSubject(currentSession.subject)
+            ? Effect.fail(rpcAuthorizationError(AuthAccessWriteScope))
+            : shipQueueService.decideDeps({
+                ...input,
+                approvedVia: `${currentSession.method}:${currentSession.subject}`,
+              }),
+        [WS_METHODS.shipQueueScanDeps]: (input) => shipQueueService.scanDeps(input),
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           processResourceMonitor.readHistory(input),
         [WS_METHODS.serverGetResourceTelemetryHistory]: (input) =>
