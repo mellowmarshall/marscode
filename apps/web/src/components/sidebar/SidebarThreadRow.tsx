@@ -49,11 +49,14 @@ import {
   CircleDotDashedIcon,
   ClockIcon,
   FolderGit2Icon,
+  GaugeIcon,
   GitBranchIcon,
   MessageCircleQuestionIcon,
   PinIcon,
   PinOffIcon,
+  RocketIcon,
   ShieldQuestionIcon,
+  ShipIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -74,6 +77,9 @@ import { msg, T, useGT, useMessages, Var } from "gt-react";
 import type { MessageResolver } from "../../i18n/messages";
 
 import { useRightPanelStore } from "../../rightPanelStore";
+import { useShowSidebarJobStatus } from "../../devtools/devtoolsPreferences";
+import { useJobProgressPercent, useThreadJobStatus } from "../../devtools/jobs/jobsStore";
+import { useThreadHasDevtoolsApproval } from "../../devtools/useThreadDevtoolsApprovals";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
 import { useUiStateStore } from "../../uiStateStore";
 import { useThreadSelectionStore } from "../../threadSelectionStore";
@@ -566,6 +572,9 @@ const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
 
 const TOP_STATUS_ICONS = {
   working: CircleDashedIcon,
+  shipping: ShipIcon,
+  deploying: RocketIcon,
+  job: GaugeIcon,
   waiting: CircleDotDashedIcon,
   input: MessageCircleQuestionIcon,
   request: UserRoundIcon,
@@ -578,6 +587,15 @@ const TOP_STATUS_ICONS = {
 function TopStatusIcon(props: { icon: keyof typeof TOP_STATUS_ICONS; className: string }) {
   const Icon = TOP_STATUS_ICONS[props.icon];
   return <Icon aria-hidden className={cn("shrink-0", props.className)} />;
+}
+
+function ThreadJobProgressLeaf(props: {
+  readonly environmentId: EnvironmentId;
+  readonly jobId: string;
+}) {
+  const pct = useJobProgressPercent(props.environmentId, props.jobId);
+  if (pct === null) return null;
+  return <span className="shrink-0 tabular-nums">{`${pct}%`}</span>;
 }
 
 type SidebarThreadRowProps = {
@@ -772,7 +790,25 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     : null;
 
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = resolveSidebarRowStatus({ ...thread, lastVisitedAt });
+  const hasDevtoolsApproval = useThreadHasDevtoolsApproval({
+    environmentId: thread.environmentId,
+    threadId: thread.id,
+    enabled: leaseLiveStatus,
+  });
+  const baseStatus = resolveSidebarRowStatus({ ...thread, lastVisitedAt });
+  const status =
+    hasDevtoolsApproval && baseStatus !== "approval" && baseStatus !== "input"
+      ? "approval"
+      : baseStatus;
+  const [showSidebarJobStatus] = useShowSidebarJobStatus();
+  const jobStatus = useThreadJobStatus({
+    environmentId: thread.environmentId,
+    threadId: thread.id,
+    branch: thread.branch,
+    worktreePath: thread.worktreePath,
+    gitCwd: props.project?.workspaceRoot ?? thread.worktreePath ?? null,
+    enabled: showSidebarJobStatus && variant !== "slim" && leaseLiveStatus,
+  });
   const lastVisitedDate = lastVisitedAt === undefined ? null : parseTimestampDate(lastVisitedAt);
   const wokeAtDate = props.wokeAt === null ? null : parseTimestampDate(props.wokeAt);
   const isWoke =
@@ -787,66 +823,84 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     isSelected,
   });
   const topStatus =
-    status === "preparing" || status === "working"
+    status === "approval"
       ? {
-          label:
-            status === "preparing"
-              ? gt("Setting up")
-              : thread.goal?.status === "active"
-                ? gt("Goal", { $context: "thread status: working on a goal" })
-                : gt("Working", { $context: "thread status" }),
-          icon: "working" as const,
-          className: "text-info-foreground",
+          label: gt("Approval", { $context: "thread status: needs approval" }),
+          icon: "approval" as const,
+          className: "text-warning-foreground",
         }
-      : status === "waiting"
+      : status === "input"
         ? {
-            label: gt("Waiting", { $context: "thread status" }),
-            icon: "waiting" as const,
-            className: "text-muted-foreground",
+            label: gt("Input", { $context: "thread status: needs user input" }),
+            icon: "input" as const,
+            className: "text-indigo-600 dark:text-indigo-300",
           }
-        : status === "approval"
+        : status === "request"
           ? {
-              label: gt("Approval", { $context: "thread status: needs approval" }),
-              icon: "approval" as const,
-              className: "text-warning-foreground",
+              label: gt("Request", { $context: "thread status: guest request" }),
+              icon: "request" as const,
+              className: "text-guest-foreground",
             }
-          : status === "input"
+          : status === "limited"
             ? {
-                label: gt("Input", { $context: "thread status: needs user input" }),
-                icon: "input" as const,
-                className: "text-indigo-600 dark:text-indigo-300",
+                label: gt("Limited", { $context: "thread status: usage limited" }),
+                icon: "failed" as const,
+                className: "text-warning-foreground",
               }
-            : status === "request"
+            : status === "failed"
               ? {
-                  label: gt("Request", { $context: "thread status: guest request" }),
-                  icon: "request" as const,
-                  className: "text-guest-foreground",
+                  label: gt("Failed", { $context: "thread status" }),
+                  icon: "failed" as const,
+                  className: "text-error-foreground",
                 }
-              : status === "limited"
+              : jobStatus?.phase === "deploying"
                 ? {
-                    label: gt("Limited", { $context: "thread status: usage limited" }),
-                    icon: "failed" as const,
-                    className: "text-warning-foreground",
+                    label: gt("Deploying", { $context: "thread status: deploying after merge" }),
+                    icon: "deploying" as const,
+                    className: "text-info-foreground",
                   }
-                : status === "failed"
+                : jobStatus?.phase === "shipping"
                   ? {
-                      label: gt("Failed", { $context: "thread status" }),
-                      icon: "failed" as const,
-                      className: "text-error-foreground",
+                      label: gt("Shipping", { $context: "thread status: shipping via ship-queue" }),
+                      icon: "shipping" as const,
+                      className: "text-info-foreground",
                     }
-                  : isWoke
+                  : jobStatus?.phase === "job"
                     ? {
-                        label: gt("Woke", { $context: "thread status: woke from snooze" }),
-                        icon: "woke" as const,
-                        className: "text-warning-foreground",
+                        label: jobStatus.label,
+                        icon: "job" as const,
+                        className: "text-info-foreground",
                       }
-                    : isUnread
+                    : status === "preparing" || status === "working"
                       ? {
-                          label: gt("Done", { $context: "thread status" }),
-                          icon: "done" as const,
-                          className: "text-success-foreground",
+                          label:
+                            status === "preparing"
+                              ? gt("Setting up")
+                              : thread.goal?.status === "active"
+                                ? gt("Goal", { $context: "thread status: working on a goal" })
+                                : gt("Working", { $context: "thread status" }),
+                          icon: "working" as const,
+                          className: "text-info-foreground",
                         }
-                      : null;
+                      : status === "waiting"
+                        ? {
+                            label: gt("Waiting", { $context: "thread status" }),
+                            icon: "waiting" as const,
+                            className: "text-muted-foreground",
+                          }
+                        : isWoke
+                          ? {
+                              label: gt("Woke", { $context: "thread status: woke from snooze" }),
+                              icon: "woke" as const,
+                              className: "text-warning-foreground",
+                            }
+                          : isUnread
+                            ? {
+                                label: gt("Done", { $context: "thread status" }),
+                                icon: "done" as const,
+                                className: "text-success-foreground",
+                              }
+                            : null;
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
@@ -1423,14 +1477,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       </Tooltip>
                     ) : inFolder && topStatus ? (
                       // Folder rows have no status line, so the status takes the time slot.
+                      // Keep bounded so a status label can never crush the flex-1 thread title.
                       <span
                         className={cn(
-                          "inline-flex items-center gap-1 text-xs font-medium",
+                          "inline-flex max-w-28 min-w-0 items-center gap-1 text-xs font-medium",
                           topStatus.className,
                         )}
                       >
                         <TopStatusIcon icon={topStatus.icon} className="size-3" />
-                        {topStatus.label}
+                        <span className="truncate">{topStatus.label}</span>
+                        {topStatus.icon === "job" && jobStatus?.hasProgress ? (
+                          <ThreadJobProgressLeaf
+                            environmentId={thread.environmentId}
+                            jobId={jobStatus.jobId}
+                          />
+                        ) : null}
                       </span>
                     ) : (
                       <span className="text-xs">
@@ -1619,7 +1680,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       ) : (
                         <span
                           className={cn(
-                            "inline-flex items-center gap-1 font-medium",
+                            "inline-flex min-w-0 items-center gap-1 font-medium",
                             topStatus.className,
                           )}
                         >
@@ -1627,8 +1688,28 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           {/* Not a live region: a collapsed sidebar is inert, so
                             BackgroundThreadAnnouncer and the open thread's
                             timeline speak status changes instead. */}
-                          {topStatus.label}
-                          {status === "preparing" || status === "working" ? (
+                          <span className="max-w-24 truncate">{topStatus.label}</span>
+                          {topStatus.icon === "shipping" || topStatus.icon === "deploying" ? (
+                            <span aria-hidden>
+                              <WorkingDuration
+                                environmentId={thread.environmentId}
+                                startedAt={jobStatus?.startedAt ?? resolveWorkingStartedAt(thread)}
+                              />
+                            </span>
+                          ) : topStatus.icon === "job" && jobStatus ? (
+                            <span aria-hidden className="inline-flex items-center gap-1">
+                              {jobStatus.hasProgress ? (
+                                <ThreadJobProgressLeaf
+                                  environmentId={thread.environmentId}
+                                  jobId={jobStatus.jobId}
+                                />
+                              ) : null}
+                              <WorkingDuration
+                                environmentId={thread.environmentId}
+                                startedAt={jobStatus.startedAt ?? resolveWorkingStartedAt(thread)}
+                              />
+                            </span>
+                          ) : status === "preparing" || status === "working" ? (
                             <span aria-hidden>
                               <WorkingDuration
                                 environmentId={thread.environmentId}

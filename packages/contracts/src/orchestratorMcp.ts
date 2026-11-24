@@ -700,6 +700,15 @@ export const OrchestratorMcpEnvironmentLinksResult = Schema.Struct({
 export type OrchestratorMcpEnvironmentLinksResult =
   typeof OrchestratorMcpEnvironmentLinksResult.Type;
 
+export const OrchestratorMcpReviewModelRecommendation = Schema.Struct({
+  providerInstanceId: Schema.String,
+  model: Schema.String,
+  effort: Schema.String,
+  remainingPct: Schema.NullOr(Schema.Number),
+  fallbackUsed: Schema.Boolean,
+  reason: Schema.String,
+});
+
 export const OrchestratorMcpCapabilitiesResult = Schema.Struct({
   parentThreadId: Schema.NullOr(ThreadId),
   inheritedProviderInstanceId: Schema.NullOr(ProviderInstanceId),
@@ -718,6 +727,12 @@ export const OrchestratorMcpCapabilitiesResult = Schema.Struct({
     scheduledTasks: Schema.Boolean,
     maxBatchThreads: Schema.Number,
   }),
+  reviewModels: Schema.optional(
+    Schema.Struct({
+      shipQueueReview: OrchestratorMcpReviewModelRecommendation,
+      playbookChallenge: OrchestratorMcpReviewModelRecommendation,
+    }),
+  ),
 });
 export type OrchestratorMcpCapabilitiesResult = typeof OrchestratorMcpCapabilitiesResult.Type;
 

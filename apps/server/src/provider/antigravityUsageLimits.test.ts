@@ -74,6 +74,7 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     keyringSecret?: string;
     /** Reads the OS keyring instead of `keyringSecret`. */
     nativeKeyring?: boolean;
+    revokeFirstTokenAfterFirstProbe?: boolean;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -93,6 +94,8 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     );
   if (!options.missingToken) yield* writeToken(options.refreshToken ?? "refresh-a");
   const requests: Array<{ url: string; body: string }> = [];
+  let tokenCount = 0;
+  let summaryCallsWithFirstToken = 0;
   const http = HttpClient.make((request, url, _signal, fiber) =>
     Effect.sync(() => {
       const init = Context.getOrUndefined(fiber.context, FetchHttpClient.RequestInit);
@@ -102,15 +105,21 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
       requests.push({ url: request.url, body });
       if (request.url.endsWith("/token")) {
         expect(new URLSearchParams(body).get("grant_type")).toBe("refresh_token");
+        tokenCount += 1;
+        const accessToken = options.revokeFirstTokenAfterFirstProbe
+          ? `access-token-${tokenCount}`
+          : "access-token";
         return HttpClientResponse.fromWeb(
           request,
           Response.json(
-            { access_token: "access-token", expires_in: 3600 },
+            { access_token: accessToken, expires_in: 3600 },
             { status: options.tokenStatus ?? 200 },
           ),
         );
       }
-      expect(request.headers.authorization).toBe("Bearer access-token");
+      if (!options.revokeFirstTokenAfterFirstProbe) {
+        expect(request.headers.authorization).toBe("Bearer access-token");
+      }
       if (request.url.endsWith("/userinfo")) {
         return HttpClientResponse.fromWeb(
           request,
@@ -121,6 +130,15 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
       }
       expect(JSON.parse(body)).toEqual(options.missingToken ? {} : { project: "project-id" });
       expect(request.headers["user-agent"]).toMatch(/^antigravity\/hub\/2\.24\.0 /);
+      if (
+        options.revokeFirstTokenAfterFirstProbe &&
+        request.headers.authorization === "Bearer access-token-1"
+      ) {
+        if (request.url.endsWith(":retrieveUserQuotaSummary")) summaryCallsWithFirstToken += 1;
+        if (summaryCallsWithFirstToken > 2) {
+          return HttpClientResponse.fromWeb(request, Response.json({}, { status: 401 }));
+        }
+      }
       return HttpClientResponse.fromWeb(
         request,
         request.url.endsWith(":retrieveUserQuotaSummary")
@@ -782,5 +800,35 @@ describe("Antigravity subscription limits", () => {
         expect(requests).toEqual([]);
       }
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  it.effect("silently refreshes a revoked cached access token and retries once", () =>
+    Effect.gen(function* () {
+      const { probe, requests } = yield* fixture({ revokeFirstTokenAfterFirstProbe: true });
+      expect((yield* probe).windows.length).toBeGreaterThan(0);
+      expect(requests.filter((r) => r.url.endsWith("/token"))).toHaveLength(1);
+
+      // Second probe uses cached token, receives 401, refreshes once, and recovers silently.
+      const healed = yield* probe;
+      expect(healed.unavailable).toBeUndefined();
+      expect(healed.windows.length).toBeGreaterThan(0);
+      expect(requests.filter((r) => r.url.endsWith("/token"))).toHaveLength(2);
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  it.effect(
+    "does not refresh a valid cached token when quota responses are legitimately empty",
+    () =>
+      Effect.gen(function* () {
+        const { probe, requests } = yield* fixture({
+          summary: { buckets: [] },
+          models: { models: {} },
+        });
+        expect((yield* probe).unavailable?.reason).toBe("probeFailed");
+        expect(requests.filter((r) => r.url.endsWith("/token"))).toHaveLength(1);
+
+        expect((yield* probe).unavailable?.reason).toBe("probeFailed");
+        expect(requests.filter((r) => r.url.endsWith("/token"))).toHaveLength(1);
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });

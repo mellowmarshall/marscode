@@ -22,6 +22,13 @@ import {
 import { useCustomThemes } from "../../hooks/useCustomThemes";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { useTheme } from "../../hooks/useTheme";
+import {
+  DEFAULT_OUTPUT_HIGHLIGHTING_MODE,
+  DEFAULT_PROVIDER_TUI_PALETTES,
+  useOutputHighlightingMode,
+  useProviderTuiPalettes,
+  type OutputHighlightingMode,
+} from "../../lib/tuiOutputPreferences";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
@@ -85,6 +92,12 @@ const EFFORT_DISPLAY_LABELS: Record<EffortDisplay, string> = {
   bars: msg("Bars", { $context: "show effort as bars" }),
 };
 
+const OUTPUT_HIGHLIGHTING_LABELS: Record<OutputHighlightingMode, string> = {
+  semantic: msg("Semantic + ANSI (default)"),
+  ansi: msg("ANSI escapes only"),
+  off: msg("Off"),
+};
+
 export function AppearanceSettingsPanel() {
   const searchableSetting = useSearchableSetting();
   const {
@@ -103,6 +116,8 @@ export function AppearanceSettingsPanel() {
   const [isImportThemeOpen, setIsImportThemeOpen] = useState(false);
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
+  const [providerTuiPalettes, setProviderTuiPalettes] = useProviderTuiPalettes();
+  const [outputHighlightingMode, setOutputHighlightingMode] = useOutputHighlightingMode();
   const environmentStageLabel = useEnvironmentStageLabel();
   const environmentStageVariant = resolveSidebarStageBackdropVariant(environmentStageLabel);
   const environmentIdentificationOptionList =
@@ -359,6 +374,66 @@ export function AppearanceSettingsPanel() {
               }
               aria-label={gt("Render math")}
             />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("provider-tui-palettes")}
+          description={gt(
+            "Tint assistant markdown, inline code pills, and terminal output using each provider’s native TUI palette (Claude Code, Codex, Antigravity, Muse).",
+          )}
+          resetAction={
+            providerTuiPalettes !== DEFAULT_PROVIDER_TUI_PALETTES ? (
+              <SettingResetButton
+                ariaLabel={gt("Reset provider TUI palettes to default")}
+                onClick={() => setProviderTuiPalettes(DEFAULT_PROVIDER_TUI_PALETTES)}
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={providerTuiPalettes}
+              onCheckedChange={(checked) => setProviderTuiPalettes(Boolean(checked))}
+              aria-label={gt("Provider TUI palettes")}
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("output-highlighting")}
+          description={gt(
+            "Highlight ANSI escapes, shell commands, flags, file paths, JSON, diffs, and log levels across command outputs and assistant inline code.",
+          )}
+          resetAction={
+            outputHighlightingMode !== DEFAULT_OUTPUT_HIGHLIGHTING_MODE ? (
+              <SettingResetButton
+                ariaLabel={gt("Reset output highlighting to default")}
+                onClick={() => setOutputHighlightingMode(DEFAULT_OUTPUT_HIGHLIGHTING_MODE)}
+              />
+            ) : null
+          }
+          control={
+            <div className="w-full sm:w-48">
+              <Select
+                value={outputHighlightingMode}
+                onValueChange={(value) => {
+                  if (value === "semantic" || value === "ansi" || value === "off") {
+                    setOutputHighlightingMode(value);
+                  }
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className="w-full min-w-0"
+                  aria-label={gt("Output highlighting")}
+                >
+                  <SelectValue>{m(OUTPUT_HIGHLIGHTING_LABELS[outputHighlightingMode])}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem value="semantic">{m(OUTPUT_HIGHLIGHTING_LABELS.semantic)}</SelectItem>
+                  <SelectItem value="ansi">{m(OUTPUT_HIGHLIGHTING_LABELS.ansi)}</SelectItem>
+                  <SelectItem value="off">{m(OUTPUT_HIGHLIGHTING_LABELS.off)}</SelectItem>
+                </SelectPopup>
+              </Select>
+            </div>
           }
         />
         <AdvancedSettings

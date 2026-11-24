@@ -27,7 +27,10 @@ import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { CommandOutputPanel, useCommandOutputStreaming } from "./CommandOutputPanel";
 import { resolveExternalWebLinkHref } from "./externalLinkContextMenu";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
+import { hasAnsiSequences } from "../../lib/tuiOutputHighlighting";
+import { useOutputHighlightingMode } from "../../lib/tuiOutputPreferences";
 import { ShellCommandBlock } from "./ShellCommandBlock";
+import { TerminalOutputText } from "./TerminalOutputText";
 import { useInitialOutputReady, type TurnItemSource } from "./timelineRowContext";
 
 interface V2ItemInspectorProps {
@@ -76,19 +79,21 @@ function StructuredValue({
   readonly highlightJson?: boolean;
   readonly language?: "typescript" | "html" | "json";
 }) {
+  const [outputHighlightingMode] = useOutputHighlightingMode();
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   const isJson = highlightJson && isJsonToolText(text);
   if (!text) return null;
+  const useShiki = (Boolean(language) || isJson) && !hasAnsiSequences(text);
   return (
     <pre className={cn("max-h-80 overflow-auto text-muted-foreground", monoClassName)}>
-      {language || isJson ? (
+      {useShiki ? (
         <RenderErrorBoundary fallback={text}>
           <Suspense fallback={text}>
             <SyntaxTokens text={text} language={language ?? "json"} />
           </Suspense>
         </RenderErrorBoundary>
       ) : (
-        text
+        <TerminalOutputText text={text} mode={outputHighlightingMode} />
       )}
     </pre>
   );
@@ -205,6 +210,7 @@ function ToolCallBody(
     readonly outputSlot?: ReactNode;
   },
 ) {
+  const [outputHighlightingMode] = useOutputHighlightingMode();
   const call = toolCallLines({ command: props.command, args: props.args });
   return (
     <div className={cn("space-y-1.5", monoClassName)}>
@@ -222,7 +228,7 @@ function ToolCallBody(
               ) : isJsonToolText(value) ? (
                 <StructuredValue value={value} language="json" />
               ) : (
-                value
+                <TerminalOutputText text={String(value)} mode={outputHighlightingMode} />
               )}
             </div>
           ))}

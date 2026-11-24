@@ -34,6 +34,8 @@ import {
   workLogEntryIsToolLike,
 } from "../../session-logic";
 import ChatMarkdown from "../ChatMarkdown";
+import { useOutputHighlightingMode } from "../../lib/tuiOutputPreferences";
+import { TerminalOutputText } from "./TerminalOutputText";
 import { ChatMarkdownAssetImage } from "./ChatMarkdownMedia";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 import { workGroupImageGallery } from "./markdownImageGallery";
@@ -590,6 +592,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
                   )}
                   cwd={ctx.markdownCwd}
                   parseRawHtml={false}
+                  outputHighlightingMode="off"
                   extensions={
                     workEntry.toolLifecycleStatus === "inProgress"
                       ? thoughtPreviewMarkdown(gt("Thinking"))
@@ -720,9 +723,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
             />
           ) : (
             <>
-              {expandedBody ? (
-                <pre className={toolCallExpandedBodyClassName}>{expandedBody}</pre>
-              ) : null}
+              {expandedBody ? <ExpandedWorkEntryBody text={expandedBody} /> : null}
               {plainOutputFetches && workEntry.projectedItem ? (
                 <FetchedToolOutput
                   onInitialOutputReady={onInitialOutputReady}
@@ -737,6 +738,15 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
         </WorkLogDetails>
       ) : null}
     </WorkLogRow>
+  );
+}
+
+function ExpandedWorkEntryBody({ text }: { readonly text: string }) {
+  const [outputHighlightingMode] = useOutputHighlightingMode();
+  return (
+    <pre className={toolCallExpandedBodyClassName}>
+      <TerminalOutputText text={text} mode={outputHighlightingMode} />
+    </pre>
   );
 }
 

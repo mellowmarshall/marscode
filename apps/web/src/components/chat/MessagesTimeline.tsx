@@ -145,7 +145,11 @@ import {
 import { useThreadFindPositionReader } from "./useThreadFindPositionReader";
 import { ThreadActivityAnnouncer } from "./ThreadActivityAnnouncer";
 import { useStableHandoffRuns, useIncrementalTimelineRows, useStableRows } from "./useTimelineRows";
+import { useAtomValue } from "@effect/atom-react";
 import { useClientSettings } from "../../hooks/useSettings";
+import { serverEnvironment } from "../../state/server";
+import { resolveEffectiveTuiProvider, type TuiProviderKey } from "../../lib/tuiOutputPalette";
+import { useProviderTuiPalettes } from "../../lib/tuiOutputPreferences";
 
 function timelineListStateFor(identity: string): {
   readonly identity: string;
@@ -492,6 +496,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
   }
   const citationThreadRef = parseScopedThreadKey(routeThreadKey);
   const openPullRequest = useOpenPrLink(citationThreadRef ?? undefined);
+  const [providerTuiPalettes] = useProviderTuiPalettes();
+  const environmentProviders = useAtomValue(
+    serverEnvironment.providersValueAtom(activeThreadEnvironmentId),
+  );
   const [minimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
   const normalizedFindQuery = findQuery.trim();
   const findActive = findExpanded;
@@ -1113,6 +1121,24 @@ const ConversationTimeline = memo(function ConversationTimeline({
       .filter(isVisiblePendingApproval)
       .map((approval) => [approval.requestId, approval]),
   );
+  const tuiProviderByInstanceId = new Map<string, TuiProviderKey>(
+    (environmentProviders ?? []).map((provider) => [
+      provider.instanceId,
+      resolveEffectiveTuiProvider(provider.driver, providerTuiPalettes),
+    ]),
+  );
+  const resolveInstanceTuiProvider = (instanceId: string | null | undefined): TuiProviderKey => {
+    if (!providerTuiPalettes) return "default";
+    if (instanceId) {
+      const mapped = tuiProviderByInstanceId.get(instanceId);
+      if (mapped) return mapped;
+    }
+    return resolveEffectiveTuiProvider(instanceId, providerTuiPalettes);
+  };
+  const tuiProviderByRunId = new Map<RunId, TuiProviderKey>(
+    runs.map((run) => [run.id, resolveInstanceTuiProvider(run.providerInstanceId)]),
+  );
+  const defaultTuiProvider = resolveInstanceTuiProvider(runs.at(-1)?.providerInstanceId);
   const sharedState: TimelineRowSharedState = {
     pendingApprovals: pendingApprovalsByRequestId,
     respondingRequestIds,
@@ -1130,6 +1156,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
     skills,
     runs,
     activeThreadEnvironmentId,
+    tuiProviderByInstanceId,
+    providerTuiPalettes,
+    tuiProviderByRunId,
+    defaultTuiProvider,
     onRevertToTurnCount,
     onRunShellCommand,
     findActive,
@@ -1648,7 +1678,51 @@ function getItemType(item: MessagesTimelineRow) {
     : `message:${item.message.id}`;
 }
 
+function resolveRowTuiProvider(
+  row: TimelineRow,
+  ctx: TimelineRowSharedState,
+): TuiProviderKey | undefined {
+  if (row.kind === "message" && row.message.role === "user") {
+    return undefined;
+  }
+  let runId: RunId | null | undefined;
+  if (row.kind === "message" || row.kind === "assistant-meta") {
+    runId = row.projectedItem?.item.runId ?? row.message.runId;
+  } else if (row.kind === "proposed-plan") {
+    runId = row.proposedPlan.runId;
+  } else if (row.kind === "work") {
+    runId = row.groupedEntries.at(-1)?.runId;
+  } else if (row.kind === "work-live") {
+    runId = row.entry.runId;
+  } else if (row.kind === "work-toggle") {
+    runId = row.runId;
+  } else if (row.kind === "turn-fold" || row.kind === "attempt-fold") {
+    runId = row.runId;
+  } else if (row.kind === "event") {
+    const item = row.projectedItem.item;
+    if (item.type === "subagent") {
+      if (!ctx.providerTuiPalettes) return "default";
+      const fromInstance = item.providerInstanceId
+        ? ctx.tuiProviderByInstanceId.get(item.providerInstanceId)
+        : undefined;
+      if (fromInstance) return fromInstance;
+      if (item.driver) return resolveEffectiveTuiProvider(item.driver, true);
+      if (item.providerInstanceId) {
+        return resolveEffectiveTuiProvider(item.providerInstanceId, true);
+      }
+    }
+    runId = item.runId;
+  }
+  if (runId) {
+    const byRun = ctx.tuiProviderByRunId.get(runId);
+    if (byRun) return byRun;
+  }
+  return ctx.defaultTuiProvider;
+}
+
 const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
+  const ctx = use(TimelineRowCtx);
+  const rowProvider = resolveRowTuiProvider(row, ctx);
   const isExpandedToolGroup = row.kind === "work" && row.isExpandedToolGroup;
   const isSubagentGroup = row.kind === "event" && row.projectedItem.item.type === "subagent";
   const isWorkLogRow =
@@ -1686,6 +1760,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
           ? "group/assistant"
           : null,
       )}
+      data-provider={rowProvider}
       data-timeline-row-id={row.id}
       data-timeline-row-kind={row.kind}
       data-message-id={

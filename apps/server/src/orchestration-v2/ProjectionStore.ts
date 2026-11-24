@@ -1,6 +1,7 @@
 import type { ProjectThreadAwarenessV2Input } from "@t3tools/shared/agentAwareness";
 import { applyOrchestrationV2ThreadVisit, pendingGuestMessageCount } from "@t3tools/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
+import * as ReviewStats from "../devtools/ReviewStats.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
 import * as Stream from "effect/Stream";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
@@ -2825,6 +2826,65 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   ELSE excluded.payload_json
                 END
             `;
+              if (
+                event.payload.status === "completed" &&
+                event.payload.childThreadId &&
+                ReviewStats.isDelegatedReviewSubagent(event.payload.prompt) &&
+                typeof event.payload.result === "string" &&
+                event.payload.result.trim().length > 0 &&
+                ReviewStats.shouldAutoRecordDelegatedReview()
+              ) {
+                const parentRows = yield* sql<{
+                  readonly thread_id: string;
+                  readonly model: string | null;
+                  readonly instance_id: string | null;
+                  readonly provider: string | null;
+                  readonly default_provider: string | null;
+                  readonly options_json: string | null;
+                  readonly branch: string | null;
+                  readonly worktree_path: string | null;
+                }>`
+                  SELECT
+                    thread_id,
+                    json_extract(payload_json, '$.modelSelection.model') AS model,
+                    json_extract(payload_json, '$.modelSelection.instanceId') AS instance_id,
+                    json_extract(payload_json, '$.modelSelection.provider') AS provider,
+                    default_provider,
+                    json_extract(payload_json, '$.modelSelection.options') AS options_json,
+                    json_extract(payload_json, '$.branch') AS branch,
+                    json_extract(payload_json, '$.worktreePath') AS worktree_path
+                  FROM orchestration_v2_projection_threads
+                  WHERE thread_id IN (${event.payload.threadId}, ${event.payload.childThreadId})
+                    AND deleted_at IS NULL
+                `.pipe(Effect.orElseSucceed(() => []));
+                const msRaw =
+                  payload.modelSelection && typeof payload.modelSelection === "object"
+                    ? (payload.modelSelection as {
+                        readonly model?: string | null;
+                        readonly provider?: string | null;
+                        readonly instanceId?: string | null;
+                        readonly options?: unknown;
+                      })
+                    : null;
+                ReviewStats.tryRecordCompletedDelegatedReview(
+                  {
+                    subagentId: event.payload.id,
+                    parentThreadId: event.payload.threadId,
+                    childThreadId: event.payload.childThreadId,
+                    status: event.payload.status,
+                    startedAt: nullableStringField(payload, "startedAt"),
+                    completedAt: nullableStringField(payload, "completedAt"),
+                    updatedAt: stringField(payload, "updatedAt"),
+                    prompt: event.payload.prompt ?? "",
+                    result: event.payload.result,
+                    model: event.payload.model,
+                    provider: event.payload.driver,
+                    providerInstanceId: event.payload.providerInstanceId,
+                    modelSelection: msRaw,
+                  },
+                  parentRows,
+                );
+              }
               break;
             }
             case "provider-session.attached":

@@ -36,6 +36,8 @@ const projectPairs = (raw: unknown): IssuesSearch["hideProjects"] => {
 // Every optional key is an own key, even when undefined: the router lays these over the parent
 // route's unvalidated search, where a key left out would keep its raw value.
 export const issuesSearchFromUrl = (raw: Record<string, unknown>): IssuesSearch => ({
+  view: raw.view === "ship-queue" ? "ship-queue" : undefined,
+  shipEnv: bounded(raw.shipEnv) as EnvironmentId | undefined,
   who:
     raw.who === "assigned" || raw.who === "authored" || raw.who === "mentioned" ? raw.who : "all",
   status: raw.status === "closed" || raw.status === "all" ? raw.status : "open",
@@ -52,6 +54,33 @@ export const issuesSearchFromUrl = (raw: Record<string, unknown>): IssuesSearch 
   scope: bounded(raw.scope),
   key: bounded(raw.key),
 });
+
+export const mergeIssuesSearch = (
+  search: IssuesSearch,
+  patch: { [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined },
+): IssuesSearch => {
+  const merged = { ...search, ...patch };
+  return {
+    ...(merged.view ? { view: merged.view } : {}),
+    ...(merged.shipEnv ? { shipEnv: merged.shipEnv } : {}),
+    who: merged.who ?? search.who,
+    status: merged.status ?? search.status,
+    ...(merged.hideProjects?.length ? { hideProjects: merged.hideProjects } : {}),
+    ...(merged.host ? { host: merged.host } : {}),
+    q: merged.q || undefined,
+    ...(merged.label?.length ? { label: merged.label } : {}),
+    ...(merged.assignee ? { assignee: merged.assignee } : {}),
+    ...(merged.order ? { order: merged.order } : {}),
+    ...(merged.selectedEnvironmentId
+      ? { selectedEnvironmentId: merged.selectedEnvironmentId }
+      : {}),
+    ...(merged.selectedProjectId ? { selectedProjectId: merged.selectedProjectId } : {}),
+    ...(merged.selectedHost ? { selectedHost: merged.selectedHost } : {}),
+    ...(merged.tracker ? { tracker: merged.tracker } : {}),
+    ...(merged.scope ? { scope: merged.scope } : {}),
+    ...(merged.key ? { key: merged.key } : {}),
+  };
+};
 
 /**
  * One choice per project: projects on one repository can read different Linear teams. Scratch

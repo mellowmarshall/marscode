@@ -57,7 +57,12 @@ import {
 import { m, type MessageResolver } from "~/i18n/messages";
 import { resolveFilterOptions } from "../pullRequest/pullRequestListOptions";
 import { IssueFiltersMenu } from "./IssueListFilterPickers";
-import { issueFilterProjects, issueListTargets, issueProjectKeys } from "./issuesSearch.logic";
+import {
+  issueFilterProjects,
+  issueListTargets,
+  issueProjectKeys,
+  mergeIssuesSearch,
+} from "./issuesSearch.logic";
 import { ISSUE_SAVED_VIEWS } from "./issueSavedViews";
 import { SavedViewsMenu } from "~/components/SavedViewsMenu";
 import { PullRequestCompactFilterMenu } from "../pullRequest/PullRequestCompactFilterMenu";
@@ -96,12 +101,17 @@ import {
 import { useAtomCommand } from "~/state/use-atom-command";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { useProjects } from "~/state/entities";
-import { useEnvironments, useIssuesSupported } from "~/state/environments";
+import { useEnvironments, useIssuesSupported, usePrimaryEnvironmentId } from "~/state/environments";
+import { ShipQueuePanel } from "~/devtools/ShipQueuePanel";
+import { useSharedJobs } from "~/devtools/jobs/jobsStore";
+import { isShipQueueJobLive } from "~/devtools/ShipQueueSteps";
 import { issueEnvironment, useIssueList } from "~/state/issues";
 import { useDebouncedValue } from "~/state/queries";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 
 export interface IssuesSearch extends IssueListPreferences {
+  readonly view?: "ship-queue" | undefined;
+  readonly shipEnv?: EnvironmentId | undefined;
   readonly selectedEnvironmentId?: EnvironmentId | undefined;
   readonly selectedProjectId?: ProjectId | undefined;
   /** Part of the panel tab's identity, so a link reopens the tab a row press opened. */
@@ -202,6 +212,17 @@ export function IssuesPage() {
   const capableEnvironments = environments.filter(
     (environment) => environment.serverConfig?.environment.capabilities.issues === true,
   );
+  const primaryEnvId = usePrimaryEnvironmentId();
+  const shipEnvId = search.shipEnv ?? primaryEnvId;
+  const shipEnvInfo = environments.find((e) => e.environmentId === shipEnvId);
+  const shipEnvSupportsDevtools =
+    shipEnvInfo?.serverConfig == null ||
+    shipEnvInfo.serverConfig.environment.capabilities.devtools === true;
+  const sharedJobs = useSharedJobs(shipEnvSupportsDevtools ? shipEnvId : null);
+  const activeShipCount = sharedJobs.jobs.filter(
+    (j) => j.source === "ship-queue" && j.shipJob && isShipQueueJobLive(j.shipJob),
+  ).length;
+  const activeView = search.view === "ship-queue" ? "ship-queue" : "issues";
   const environmentLabels = new Map(environments.map((e) => [e.environmentId, e.label] as const));
   const filterProjects = issueFilterProjects(
     projects.filter((project) =>
@@ -331,25 +352,7 @@ export function IssuesPage() {
   );
 
   const updateSearch = (patch: { [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined }) => {
-    const merged = { ...search, ...patch };
-    const next: IssuesSearch = {
-      who: merged.who ?? search.who,
-      status: merged.status ?? search.status,
-      ...(merged.hideProjects?.length ? { hideProjects: merged.hideProjects } : {}),
-      ...(merged.host ? { host: merged.host } : {}),
-      q: merged.q || undefined,
-      ...(merged.label?.length ? { label: merged.label } : {}),
-      ...(merged.assignee ? { assignee: merged.assignee } : {}),
-      ...(merged.order ? { order: merged.order } : {}),
-      ...(merged.selectedEnvironmentId
-        ? { selectedEnvironmentId: merged.selectedEnvironmentId }
-        : {}),
-      ...(merged.selectedProjectId ? { selectedProjectId: merged.selectedProjectId } : {}),
-      ...(merged.selectedHost ? { selectedHost: merged.selectedHost } : {}),
-      ...(merged.tracker ? { tracker: merged.tracker } : {}),
-      ...(merged.scope ? { scope: merged.scope } : {}),
-      ...(merged.key ? { key: merged.key } : {}),
-    };
+    const next = mergeIssuesSearch(search, patch);
     writeIssueListPreferences(issueListPreferences(next));
     void navigate({ search: next });
   };
@@ -670,10 +673,45 @@ export function IssuesPage() {
             <WorkspaceBreadcrumb ariaLabel={gt("Issues breadcrumb")}>
               <WorkspaceBreadcrumbItem current>
                 <h1 className="truncate">
-                  <T context="page title, list of issues">Issues</T>
+                  {activeView === "ship-queue" ? (
+                    <T>Ship Queue</T>
+                  ) : (
+                    <T context="page title, list of issues">Issues</T>
+                  )}
                 </h1>
               </WorkspaceBreadcrumbItem>
             </WorkspaceBreadcrumb>
+            <div className="relative z-10 ml-2 flex shrink-0 items-center gap-0.5 rounded-md border border-border/70 bg-muted/30 p-0.5 [-webkit-app-region:no-drag]">
+              <button
+                type="button"
+                aria-pressed={activeView === "issues"}
+                className={
+                  activeView === "issues"
+                    ? "cursor-pointer rounded bg-background px-2 py-0.5 text-xs font-medium text-foreground shadow-xs [-webkit-app-region:no-drag]"
+                    : "cursor-pointer rounded px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground [-webkit-app-region:no-drag]"
+                }
+                onClick={() => updateSearch({ view: undefined })}
+              >
+                <T context="page title, list of issues">Issues</T>
+              </button>
+              <button
+                type="button"
+                aria-pressed={activeView === "ship-queue"}
+                className={
+                  activeView === "ship-queue"
+                    ? "inline-flex cursor-pointer items-center gap-1.5 rounded bg-background px-2 py-0.5 text-xs font-medium text-foreground shadow-xs [-webkit-app-region:no-drag]"
+                    : "inline-flex cursor-pointer items-center gap-1.5 rounded px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground [-webkit-app-region:no-drag]"
+                }
+                onClick={() => updateSearch({ view: "ship-queue" })}
+              >
+                <T>Ship Queue</T>
+                {activeShipCount > 0 ? (
+                  <span className="rounded-full bg-info/15 px-1.5 py-px font-mono text-3xs font-medium text-info-foreground tabular-nums">
+                    {activeShipCount}
+                  </span>
+                ) : null}
+              </button>
+            </div>
             <div className="min-w-0 flex-1" />
             <div
               className="flex items-center gap-1 [-webkit-app-region:no-drag]"
@@ -701,83 +739,89 @@ export function IssuesPage() {
 
           <div className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto">
             <WorkspacePageContainer width="expanded" className="min-h-full gap-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="min-w-0 basis-full @lg/issue-list:min-w-48 @lg/issue-list:basis-0 @lg/issue-list:flex-1">
-                  <PullRequestSearchInput
-                    value={search.q ?? ""}
-                    label={gt("Search issues")}
-                    placeholder={gt("Search issues")}
-                    busy={
-                      (search.q ?? "") !== debouncedQuery ||
-                      (debouncedQuery.length > 0 && list.isPending)
-                    }
-                    onChange={(q) => updateSearch({ q: q || undefined })}
-                    onSubmit={(q) => updateSearch({ q: q || undefined })}
-                  />
-                </div>
-                <PullRequestCompactFilterMenu
-                  label={gt("Sort issues")}
-                  triggerIcon={<ArrowDownUpIcon aria-hidden className="size-4" />}
-                  triggerLabel={gt("Sort", { $context: "verb, button that sorts a list" })}
-                  outlined
-                  value={search.order ?? "updated"}
-                  options={resolveFilterOptions(SORT_OPTIONS, resolve)}
-                  onChange={(order) =>
-                    updateSearch({ order: order === "created" ? "created" : undefined })
-                  }
-                />
-                <IssueFiltersMenu
-                  state={search.status}
-                  stateOptions={resolveFilterOptions(STATE_TABS, resolve)}
-                  onState={(status) => updateSearch({ status })}
-                  involvement={search.who}
-                  involvementOptions={resolveFilterOptions(INVOLVEMENT_TABS, resolve)}
-                  onInvolvement={(who) => updateSearch({ who })}
-                  scopes={filterScopes}
-                  labels={search.label ?? []}
-                  onLabels={(label) => updateSearch({ label })}
-                  assignee={search.assignee}
-                  onAssignee={(assignee) => updateSearch({ assignee })}
-                  projects={filterProjects}
-                  hiddenProjects={hiddenProjects}
-                  onHiddenProjects={(hideProjects) => updateSearch({ hideProjects })}
-                />
-                <SavedViewsMenu
-                  kind={ISSUE_SAVED_VIEWS}
-                  preferences={search}
-                  onApply={(view) =>
-                    // Explicit clears replace the old list scope; the selected issue stays open.
-                    updateSearch({
-                      who: view.who,
-                      status: view.status,
-                      hideProjects: view.hideProjects,
-                      host: view.host,
-                      q: view.q,
-                      label: view.label,
-                      assignee: view.assignee,
-                      order: view.order,
-                    })
-                  }
-                />
-                {hostOptions.length > 1 ? (
-                  <FilterMenu
-                    label={gt("Filter by tracker")}
-                    value={search.host ?? ""}
-                    options={hostOptions}
-                    onChange={(host) => updateSearch({ host: host || undefined })}
-                  />
-                ) : null}
-                <Button
-                  size="icon"
-                  variant="outline"
-                  aria-label={gt("Refresh issues")}
-                  onClick={list.refresh}
-                  disabled={list.isPending}
-                >
-                  <RefreshIcon size="md" refreshing={list.isPending} />
-                </Button>
-              </div>
-              {listBody}
+              {activeView === "ship-queue" ? (
+                <ShipQueuePanel environmentId={shipEnvId} />
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="min-w-0 basis-full @lg/issue-list:min-w-48 @lg/issue-list:basis-0 @lg/issue-list:flex-1">
+                      <PullRequestSearchInput
+                        value={search.q ?? ""}
+                        label={gt("Search issues")}
+                        placeholder={gt("Search issues")}
+                        busy={
+                          (search.q ?? "") !== debouncedQuery ||
+                          (debouncedQuery.length > 0 && list.isPending)
+                        }
+                        onChange={(q) => updateSearch({ q: q || undefined })}
+                        onSubmit={(q) => updateSearch({ q: q || undefined })}
+                      />
+                    </div>
+                    <PullRequestCompactFilterMenu
+                      label={gt("Sort issues")}
+                      triggerIcon={<ArrowDownUpIcon aria-hidden className="size-4" />}
+                      triggerLabel={gt("Sort", { $context: "verb, button that sorts a list" })}
+                      outlined
+                      value={search.order ?? "updated"}
+                      options={resolveFilterOptions(SORT_OPTIONS, resolve)}
+                      onChange={(order) =>
+                        updateSearch({ order: order === "created" ? "created" : undefined })
+                      }
+                    />
+                    <IssueFiltersMenu
+                      state={search.status}
+                      stateOptions={resolveFilterOptions(STATE_TABS, resolve)}
+                      onState={(status) => updateSearch({ status })}
+                      involvement={search.who}
+                      involvementOptions={resolveFilterOptions(INVOLVEMENT_TABS, resolve)}
+                      onInvolvement={(who) => updateSearch({ who })}
+                      scopes={filterScopes}
+                      labels={search.label ?? []}
+                      onLabels={(label) => updateSearch({ label })}
+                      assignee={search.assignee}
+                      onAssignee={(assignee) => updateSearch({ assignee })}
+                      projects={filterProjects}
+                      hiddenProjects={hiddenProjects}
+                      onHiddenProjects={(hideProjects) => updateSearch({ hideProjects })}
+                    />
+                    <SavedViewsMenu
+                      kind={ISSUE_SAVED_VIEWS}
+                      preferences={search}
+                      onApply={(view) =>
+                        // Explicit clears replace the old list scope; the selected issue stays open.
+                        updateSearch({
+                          who: view.who,
+                          status: view.status,
+                          hideProjects: view.hideProjects,
+                          host: view.host,
+                          q: view.q,
+                          label: view.label,
+                          assignee: view.assignee,
+                          order: view.order,
+                        })
+                      }
+                    />
+                    {hostOptions.length > 1 ? (
+                      <FilterMenu
+                        label={gt("Filter by tracker")}
+                        value={search.host ?? ""}
+                        options={hostOptions}
+                        onChange={(host) => updateSearch({ host: host || undefined })}
+                      />
+                    ) : null}
+                    <Button
+                      size="icon"
+                      variant="outline"
+                      aria-label={gt("Refresh issues")}
+                      onClick={list.refresh}
+                      disabled={list.isPending}
+                    >
+                      <RefreshIcon size="md" refreshing={list.isPending} />
+                    </Button>
+                  </div>
+                  {listBody}
+                </>
+              )}
             </WorkspacePageContainer>
           </div>
         </div>

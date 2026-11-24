@@ -619,6 +619,7 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
             skills={ctx.skills}
             parseRawHtml={false}
             lineBreaks
+            outputHighlightingMode="off"
           />
         </div>
       )}
@@ -629,6 +630,7 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
           threadRef={ctx.threadRef ?? undefined}
           skills={ctx.skills}
           className="text-foreground"
+          outputHighlightingMode="off"
         />
       )}
       {renderablePatch?.kind === "files" && (

@@ -22,6 +22,7 @@ import { GuestShareDialogHost } from "../components/chat/GuestShareControls";
 import { UseInAnotherAppDialogHost } from "../components/mcp/UseInAnotherAppDialog";
 import { AddProjectToMachineDialogHost } from "../components/AddProjectToMachineDialog";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
+import { DevtoolsOverlayHost, DevtoolsWorkspaceOutlet } from "../devtools/DevtoolsEntry";
 import { DevReplayHost } from "../components/DevReplayHost";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
@@ -199,6 +200,7 @@ function RootRouteBranch() {
       <SnapShotCoordinator />
       <ReopenClosedViewShortcut />
       <ConfirmDialogHost />
+      <DevtoolsOverlayHost />
       <CustomSnoozeDialogHost />
       <GuestShareDialogHost />
       <ProjectCloneToastCoordinator />
@@ -212,7 +214,9 @@ function RootRouteBranch() {
     <CommandPalette>
       {/* Setup starts with an empty workspace, so the Welcome page has no thread list. */}
       <AppSidebarLayout showSidebar={!isWelcome}>
-        <Outlet />
+        <DevtoolsWorkspaceOutlet>
+          <Outlet />
+        </DevtoolsWorkspaceOutlet>
       </AppSidebarLayout>
     </CommandPalette>
   );

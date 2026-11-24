@@ -10,7 +10,13 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientError,
+  HttpClientRequest,
+  HttpClientResponse,
+} from "effect/http";
 
 import {
   makeUnavailableUsageLimits,
@@ -357,6 +363,48 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
     let accessToken: string;
     let account: string;
     let projectId: string | undefined;
+    let usedCached = false;
+    let acpCredentials:
+      | { readonly token: typeof TokenFile.Type; readonly fingerprint: string }
+      | undefined;
+
+    const refreshAcpAuth = Effect.fn("AntigravityUsageProbe.refreshAcpAuth")(function* (creds: {
+      readonly token: typeof TokenFile.Type;
+      readonly fingerprint: string;
+    }) {
+      cached = undefined;
+      const refreshNow = yield* Clock.currentTimeMillis;
+      const refreshed = yield* request(
+        HttpClientRequest.post("https://oauth2.googleapis.com/token").pipe(
+          HttpClientRequest.bodyUrlParams({
+            client_id: creds.token.client_id,
+            client_secret: creds.token.client_secret,
+            refresh_token: creds.token.refresh_token,
+            grant_type: "refresh_token",
+          }),
+        ),
+      ).pipe(Effect.flatMap(decodeTokenResponse));
+      const nextAccessToken = refreshed.access_token;
+      // Use Google account IDs to merge accounts across environments; refresh tokens differ per machine.
+      const nextAccount = yield* request(
+        HttpClientRequest.get("https://www.googleapis.com/oauth2/v2/userinfo").pipe(
+          HttpClientRequest.setHeaders({ Authorization: `Bearer ${nextAccessToken}` }),
+        ),
+      ).pipe(
+        Effect.flatMap(antigravityAccountFingerprint),
+        Effect.orElseSucceed(() => creds.fingerprint),
+      );
+      if (generation === startedGeneration) {
+        cached = {
+          fingerprint: creds.fingerprint,
+          account: nextAccount,
+          accessToken: nextAccessToken,
+          expiresAt: refreshNow + refreshed.expires_in * 1000,
+        };
+      }
+      return { accessToken: nextAccessToken, account: nextAccount };
+    });
+
     if (!(yield* fs.exists(tokenPath))) {
       cached = undefined;
       // Google account instances bypass the keyring, whose one entry every profile shares.
@@ -396,44 +444,21 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
       const fingerprint = yield* sha256(
         `${token.client_id}\0${token.refresh_token}\0${token.project_id ?? ""}`,
       );
-      if (cached?.fingerprint !== fingerprint || cached.expiresAt <= now + 60_000) {
-        cached = undefined;
-        const refreshed = yield* request(
-          HttpClientRequest.post("https://oauth2.googleapis.com/token").pipe(
-            HttpClientRequest.bodyUrlParams({
-              client_id: token.client_id,
-              client_secret: token.client_secret,
-              refresh_token: token.refresh_token,
-              grant_type: "refresh_token",
-            }),
-          ),
-        ).pipe(Effect.flatMap(decodeTokenResponse));
-        accessToken = refreshed.access_token;
-        // Use Google account IDs to merge accounts across environments; refresh tokens differ per machine.
-        account = yield* request(
-          HttpClientRequest.get("https://www.googleapis.com/oauth2/v2/userinfo").pipe(
-            HttpClientRequest.setHeaders({ Authorization: `Bearer ${accessToken}` }),
-          ),
-        ).pipe(
-          Effect.flatMap(antigravityAccountFingerprint),
-          Effect.orElseSucceed(() => fingerprint),
-        );
-        if (generation === startedGeneration) {
-          cached = {
-            fingerprint,
-            account,
-            accessToken,
-            expiresAt: now + refreshed.expires_in * 1000,
-          };
-        }
-      } else {
-        accessToken = cached.accessToken;
-        account = cached.account;
-      }
+      acpCredentials = { token, fingerprint };
+      usedCached = cached?.fingerprint === fingerprint && cached.expiresAt > now + 60_000;
+      ({ accessToken, account } = usedCached
+        ? { accessToken: cached!.accessToken, account: cached!.account }
+        : yield* refreshAcpAuth(acpCredentials));
     }
+
+    const isAuthRejection = (error: unknown): boolean =>
+      HttpClientError.isHttpClientError(error) &&
+      error.reason._tag === "StatusCodeError" &&
+      (error.reason.response.status === 401 || error.reason.response.status === 403);
     const endpoints = ENDPOINTS[input.authMethod];
     // Merge endpoints because quota groups differ; the metered host's reading of a bucket wins.
     const fetchWindows = Effect.fn("AntigravityUsageProbe.fetchWindows")(function* <E>(
+      bearerToken: string,
       operation: string,
       parse: (
         response: unknown,
@@ -449,30 +474,58 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
             return yield* request(
               HttpClientRequest.post(`${endpoint}/v1internal:${operation}`).pipe(
                 HttpClientRequest.setHeaders({
-                  Authorization: `Bearer ${accessToken}`,
+                  Authorization: `Bearer ${bearerToken}`,
                   "User-Agent": antigravityUserAgent(platform, architecture),
                 }),
                 HttpClientRequest.bodyJsonUnsafe(projectId ? { project: projectId } : {}),
               ),
             ).pipe(
               Effect.flatMap((response) => parse(response, requestedAt)),
-              Effect.orElseSucceed(() => []),
+              Effect.map((windows) => ({ windows, authRejected: false })),
+              Effect.catch((error) =>
+                Effect.succeed({
+                  windows: [] as ServerProviderUsageWindow[],
+                  authRejected: isAuthRejection(error),
+                }),
+              ),
             );
           }),
         { concurrency: "unbounded" },
       );
       const windows = new Map<string, ServerProviderUsageWindow>();
-      for (const window of responses.flat()) {
-        if (!windows.has(window.id)) windows.set(window.id, window);
+      let authRejected = false;
+      for (const response of responses) {
+        if (response.authRejected) authRejected = true;
+        for (const window of response.windows) {
+          if (!windows.has(window.id)) windows.set(window.id, window);
+        }
       }
-      return [...windows.values()];
+      return { windows: [...windows.values()], authRejected };
     });
-    const summary = yield* fetchWindows("retrieveUserQuotaSummary", antigravitySummaryWindows);
-    const windows = summary.length
-      ? summary
-      : yield* fetchWindows("fetchAvailableModels", (response) =>
-          decodeModels(response).pipe(Effect.map(modelWindows)),
-        );
+    const loadWindows = Effect.fn("AntigravityUsageProbe.loadWindows")(function* (
+      bearerToken: string,
+    ) {
+      const summary = yield* fetchWindows(
+        bearerToken,
+        "retrieveUserQuotaSummary",
+        antigravitySummaryWindows,
+      );
+      if (summary.windows.length > 0) return summary;
+      const models = yield* fetchWindows(bearerToken, "fetchAvailableModels", (response) =>
+        decodeModels(response).pipe(Effect.map(modelWindows)),
+      );
+      return {
+        windows: models.windows,
+        authRejected: summary.authRejected || models.authRejected,
+      };
+    });
+    let loaded = yield* loadWindows(accessToken);
+    // Silently self-heal only when the cached access token was rejected with 401/403.
+    if (loaded.windows.length === 0 && usedCached && acpCredentials && loaded.authRejected) {
+      ({ accessToken, account } = yield* refreshAcpAuth(acpCredentials));
+      loaded = yield* loadWindows(accessToken);
+    }
+    const windows = loaded.windows;
     if (windows.length === 0) {
       return makeUnavailableUsageLimits({
         checkedAt,

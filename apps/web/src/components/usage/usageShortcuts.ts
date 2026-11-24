@@ -3,12 +3,21 @@ import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@t3tools/cont
 import type { UsageChartMetric } from "./UsageProviderChart";
 import { resolveShortcutCommand, type ShortcutEventLike } from "../../keybindings";
 
-export type UsageMetric = UsageChartMetric | "limits";
+export type UsageMetric = UsageChartMetric | "limits" | "reviews";
 export const METRIC_OPTIONS = [
   { value: "cost", label: msg("Cost"), command: "usage.cost" },
   { value: "tokens", label: msg("Tokens"), command: "usage.tokens" },
   { value: "limits", label: msg("Limits"), command: "usage.limits" },
 ] as const satisfies readonly { value: UsageMetric; label: string; command: KeybindingCommand }[];
+
+export const USAGE_TAB_OPTIONS = [
+  ...METRIC_OPTIONS,
+  { value: "reviews", label: msg("Reviews"), command: null },
+] as const satisfies readonly {
+  value: UsageMetric;
+  label: string;
+  command: KeybindingCommand | null;
+}[];
 
 export const WINDOW_OPTIONS = [
   { days: 1, label: msg("Past 24h"), command: "usage.period.day" },

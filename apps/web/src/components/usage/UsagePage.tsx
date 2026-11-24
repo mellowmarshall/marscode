@@ -89,8 +89,12 @@ import {
   speedCostSegments,
   tokenTypeSegments,
 } from "./usageBreakdown";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { UsageReviewsPanel } from "../../devtools/UsageReviewsPanel";
+import { usePrimaryEnvironmentId } from "../../state/environments";
 import {
   METRIC_OPTIONS,
+  USAGE_TAB_OPTIONS,
   WINDOW_OPTIONS,
   resolveUsageShortcut,
   type UsageMetric,
@@ -102,13 +106,13 @@ import {
   rankProvidersByMetric,
 } from "./usageProviders";
 import {
+  patchUsagePagePreferences,
   readUsagePagePreferences,
-  saveUsagePagePreferences,
   type UsagePagePreferences,
 } from "./usagePagePreferences";
 
 function isUsageMetric(value: string | null | undefined): value is UsageMetric {
-  return METRIC_OPTIONS.some((option) => option.value === value);
+  return USAGE_TAB_OPTIONS.some((option) => option.value === value);
 }
 
 function isUsageWindowDays(value: number): value is UsagePagePreferences["windowDays"] {
@@ -175,15 +179,22 @@ function UsageModelDialogHost({
 }
 
 export function UsagePage() {
-  const [preferences, setPreferences] = useState(readUsagePagePreferences);
+  const navigate = useNavigate();
+  const usageSearch = useSearch({ from: "/_chat/usage" });
+  const primaryEnvId = usePrimaryEnvironmentId();
+  const [preferences, setPreferences] = useState(() => {
+    const saved = readUsagePagePreferences();
+    return usageSearch.metric ? { ...saved, metric: usageSearch.metric } : saved;
+  });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const hour12 = usePrimarySettings((settings) => resolveHour12(settings.timestampFormat));
   const gt = useGT();
   const locale = useLocale();
   const m = useMessages();
   const shortcutTitle = (
-    option: (typeof METRIC_OPTIONS)[number] | (typeof WINDOW_OPTIONS)[number],
+    option: (typeof USAGE_TAB_OPTIONS)[number] | (typeof WINDOW_OPTIONS)[number],
   ) => {
+    if (!option.command) return m(option.label);
     const shortcut = shortcutLabelForCommand(keybindings, option.command, {
       context: { usagePageOpen: true },
     });
@@ -199,8 +210,9 @@ export function UsagePage() {
       preferences.windowDays === 1 ? "hour" : "day",
     ),
   }));
-  const metric = preferences.metric;
+  const metric = usageSearch.metric ?? preferences.metric;
   const showingLimits = metric === "limits";
+  const showingReviews = metric === "reviews";
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [limitsNow, setLimitsNow] = useState(() => Date.now());
   const refreshingRef = useRef(false);
@@ -236,9 +248,8 @@ export function UsagePage() {
   );
 
   const updatePreferences = (patch: Partial<UsagePagePreferences>) => {
-    const nextPreferences = { ...preferences, ...patch };
+    const nextPreferences = patchUsagePagePreferences(patch);
     setPreferences(nextPreferences);
-    saveUsagePagePreferences(nextPreferences);
   };
   const selectWindow = (days: number) => {
     if (!isUsageWindowDays(days)) return;
@@ -251,6 +262,9 @@ export function UsagePage() {
   const selectMetric = (nextMetric: UsageMetric) => {
     if (nextMetric === "limits") setLimitsNow(Date.now());
     updatePreferences({ metric: nextMetric });
+    if (usageSearch.metric !== undefined) {
+      void navigate({ to: "/usage", search: { metric: nextMetric }, replace: true });
+    }
   };
   const refreshLimits = (automatic = false) =>
     // Settled so the timestamp still advances when a refresh throws.
@@ -368,7 +382,7 @@ export function UsagePage() {
           end: formatDayShort(shownWindow.untilDay, locale),
         });
   const windowOptionLabel = WINDOW_OPTIONS.find((option) => option.days === windowDays)?.label;
-  const metricOptionLabel = METRIC_OPTIONS.find((option) => option.value === metric)?.label;
+  const metricOptionLabel = USAGE_TAB_OPTIONS.find((option) => option.value === metric)?.label;
   const topbarContent = (
     <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-2 @4xl/usage-header:flex">
       <WorkspaceBreadcrumb ariaLabel={gt("Usage breadcrumb")} className="min-w-0">
@@ -434,7 +448,7 @@ export function UsagePage() {
             if (isUsageMetric(value)) selectMetric(value);
           }}
         >
-          {METRIC_OPTIONS.map((option) => (
+          {USAGE_TAB_OPTIONS.map((option) => (
             <Toggle key={option.value} value={option.value} title={shortcutTitle(option)}>
               {m(option.label)}
             </Toggle>
@@ -490,7 +504,7 @@ export function UsagePage() {
             <SelectValue>{metricOptionLabel && m(metricOptionLabel)}</SelectValue>
           </SelectTrigger>
           <SelectPopup align="end" alignItemWithTrigger={false}>
-            {METRIC_OPTIONS.map((option) => (
+            {USAGE_TAB_OPTIONS.map((option) => (
               <SelectItem key={option.value} value={option.value} title={shortcutTitle(option)}>
                 {m(option.label)}
               </SelectItem>
@@ -521,7 +535,24 @@ export function UsagePage() {
 
         <ScrollArea className="min-h-0 flex-1" observeContent>
           <WorkspacePageContainer width="wide">
-            {selectedEnvironments.length === 0 ? (
+            {showingReviews ? (
+              <UsageReviewsPanel
+                environmentIds={[
+                  ...(primaryEnvId &&
+                  (selectedEnvironmentIds === null || selectedEnvironmentIds.has(primaryEnvId))
+                    ? [primaryEnvId]
+                    : []),
+                  ...selectedEnvironments
+                    .map((environment) => environment.environmentId)
+                    .filter((id) => id !== primaryEnvId),
+                ].filter(
+                  (id) =>
+                    appAtomRegistry.get(serverEnvironment.configValueAtom(id))?.environment
+                      .capabilities.devtools !== false,
+                )}
+                windowDays={windowDays}
+              />
+            ) : selectedEnvironments.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 {environments.length === 0
                   ? showingLimits

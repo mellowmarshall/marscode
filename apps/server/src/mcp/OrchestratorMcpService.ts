@@ -118,9 +118,11 @@ import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
 import { userFacingDispatchErrorMessage } from "../orchestration-v2/UserFacingErrors.ts";
+import * as DevtoolsConfig from "../devtools/DevtoolsConfig.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
+import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   clientModeCeiling,
@@ -2850,6 +2852,44 @@ const make = Effect.gen(function* () {
           scheduledTasks: true,
           maxBatchThreads: 20,
         },
+        ...(yield* Effect.serviceOption(UsageLimitSources.UsageLimitSources).pipe(
+          Effect.flatMap((limitSourcesOpt) =>
+            Option.isSome(limitSourcesOpt)
+              ? limitSourcesOpt.value.current.pipe(Effect.orElseSucceed(() => []))
+              : Effect.succeed([]),
+          ),
+          Effect.map((limitSources) => {
+            const hostCfg = DevtoolsConfig.readDevtoolsHostConfig();
+            const sq = DevtoolsConfig.resolveReviewRolePlan("ship_queue_review", hostCfg, {
+              providers,
+              limitSources,
+            });
+            const pb = DevtoolsConfig.resolveReviewRolePlan("playbook_challenge", hostCfg, {
+              providers,
+              limitSources,
+            });
+            return {
+              reviewModels: {
+                shipQueueReview: {
+                  providerInstanceId: sq.selected.provider,
+                  model: sq.selected.model,
+                  effort: sq.selected.effort,
+                  remainingPct: sq.selected.remainingPct,
+                  fallbackUsed: sq.fallbackUsed,
+                  reason: sq.reason,
+                },
+                playbookChallenge: {
+                  providerInstanceId: pb.selected.provider,
+                  model: pb.selected.model,
+                  effort: pb.selected.effort,
+                  remainingPct: pb.selected.remainingPct,
+                  fallbackUsed: pb.fallbackUsed,
+                  reason: pb.reason,
+                },
+              },
+            };
+          }),
+        )),
       };
     }),
     delegateTask: Effect.fn("OrchestratorMcpService.delegateTask")(function* (callerScope, input) {

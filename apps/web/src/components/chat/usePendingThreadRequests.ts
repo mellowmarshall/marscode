@@ -64,6 +64,12 @@ import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { toastManager } from "../ui/toast";
+import {
+  EMPTY_DEVTOOLS_APPROVALS,
+  isDevtoolsApprovalRequestId,
+  respondToDevtoolsApproval,
+  type ThreadDevtoolsApproval,
+} from "../../devtools/threadApprovals";
 
 import type { ChatComposerHandle } from "./ChatComposer";
 
@@ -276,6 +282,7 @@ export function usePendingThreadRequests(input: {
   readonly environmentId: EnvironmentId;
   readonly activeThreadId: ThreadId | null;
   readonly serverProjection: ThreadStructure | null;
+  readonly devtoolsApprovals?: ReadonlyArray<ThreadDevtoolsApproval> | undefined;
   readonly supportsQuestionAttachments: boolean;
   readonly composerDraftTarget: ScopedThreadRef | DraftId;
   readonly setComposerDraftPrompt: (target: ScopedThreadRef | DraftId, prompt: string) => void;
@@ -287,6 +294,7 @@ export function usePendingThreadRequests(input: {
     environmentId,
     activeThreadId,
     serverProjection,
+    devtoolsApprovals = EMPTY_DEVTOOLS_APPROVALS,
     supportsQuestionAttachments,
     composerDraftTarget,
     setComposerDraftPrompt,
@@ -317,6 +325,7 @@ export function usePendingThreadRequests(input: {
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
     RuntimeRequestId[]
   >([]);
+  const devtoolsApprovalsInFlight = useRef(new Set<string>());
   const setPendingUserInputAnswersByRequestId = usePendingUserInputAnswers.setState;
   const setPendingUserInputQuestionIndexByRequestId = usePendingUserInputQuestionIndex.setState;
   const pendingRequests =
@@ -329,6 +338,17 @@ export function usePendingThreadRequests(input: {
     pendingRequests.approvals.length === 0
       ? NO_PENDING_APPROVALS
       : derivePendingApprovals(pendingRequests.approvals);
+  const timelinePendingApprovals =
+    devtoolsApprovals.length === 0
+      ? pendingApprovals
+      : [...pendingApprovals, ...devtoolsApprovals.map((entry) => entry.approval)];
+  const busyDevtoolsRequestIds = devtoolsApprovals
+    .filter((entry) => entry.busy)
+    .map((entry) => entry.requestId);
+  const effectiveRespondingRequestIds =
+    busyDevtoolsRequestIds.length === 0
+      ? respondingRequestIds
+      : [...respondingRequestIds, ...busyDevtoolsRequestIds];
   const pendingUserInputs =
     pendingRequests.userInputs.length === 0
       ? NO_PENDING_USER_INPUTS
@@ -350,6 +370,7 @@ export function usePendingThreadRequests(input: {
       respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
   const activePendingApproval = pendingApprovals[0] ?? null;
+  const activeTimelinePendingApproval = timelinePendingApprovals[0] ?? null;
 
   const onRespondToApproval = async (
     requestId: RuntimeRequestId,
@@ -358,6 +379,33 @@ export function usePendingThreadRequests(input: {
   ) => {
     if (!activeThreadId || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope))
       return;
+
+    if (isDevtoolsApprovalRequestId(requestId)) {
+      const devtoolsEntry = devtoolsApprovals.find((entry) => entry.requestId === requestId);
+      if (
+        !devtoolsEntry ||
+        devtoolsEntry.busy ||
+        devtoolsApprovalsInFlight.current.has(requestId) ||
+        respondingRequestIds.includes(requestId)
+      ) {
+        return;
+      }
+      devtoolsApprovalsInFlight.current.add(requestId);
+      setRespondingRequestIds((existing) =>
+        existing.includes(requestId) ? existing : [...existing, requestId],
+      );
+      try {
+        const res = await respondToDevtoolsApproval(environmentId, devtoolsEntry, decision);
+        if (!res.ok) {
+          setThreadError(activeThreadId, res.error);
+        }
+      } finally {
+        devtoolsApprovalsInFlight.current.delete(requestId);
+        setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
+      }
+      return;
+    }
+
     if (
       pendingApprovals.find((approval) => approval.requestId === requestId)?.responseCapability !==
       "live"
@@ -663,11 +711,13 @@ export function usePendingThreadRequests(input: {
 
   return {
     pendingApprovals,
+    timelinePendingApprovals,
     pendingUserInputs,
     activePendingApproval,
+    activeTimelinePendingApproval,
     activePendingUserInput,
     activePendingIsResponding,
-    respondingRequestIds,
+    respondingRequestIds: effectiveRespondingRequestIds,
     onRespondToApproval: onRespondToApprovalStable,
     onDismissUserInput: onDismissUserInputStable,
     onSelectActivePendingUserInputOption: onSelectActivePendingUserInputOptionStable,

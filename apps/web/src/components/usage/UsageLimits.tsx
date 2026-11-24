@@ -55,14 +55,14 @@ const PACE: Record<LimitPace, { readonly label: string; readonly icon: typeof Ga
   },
 };
 
-export function barColor(driver: ServerProvider["driver"]): string {
+function barColor(driver: ServerProvider["driver"]): string {
   const presentation = Object.values(PROVIDER_PRESENTATION).find(
     (entry) => entry.driverKind === driver,
   );
   return presentation?.color ?? "var(--foreground)";
 }
 
-export function PaceIcon({ pace }: { readonly pace: LimitPace }) {
+function PaceIcon({ pace }: { readonly pace: LimitPace }) {
   const Icon = PACE[pace].icon;
   const m = useMessages();
   return (

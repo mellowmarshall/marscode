@@ -129,6 +129,12 @@ import { resolveDiffThemeName } from "../lib/diffRendering";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
 import { useRenderedAppearance } from "../hooks/useTheme";
 import { useClientSettings } from "../hooks/useSettings";
+import { classifyInlineCodeRole, hasAnsiSequences } from "../lib/tuiOutputHighlighting";
+import {
+  useOutputHighlightingMode,
+  type OutputHighlightingMode,
+} from "../lib/tuiOutputPreferences";
+import { TerminalOutputText } from "./chat/TerminalOutputText";
 import { chatMarkdownClipboardPayload } from "../markdown-clipboard";
 import {
   isLocalEditorFileHref,
@@ -267,6 +273,7 @@ interface ChatMarkdownProps {
   /** The change request's repository, when it can differ from the checkout at `cwd`. */
   sourceControlMediaRepository?: string | undefined;
   headingLevelOffset?: number | undefined;
+  outputHighlightingMode?: OutputHighlightingMode | undefined;
 }
 
 export interface ChatMarkdownContextReference {
@@ -589,6 +596,7 @@ function useChatMarkdownState(
     onImageExpand,
     renderContextReference,
     headingLevelOffset = 0,
+    outputHighlightingMode: explicitOutputHighlightingMode,
     sourceControlMedia = false,
     sourceControlMediaRepository,
   }: ChatMarkdownProps,
@@ -597,6 +605,8 @@ function useChatMarkdownState(
   const gt = useGT();
   const messages = useMessages();
   const resolvedTheme = useRenderedAppearance();
+  const [storedOutputHighlightingMode] = useOutputHighlightingMode();
+  const outputHighlightingMode = explicitOutputHighlightingMode ?? storedOutputHighlightingMode;
   const markdownRef = useRef<HTMLElement>(null);
   const mediaRequestId = useRef(0);
   const mediaScopeKey = [
@@ -1097,6 +1107,7 @@ function useChatMarkdownState(
     inlineCodeFileLinkMetaByText,
     inline,
     mathEnabled,
+    outputHighlightingMode,
     isStreaming,
     linkTargetPreference,
     markdownFileLinkMetaByHref,
@@ -1594,9 +1605,13 @@ const CHAT_MARKDOWN_COMPONENTS = {
     );
   },
   code: function MarkdownCode({ node, children, className, ...props }) {
-    const { cwd, imageBaseDir, inlineCodeFileLinkMetaByText, fileLinkChip } = use(
-      ChatMarkdownRendererContext,
-    );
+    const {
+      cwd,
+      imageBaseDir,
+      inlineCodeFileLinkMetaByText,
+      fileLinkChip,
+      outputHighlightingMode,
+    } = use(ChatMarkdownRendererContext);
     if (node?.properties?.dataInlineCode != null) {
       const codeText = nodeToPlainText(children);
       const fileLinkMeta =
@@ -1609,8 +1624,14 @@ const CHAT_MARKDOWN_COMPONENTS = {
           inlineCodeFilePathCandidate(codeText) ?? codeText.trim(),
         );
       }
+      const inlineRole =
+        outputHighlightingMode === "semantic" ? classifyInlineCodeRole(codeText) : undefined;
       return (
-        <code {...props} className={className}>
+        <code
+          {...props}
+          className={className}
+          data-tui-role={inlineRole && inlineRole !== "plain" ? inlineRole : undefined}
+        >
           {children}
         </code>
       );
@@ -1821,9 +1842,14 @@ const CHAT_MARKDOWN_COMPONENTS = {
   },
   pre: function MarkdownPre({ node, children, ...props }) {
     const gt = useGT();
-    const { resolvedTheme, diffThemeName, expandMedia, isStreaming, onRunShellCommand } = use(
-      ChatMarkdownRendererContext,
-    );
+    const {
+      resolvedTheme,
+      diffThemeName,
+      expandMedia,
+      isStreaming,
+      onRunShellCommand,
+      outputHighlightingMode,
+    } = use(ChatMarkdownRendererContext);
     const text = use(ChatMarkdownTextContext);
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
@@ -1831,8 +1857,22 @@ const CHAT_MARKDOWN_COMPONENTS = {
     }
 
     const language = extractFenceLanguage(codeBlock.className);
+    const hasAnsi = hasAnsiSequences(codeBlock.code);
+    const isTerminalFence =
+      hasAnsi ||
+      language === "ansi" ||
+      language === "terminal" ||
+      language === "console" ||
+      language === "output" ||
+      language === "log";
     const fenceTitle = extractFenceTitle(extractPreCodeMeta(node));
-    const highlightedCode = (
+    const highlightedCode = isTerminalFence ? (
+      <pre {...props}>
+        <code className={codeBlock.className}>
+          <TerminalOutputText text={codeBlock.code} mode={outputHighlightingMode} />
+        </code>
+      </pre>
+    ) : (
       <RenderErrorBoundary
         resetKeys={[codeBlock.code, language, diffThemeName, isStreaming]}
         fallback={<pre {...props}>{children}</pre>}
@@ -1961,11 +2001,12 @@ function markdownIslandOptions(state: ChatMarkdownComponentState): MarkdownIslan
     imageBaseDir,
     inlineCodeFileLinkMetaByText,
     onTaskListChange,
+    outputHighlightingMode,
     skills,
   } = state;
   const options: MarkdownIslandOptions = {
     components: CHAT_MARKDOWN_COMPONENTS,
-    variant: String(headingLevelOffset),
+    variant: `${headingLevelOffset}:${outputHighlightingMode}`,
     isIsland: (node) => {
       switch (node.tagName) {
         case "a":
@@ -2022,6 +2063,13 @@ function markdownIslandOptions(state: ChatMarkdownComponentState): MarkdownIslan
           return node.properties.type === "checkbox"
             ? withProperties(node, { readOnly: true })
             : node;
+        case "code": {
+          if (outputHighlightingMode !== "semantic" || node.properties.dataInlineCode == null) {
+            return node;
+          }
+          const role = classifyInlineCodeRole(hastPlainTextDeep(node));
+          return role === "plain" ? node : withProperties(node, { dataTuiRole: role });
+        }
         default:
           return node;
       }
@@ -2097,6 +2145,7 @@ function ChatMarkdown({
         className,
       )}
       data-streaming={componentState.isStreaming ? "" : undefined}
+      data-tui-highlighting={componentState.outputHighlightingMode}
       onCopy={handleCopy}
     >
       <ChatMarkdownRendererContext value={componentState}>

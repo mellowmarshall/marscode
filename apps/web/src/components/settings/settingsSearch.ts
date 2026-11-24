@@ -34,6 +34,7 @@ export type SettingsPath =
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
   | "/settings/worktrees"
+  | "/settings/devtools"
   | "/settings/connections"
   | "/settings/access"
   | "/settings/secrets"
@@ -112,6 +113,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/scheduled-tasks": msg("Scheduled tasks"),
   "/settings/source-control": msg("Source control & issues"),
   "/settings/worktrees": msg("Worktrees"),
+  "/settings/devtools": msg("DevTools"),
   "/settings/connections": msg("Environments"),
   "/settings/access": msg("Sharing & access"),
   "/settings/secrets": msg("Secrets"),
@@ -164,7 +166,12 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   },
   {
     heading: msg("Code"),
-    paths: ["/settings/projects", "/settings/source-control", "/settings/worktrees"],
+    paths: [
+      "/settings/projects",
+      "/settings/source-control",
+      "/settings/worktrees",
+      "/settings/devtools",
+    ],
   },
   {
     heading: msg("Connections"),
@@ -401,6 +408,92 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: msg("Render math"),
     to: "/settings/appearance",
     searchTerms: [msg("latex tex katex equations formulas markdown")],
+  },
+  {
+    id: "provider-tui-palettes",
+    title: msg("Provider TUI palettes"),
+    to: "/settings/appearance",
+    searchTerms: [msg("claude codex antigravity muse colors theme palette terminal output")],
+    targetId: "appearance-interface",
+  },
+  {
+    id: "output-highlighting",
+    title: msg("Output highlighting"),
+    to: "/settings/appearance",
+    searchTerms: [msg("semantic ansi terminal log json diff inline code syntax highlight")],
+    targetId: "appearance-interface",
+  },
+  {
+    id: "devtools-playbook-models",
+    title: msg("Playbook Challenge model & fallbacks"),
+    to: "/settings/devtools",
+    searchTerms: [
+      msg("playbook challenge model fallback usage remaining codex claude gemini grok timeout"),
+    ],
+    targetId: "devtools-review-models",
+  },
+  {
+    id: "devtools-ship-review-models",
+    title: msg("Ship Queue adversarial review model & fallbacks"),
+    to: "/settings/devtools",
+    searchTerms: [msg("ship queue adversarial review model fallback usage remaining code review")],
+    targetId: "devtools-review-models",
+  },
+  {
+    id: "devtools-guard-alerts",
+    title: msg("Host guard alerts"),
+    to: "/settings/devtools",
+    searchTerms: [msg("host guards notification sound approval modal override")],
+    targetId: "devtools-host-guards",
+  },
+  {
+    id: "devtools-guard-timeout",
+    title: msg("Host guard approval timeout"),
+    to: "/settings/devtools",
+    searchTerms: [msg("host guards timeout expiry approval")],
+    targetId: "devtools-host-guards",
+  },
+  {
+    id: "devtools-guard-ttl",
+    title: msg("Host guard grant TTL"),
+    to: "/settings/devtools",
+    searchTerms: [msg("host guards grant ttl duration")],
+    targetId: "devtools-host-guards",
+  },
+  {
+    id: "devtools-sidebar-job-pills",
+    title: msg("Sidebar job status pills"),
+    to: "/settings/devtools",
+    searchTerms: [msg("sidebar shipping deploying bounded jobs progress pill")],
+    targetId: "devtools-jobs-ui",
+  },
+  {
+    id: "devtools-ship-linger",
+    title: msg("Completed ship card linger"),
+    to: "/settings/devtools",
+    searchTerms: [msg("ship queue right rail completed linger hide")],
+    targetId: "devtools-jobs-ui",
+  },
+  {
+    id: "devtools-job-stall-minutes",
+    title: msg("Default job stall alert"),
+    to: "/settings/devtools",
+    searchTerms: [msg("bounded jobs stall minutes silence alert")],
+    targetId: "devtools-jobs-ui",
+  },
+  {
+    id: "devtools-default-fleet-tab",
+    title: msg("Default Fleet Console tab"),
+    to: "/settings/devtools",
+    searchTerms: [msg("fleet console tab jobs runtime governance")],
+    targetId: "devtools-fleet-devdeck",
+  },
+  {
+    id: "devtools-devdeck-endpoint",
+    title: msg("DevDeck endpoint override"),
+    to: "/settings/devtools",
+    searchTerms: [msg("devdeck unix socket host port override")],
+    targetId: "devtools-fleet-devdeck",
   },
   {
     id: "panel-animations",
@@ -1532,6 +1625,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/devices": null,
   "/settings/source-control": "environment-defaults",
   "/settings/worktrees": "project-defaults",
+  "/settings/devtools": "environment",
   "/settings/connections": "connections",
   "/settings/access": "connections",
   "/settings/secrets": null,

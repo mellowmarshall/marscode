@@ -53,6 +53,11 @@ import { useStableCallback } from "../hooks/useStableCallback";
 import { useProjectScriptEditing } from "./chat/useProjectScriptEditing";
 import { RightPanelSurfaceContent } from "./chat/RightPanelSurfaceContent";
 import { usePendingThreadRequests } from "./chat/usePendingThreadRequests";
+import { respondToDevtoolsApproval } from "../devtools/threadApprovals";
+import {
+  useChildThreadDevtoolsApprovals,
+  useThreadDevtoolsApprovals,
+} from "../devtools/useThreadDevtoolsApprovals";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { resolveWorktreeRepositorySelection } from "@t3tools/client-runtime/state/thread-repositories";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -1457,10 +1462,17 @@ export default function ChatView(props: ChatViewProps) {
     setLocalServerErrorsByThreadKey,
     setLocalDraftErrorsByDraftId,
   });
+  const devtoolsApprovals = useThreadDevtoolsApprovals({
+    environmentId,
+    threadId: activeThreadId,
+  });
+  const childDevtoolsApprovals = useChildThreadDevtoolsApprovals(environmentId, activeThreadId);
   const {
     pendingApprovals,
+    timelinePendingApprovals,
     pendingUserInputs,
     activePendingApproval,
+    activeTimelinePendingApproval,
     activePendingUserInput,
     activePendingIsResponding,
     respondingRequestIds,
@@ -1475,6 +1487,7 @@ export default function ChatView(props: ChatViewProps) {
     environmentId,
     activeThreadId,
     serverProjection,
+    devtoolsApprovals,
     supportsQuestionAttachments,
     composerDraftTarget,
     setComposerDraftPrompt,
@@ -3616,7 +3629,7 @@ export default function ChatView(props: ChatViewProps) {
             >
               <WorkspaceMutationIdContext value={workspaceMutationId}>
                 <ThreadTimeline
-                  pendingApprovals={pendingApprovals}
+                  pendingApprovals={timelinePendingApprovals}
                   heldApprovalRequestIds={heldApprovalRequestIds}
                   respondingRequestIds={respondingRequestIds}
                   onRespondToApproval={onRespondToApprovalStable}
@@ -3638,7 +3651,7 @@ export default function ChatView(props: ChatViewProps) {
                   runlessWorkActive={runlessWorkStartedAt !== null}
                   isCompacting={isCompacting}
                   awaitingUser={
-                    activePendingApproval !== null
+                    activeTimelinePendingApproval !== null
                       ? "approval"
                       : activePendingUserInput !== null ||
                           // A secret request has no runtime request; the shell carries it.
@@ -3647,7 +3660,9 @@ export default function ChatView(props: ChatViewProps) {
                         : null
                   }
                   awaitingRequestId={
-                    activePendingApproval?.requestId ?? activePendingUserInput?.requestId ?? null
+                    activeTimelinePendingApproval?.requestId ??
+                    activePendingUserInput?.requestId ??
+                    null
                   }
                   activeTurnStartedAt={activeWorkStartedAt}
                   providerStartingLabel={
@@ -3784,7 +3799,11 @@ export default function ChatView(props: ChatViewProps) {
                         : undefined
                     }
                   >
-                    <ChildThreadApprovals threadRef={activeThreadRef} />
+                    <ChildThreadApprovals
+                      threadRef={activeThreadRef}
+                      devtoolsApprovals={childDevtoolsApprovals}
+                      onRespondToDevtoolsApproval={respondToDevtoolsApproval}
+                    />
                     <div className="relative">
                       <ComposerSurface.Shell contextRow={showComposerContextStrip}>
                         <ComposerSurface.Host

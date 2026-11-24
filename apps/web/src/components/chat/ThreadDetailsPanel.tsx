@@ -28,6 +28,7 @@ import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import { ThreadRepositorySections } from "./ThreadRepositorySections";
 import { ThreadServersPanel } from "./ThreadServersPanel";
+import { ThreadDevtoolsPanel } from "~/devtools/ThreadDevtoolsPanel";
 import {
   ThreadDetailsContext,
   ThreadDetailsUsage,
@@ -323,6 +324,15 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   threadId={props.threadId}
                   showLineage={visible.lineage}
                   showSideChats={visible.sideChats}
+                />
+              ) : null}
+
+              {density !== "essential" && !props.draftId ? (
+                <ThreadDevtoolsPanel
+                  environmentId={props.environmentId}
+                  threadId={props.threadId}
+                  gitCwd={props.gitCwd}
+                  worktreePath={props.worktreePath}
                 />
               ) : null}
 

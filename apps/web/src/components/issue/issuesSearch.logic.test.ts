@@ -3,7 +3,12 @@ import { describe, expect, it } from "vite-plus/test";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
-import { issueFilterProjects, issueListTargets, issuesSearchFromUrl } from "./issuesSearch.logic";
+import {
+  issueFilterProjects,
+  issueListTargets,
+  issuesSearchFromUrl,
+  mergeIssuesSearch,
+} from "./issuesSearch.logic";
 
 describe("issuesSearchFromUrl", () => {
   it("replaces a malformed filter instead of letting the raw value through", () => {
@@ -56,6 +61,22 @@ describe("issueListTargets", () => {
       { environmentId: laptop, input },
       { environmentId: vps, input },
     ]);
+  });
+
+  it("preserves and clears view=ship-queue and shipEnv in mergeIssuesSearch", () => {
+    const base = issuesSearchFromUrl({});
+    const remoteEnv = EnvironmentId.make("remote-1");
+    const toShip = mergeIssuesSearch(base, { view: "ship-queue", shipEnv: remoteEnv });
+    expect(toShip.view).toBe("ship-queue");
+    expect(toShip.shipEnv).toBe(remoteEnv);
+    expect(mergeIssuesSearch(toShip, { q: "exp" })).toMatchObject({
+      view: "ship-queue",
+      shipEnv: remoteEnv,
+    });
+    expect(mergeIssuesSearch(toShip, { view: undefined }).view).toBeUndefined();
+    expect(issuesSearchFromUrl({ view: "ship-queue", shipEnv: "remote-1" }).shipEnv).toBe(
+      remoteEnv,
+    );
   });
 });
 

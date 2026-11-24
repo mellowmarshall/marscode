@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { AuthOrchestrationOperateScope, type ScopedThreadRef } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import type { ChildThreadApproval } from "@t3tools/client-runtime/state/thread-requests";
 import { fullAccessOverrideExplanation } from "@t3tools/client-runtime/state/thread-requests";
 import {
@@ -7,7 +7,12 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { T, useGT, useMessages, Var } from "gt-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import type { EnvironmentId, ProviderApprovalDecision, ScopedThreadRef } from "@t3tools/contracts";
+import type {
+  ChildThreadDevtoolsApproval,
+  ThreadDevtoolsApproval,
+} from "../../devtools/threadApprovals";
 import { useEnvironmentScope } from "../../state/session";
 import { childThreadApprovalsAtom, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -84,9 +89,89 @@ function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
   );
 }
 
-export function ChildThreadApprovals({ threadRef }: { threadRef: ScopedThreadRef | null }) {
+type ChildDevtoolsApprovalResponder = (
+  environmentId: EnvironmentId,
+  entry: ThreadDevtoolsApproval,
+  decision: ProviderApprovalDecision,
+) => Promise<{ readonly ok: true } | { readonly ok: false; readonly error: string }>;
+
+function ChildDevtoolsApproval({
+  environmentId,
+  item,
+  onRespond,
+}: {
+  readonly environmentId: ScopedThreadRef["environmentId"];
+  readonly item: ChildThreadDevtoolsApproval;
+  readonly onRespond: ChildDevtoolsApprovalResponder;
+}) {
+  const canRespond = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
+  const gt = useGT();
+  const [responding, setResponding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inFlightRef = useRef(false);
+  const { approval } = item.entry;
+  const isBusy = responding || item.entry.busy;
+  return (
+    <section
+      aria-label={gt("Approval from {title}", { title: item.childTitle })}
+      className="rounded-lg border border-border bg-background p-3 text-xs"
+    >
+      <p className="mb-2 font-medium">
+        <T>
+          Approval needed from <Var>{item.childTitle}</Var>
+        </T>
+      </p>
+      <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono">
+        {approval.detail || approval.requestKind}
+      </pre>
+      {approval.appName ? <p className="mt-2 text-muted-foreground">{approval.appName}</p> : null}
+      {approval.reason ? <p className="mt-2 text-muted-foreground">{approval.reason}</p> : null}
+      <div className="mt-2 flex flex-wrap gap-2">
+        <ComposerPendingApprovalActions
+          presentation="inline"
+          requestId={approval.requestId}
+          isResponding={isBusy}
+          canRespond={approval.responseCapability === "live"}
+          disabled={!canRespond || isBusy}
+          options={approval.options}
+          onRespondToApproval={async (_requestId, decision) => {
+            if (!canRespond || isBusy || inFlightRef.current) return;
+            inFlightRef.current = true;
+            setResponding(true);
+            setError(null);
+            try {
+              const res = await onRespond(environmentId, item.entry, decision);
+              if (!res.ok) setError(res.error);
+            } finally {
+              inFlightRef.current = false;
+              setResponding(false);
+            }
+          }}
+        />
+      </div>
+      {error !== null ? (
+        <p role="alert" className="mt-2 text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+export function ChildThreadApprovals({
+  threadRef,
+  devtoolsApprovals = [],
+  onRespondToDevtoolsApproval,
+}: {
+  threadRef: ScopedThreadRef | null;
+  devtoolsApprovals?: ReadonlyArray<ChildThreadDevtoolsApproval>;
+  onRespondToDevtoolsApproval?: ChildDevtoolsApprovalResponder;
+}) {
   const approvals = useAtomValue(childThreadApprovalsAtom(threadRef));
-  if (approvals.length === 0) return null;
+  const showDevtools = Boolean(
+    threadRef && onRespondToDevtoolsApproval && devtoolsApprovals.length > 0,
+  );
+  if (approvals.length === 0 && !showDevtools) return null;
   return (
     <div className="mb-2 flex max-h-80 flex-col gap-2 overflow-auto">
       {approvals.map((entry) => (
@@ -99,6 +184,16 @@ export function ChildThreadApprovals({ threadRef }: { threadRef: ScopedThreadRef
           entry={entry}
         />
       ))}
+      {showDevtools && threadRef && onRespondToDevtoolsApproval
+        ? devtoolsApprovals.map((item) => (
+            <ChildDevtoolsApproval
+              key={`devtools:${item.childThreadId}:${item.entry.requestId}`}
+              environmentId={threadRef.environmentId}
+              item={item}
+              onRespond={onRespondToDevtoolsApproval}
+            />
+          ))
+        : null}
     </div>
   );
 }

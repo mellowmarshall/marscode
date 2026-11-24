@@ -423,6 +423,10 @@
       "types": "./src/usageLimits.ts",
       "import": "./src/usageLimits.ts"
     },
+    "./usageLimitsHealth": {
+      "types": "./src/usageLimitsHealth.ts",
+      "import": "./src/usageLimitsHealth.ts"
+    },
     "./desktopAppControl": {
       "types": "./src/desktopAppControl.ts",
       "import": "./src/desktopAppControl.ts"
