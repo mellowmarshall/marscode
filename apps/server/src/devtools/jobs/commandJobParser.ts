@@ -5,17 +5,215 @@ import * as NodePath from "node:path";
 import { redactLogLine } from "./logFileGuard.ts";
 import { sanitizeJobText } from "./types.ts";
 
-const SHIP_QUEUE_CMD_RE =
-  /\bship-queue(?:\.sh)?\s+(?:watch|submit|wait|status|deploy|cancel)\b|\bcerno\s+ship-watch\b|\/\.?ship-queue\/jobs\/\d+/i;
+const SHIP_QUEUE_BINARIES = new Set(["ship-queue", "ship-queue.sh"]);
+const SHELL_WRAPPERS = new Set(["sh", "bash", "zsh", "dash"]);
+const SHELL_CONTROL_PREFIXES = new Set([
+  "!",
+  "if",
+  "then",
+  "elif",
+  "else",
+  "while",
+  "until",
+  "do",
+  "exec",
+  "nohup",
+  "time",
+  "command",
+  "builtin",
+]);
+const LOG_VIEWER_BINARIES = new Set(["tail", "cat", "head", "less", "more", "watch", "sed", "awk"]);
+const TIMEOUT_VALUE_FLAGS = new Set(["-k", "-s", "--kill-after", "--signal"]);
+const STDBUF_VALUE_FLAGS = new Set(["-i", "-o", "-e", "--input", "--output", "--error"]);
+const CERNO_VALUE_FLAGS = new Set([
+  "--log",
+  "--tee",
+  "--max-wait",
+  "--stall-timeout",
+  "--stall-sec",
+  "--cwd",
+  "--pid",
+  "-n",
+  "--lines",
+  "--interval",
+]);
+const SHIP_JOB_LOG_PATH_RE = /\/\.?ship-queue\/jobs\/\d+(?:\/|$)/iu;
+const ASSIGN_SHIP_SUBSHELL_RE =
+  /^[A-Za-z_][A-Za-z0-9_]*=\$\(\s*(?:[^\s/]*\/)*ship-queue(?:\.sh)?(?:\s|$|\))/iu;
 
-const SHIP_QUEUE_DESC_RE =
-  /\bship[- ]queue(?:\.sh)?\s+(?:job|watch|watcher|submit|deploy|status|#?\d+)\b|\bwatch(?:ing)?\s+(?:ship[- ]queue(?:\.sh)?|sq)\b|\bsq\s+(?:watch|job|submit|deploy|#?\d+)\b/i;
+const SHIP_QUEUE_DESC_START_RE = /^ship[- ]queue(?:\.sh)?\b/iu;
+const SHIP_QUEUE_DESC_PHRASE_RE =
+  /\bship[- ]queue(?:\.sh)?\s+(?:job|watch|watcher|monitor|submit|deploy|status|cancel|wait|logs?|#?\d+)\b|\b(?:watch(?:ing)?|monitor(?:ing)?|follow(?:ing)?|wait(?:ing)?\s+for)\s+(?:the\s+)?(?:ship[- ]queue(?:\.sh)?|sq)\b|\bsq\s+(?:watch|job|submit|deploy|wait|cancel|#?\d+)\b/iu;
 
-const SHIP_JOB_ID_CUE_RE = /\b(?:ship|queue|sq|watch(?:ing|er)?|job)\b/i;
-const SHIP_JOB_NUM_RE = /#?(\d{3,8})\b/g;
+const SHIP_JOB_ID_CUE_RE = /\b(?:ship|queue|sq|watch(?:ing|er)?|monitor(?:ing)?|job)\b/iu;
+const SHIP_JOB_NUM_RE = /#?(\d{3,8})\b/gu;
 
 const IMMEDIATE_WORKLOAD_RE =
   /\b(?:cerno\s+(?:watch|tail)|remote\.sh|blender|torchrun|accelerate\s+launch|deepspeed|train[_\w-]*\.py|eval[_\w-]*\.py|bench(?:mark)?[_\w-]*\.py|cargo\s+(?:test|build|clippy|nextest)|pytest|vitest|playwright|vp\s+(?:test|run\s+.*test)|pnpm\s+(?:test|build)|t3code-patch-nightly|docker\s+build)\b/i;
+
+function parseShellSegments(rawCommand: string): ReadonlyArray<ReadonlyArray<string>> {
+  const flat = rawCommand.replace(/\\\r?\n\s*/gu, " ");
+  const segments: Array<Array<string>> = [];
+  let currentSegment: Array<string> = [];
+  let currentToken = "";
+  let inToken = false;
+  let quote: "'" | '"' | null = null;
+  const pushToken = () => {
+    if (inToken) {
+      currentSegment.push(currentToken);
+      currentToken = "";
+      inToken = false;
+    }
+  };
+  const pushSegment = () => {
+    pushToken();
+    if (currentSegment.length > 0) {
+      segments.push(currentSegment);
+      currentSegment = [];
+    }
+  };
+  for (let i = 0; i < flat.length; i += 1) {
+    const ch = flat[i]!;
+    if (quote !== null) {
+      if (ch === "\\" && quote === '"' && i + 1 < flat.length) currentToken += flat[++i]!;
+      else if (ch === quote) quote = null;
+      else currentToken += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      inToken = true;
+    } else if (ch === "\\" && i + 1 < flat.length) {
+      currentToken += flat[++i]!;
+      inToken = true;
+    } else if (ch === "\n" || ch === "\r" || ch === ";") {
+      pushSegment();
+    } else if (ch === "&" && flat[i + 1] === "&") {
+      pushSegment();
+      i += 1;
+    } else if (ch === "|") {
+      pushSegment();
+      if (flat[i + 1] === "|") i += 1;
+    } else if (/\s/u.test(ch)) {
+      pushToken();
+    } else {
+      currentToken += ch;
+      inToken = true;
+    }
+  }
+  pushSegment();
+  return segments;
+}
+
+function tokenBasename(token: string): string {
+  const trimmed = token.replace(/\/+$/u, "");
+  return (trimmed.split("/").pop() ?? "").toLowerCase();
+}
+
+function skipPrefixedFlags(
+  tokens: ReadonlyArray<string>,
+  startIndex: number,
+  valueFlags: ReadonlySet<string>,
+): number {
+  let idx = startIndex;
+  while (idx < tokens.length && tokens[idx]!.startsWith("-")) {
+    const flag = tokens[idx]!;
+    if (flag === "--") {
+      idx += 1;
+      break;
+    }
+    idx += !flag.includes("=") && valueFlags.has(flag) ? 2 : 1;
+  }
+  return idx;
+}
+
+function stripShellWrappers(tokens: ReadonlyArray<string>): ReadonlyArray<string> {
+  let rest = tokens;
+  while (rest.length > 0) {
+    let idx = 0;
+    while (idx < rest.length) {
+      const tok = rest[idx]!;
+      if (tok === "env" && idx + 1 < rest.length) {
+        idx += 1;
+        while (idx < rest.length && rest[idx]!.startsWith("-")) idx += 1;
+        continue;
+      }
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(tok)) {
+        idx += 1;
+        continue;
+      }
+      break;
+    }
+    const afterEnv = rest.slice(idx);
+    if (afterEnv.length === 0) return afterEnv;
+    const head = tokenBasename(afterEnv[0]!);
+    if (SHELL_CONTROL_PREFIXES.has(head)) {
+      rest = afterEnv.slice(1);
+    } else if (head === "timeout") {
+      const next = skipPrefixedFlags(afterEnv, 1, TIMEOUT_VALUE_FLAGS);
+      rest = afterEnv.slice(next < afterEnv.length ? next + 1 : next);
+    } else if (head === "stdbuf") {
+      rest = afterEnv.slice(skipPrefixedFlags(afterEnv, 1, STDBUF_VALUE_FLAGS));
+    } else {
+      return afterEnv;
+    }
+  }
+  return rest;
+}
+
+function segmentRunsShipQueue(segment: ReadonlyArray<string>, depth: number): boolean {
+  if (depth > 3) return false;
+  for (const tok of segment) {
+    if (tok === "export" || tok === "local" || tok === "readonly") continue;
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(tok)) {
+      if (ASSIGN_SHIP_SUBSHELL_RE.test(tok)) return true;
+      continue;
+    }
+    break;
+  }
+  const rest = stripShellWrappers(segment);
+  if (rest.length === 0) return false;
+  const head = tokenBasename(rest[0]!);
+  if (SHIP_QUEUE_BINARIES.has(head)) return true;
+  if (head === "cerno") {
+    const sub = rest[1]?.toLowerCase();
+    if (sub === "ship-watch") return true;
+    if (sub === "tail" && rest.slice(2).some((tok) => SHIP_JOB_LOG_PATH_RE.test(tok))) return true;
+    if (sub === "watch") {
+      const dashDash = rest.indexOf("--", 2);
+      const next = dashDash >= 0 ? dashDash + 1 : skipPrefixedFlags(rest, 2, CERNO_VALUE_FLAGS);
+      return next < rest.length && segmentRunsShipQueue(rest.slice(next), depth + 1);
+    }
+    return false;
+  }
+  if (SHELL_WRAPPERS.has(head)) {
+    for (let i = 1; i < rest.length; i += 1) {
+      const tok = rest[i]!;
+      if (/^-[a-zA-Z]*c[a-zA-Z]*$/u.test(tok)) {
+        return i + 1 < rest.length && isShipQueueCommandInternal(rest[i + 1]!, depth + 1);
+      }
+      if (tok === "-o" || tok === "+o") {
+        i += 1;
+        continue;
+      }
+      if (tok.startsWith("-") || tok.startsWith("+")) continue;
+      return SHIP_QUEUE_BINARIES.has(tokenBasename(tok));
+    }
+    return false;
+  }
+  return LOG_VIEWER_BINARIES.has(head) && rest.slice(1).some((t) => SHIP_JOB_LOG_PATH_RE.test(t));
+}
+
+function isShipQueueCommandInternal(rawCommand: string, depth: number): boolean {
+  if (depth > 3 || !rawCommand.trim()) return false;
+  return parseShellSegments(rawCommand).some((segment) => segmentRunsShipQueue(segment, depth));
+}
+
+/** Returns true when a shell command runs, wraps, or tails a `ship-queue` job. */
+function isShipQueueCommand(rawCommand: string): boolean {
+  if (!rawCommand) return false;
+  return isShipQueueCommandInternal(rawCommand, 0);
+}
 
 export function classifyCommandTracking(
   command: string,
@@ -24,14 +222,17 @@ export function classifyCommandTracking(
 ): "skip" | "immediate" | "debounced" {
   const trimmedCmd = command.trim();
   if (trimmedCmd) {
-    if (SHIP_QUEUE_CMD_RE.test(trimmedCmd)) return "skip";
+    if (isShipQueueCommand(trimmedCmd)) return "skip";
     if (IMMEDIATE_WORKLOAD_RE.test(trimmedCmd)) return "immediate";
     return "debounced";
   }
   if (description) {
-    if (SHIP_QUEUE_DESC_RE.test(description)) return "skip";
-    if (hasShipJobId && SHIP_JOB_ID_CUE_RE.test(description)) {
-      for (const m of description.matchAll(SHIP_JOB_NUM_RE)) {
+    const trimmedDesc = description.trim();
+    if (SHIP_QUEUE_DESC_START_RE.test(trimmedDesc) || SHIP_QUEUE_DESC_PHRASE_RE.test(trimmedDesc)) {
+      return "skip";
+    }
+    if (hasShipJobId && SHIP_JOB_ID_CUE_RE.test(trimmedDesc)) {
+      for (const m of trimmedDesc.matchAll(SHIP_JOB_NUM_RE)) {
         if (m[1] && hasShipJobId(m[1])) return "skip";
       }
     }

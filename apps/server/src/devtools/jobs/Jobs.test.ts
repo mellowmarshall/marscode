@@ -431,6 +431,40 @@ describe("commandJobParser & logFileGuard", () => {
     expect(classifyCommandTracking("ship-queue.sh submit /data/wt feat 'title' body.md")).toBe(
       "skip",
     );
+    expect(classifyCommandTracking("ship-queue logs 10962")).toBe("skip");
+    expect(classifyCommandTracking("ship-queue list --open")).toBe("skip");
+    expect(classifyCommandTracking("ship-queue deps decide r1 approve")).toBe("skip");
+    expect(classifyCommandTracking("/home/dev/.local/bin/ship-queue --root /data status")).toBe(
+      "skip",
+    );
+    expect(
+      classifyCommandTracking("nohup bash -lc 'ship-queue retry 9102 && ship-queue watch 9102'"),
+    ).toBe("skip");
+    expect(classifyCommandTracking("JOB=$(ship-queue submit /wt branch title body.md)")).toBe(
+      "skip",
+    );
+    expect(
+      classifyCommandTracking("cerno watch --monitor --log /tmp/sq.log -- ship-queue watch 9102"),
+    ).toBe("skip");
+    expect(
+      classifyCommandTracking("cerno tail --monitor -F /data/Dev/.ship-queue/jobs/9102/job.log"),
+    ).toBe("skip");
+    expect(classifyCommandTracking("tail -n 50 /data/Dev/.ship-queue/jobs/9102/job.log")).toBe(
+      "skip",
+    );
+    expect(classifyCommandTracking("", "ship-queue watch")).toBe("skip");
+    expect(classifyCommandTracking("", "Watch job 9102", (id) => id === "9102")).toBe("skip");
+    expect(
+      classifyCommandTracking(
+        "cerno tail --monitor -F --pid 2117164 /data/logs/stage2_v3_wide6l_ep6_resume.log",
+      ),
+    ).toBe("immediate");
+    expect(
+      extractCommandLogPath(
+        "cerno tail --monitor -F --pid 2117164 /data/logs/stage2_v3_wide6l_ep6_resume.log",
+        null,
+      ),
+    ).toBe("/data/logs/stage2_v3_wide6l_ep6_resume.log");
     expect(classifyCommandTracking("cerno watch --monitor --log /tmp/a.log -- cargo test")).toBe(
       "immediate",
     );
