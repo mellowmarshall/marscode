@@ -656,13 +656,23 @@ def exe_id(p):
         return None
     return (st.st_dev, st.st_ino)
 
-def is_t3_server_binary(p, server_exe):
+def is_t3_process_launcher(p, server_exe):
     try:
         if os.stat(f"/proc/{p}").st_uid != os.getuid():
             return False
+        if exe_id(p) != server_exe:
+            return False
+        with open(f"/proc/{p}/cmdline", "rb") as fh:
+            argv = [a.decode("utf-8", errors="replace") for a in fh.read().split(b"\\0") if a]
     except OSError:
         return False
-    return exe_id(p) == server_exe
+    if len(argv) == 2 and argv[1] == "__process-launcher":
+        return True
+    if len(argv) == 2 and os.path.basename(argv[1]) == "process-launcher.mjs":
+        return True
+    if len(argv) == 3 and argv[1] == "--experimental-strip-types" and os.path.basename(argv[2]) == "process-launcher.ts":
+        return True
+    return False
 
 def resolve_pid(p):
     if p == srv:
@@ -682,7 +692,7 @@ def resolve_pid(p):
         return ""
     top = len(chain) - 1
     server_exe = exe_id(srv)
-    while top > 0 and server_exe is not None and not env_tid(chain[top]) and is_t3_server_binary(chain[top], server_exe):
+    if top > 0 and server_exe is not None and not env_tid(chain[top]) and is_t3_process_launcher(chain[top], server_exe):
         top -= 1
     tid = env_tid(chain[top])
     if tid:

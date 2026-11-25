@@ -591,7 +591,7 @@ print(json.dumps({
     }
   });
 
-  it("steps past untagged T3 server-binary helpers (process-launcher.mjs) when resolving peer thread_id on Linux", async () => {
+  it("steps past one untagged T3 process-launcher helper and rejects generic or chained helpers on Linux", async () => {
     if (!NodeFS.existsSync("/proc/self")) return;
     const dir = mkTempDir("t3-guard-launcher-");
     const socketPath = NodePath.join(dir, "t3-guard-grant.sock");
@@ -612,44 +612,60 @@ while b"\\n" not in buf:
 s.close()
 sys.stdout.write(buf.decode("utf-8").splitlines()[0])
 `;
-      const runViaHelper = (
+      const clientScriptPath = NodePath.join(dir, "client.py");
+      NodeFS.writeFileSync(clientScriptPath, clientPy, "utf8");
+      const launcherMjs = NodePath.join(dir, "process-launcher.mjs");
+      const otherMjs = NodePath.join(dir, "other-helper.mjs");
+      const runnerBody = `
+import cp from "node:child_process";
+const mode = process.env.TEST_HOP_MODE || "direct";
+const pyBin = process.env.TEST_PY_BIN;
+const clientPath = process.env.TEST_CLIENT_PATH;
+const sock = process.env.TEST_SOCK;
+const payload = process.env.TEST_PAYLOAD;
+const tid = process.env.TEST_CHILD_TID;
+if (mode === "direct") {
+  const out = cp.execFileSync(pyBin, ["-I", clientPath, sock, payload], {
+    env: { ...process.env, T3CODE_THREAD_ID: tid },
+    encoding: "utf8",
+  });
+  process.stdout.write(out);
+} else if (mode === "double-launcher") {
+  const innerEnv = { ...process.env, TEST_HOP_MODE: "direct" };
+  delete innerEnv.T3CODE_THREAD_ID;
+  const out = cp.execFileSync(process.execPath, [process.argv[1]], { env: innerEnv, encoding: "utf8" });
+  process.stdout.write(out);
+} else {
+  const innerEnv = { ...process.env };
+  delete innerEnv.T3CODE_THREAD_ID;
+  const hopPy = "import os, subprocess, sys; env = dict(os.environ, T3CODE_THREAD_ID=sys.argv[4]); sys.stdout.write(subprocess.check_output([sys.executable, '-I', sys.argv[1], sys.argv[2], sys.argv[3]], env=env, text=True))";
+  const out = cp.execFileSync(pyBin, ["-I", "-c", hopPy, clientPath, sock, payload, tid], { env: innerEnv, encoding: "utf8" });
+  process.stdout.write(out);
+}
+`;
+      NodeFS.writeFileSync(launcherMjs, runnerBody, "utf8");
+      NodeFS.writeFileSync(otherMjs, runnerBody, "utf8");
+
+      const runViaScript = (
+        scriptPath: string,
+        mode: "direct" | "double-launcher" | "py-hop",
         payload: Record<string, unknown>,
         grandchildThreadId: string,
-        extraUntaggedHop: boolean,
       ): Promise<Record<string, unknown>> => {
-        const helperScript = extraUntaggedHop
-          ? `
-const cp = require("node:child_process");
-const [pyBin, clientPy, sock, payload, tid] = process.argv.slice(1);
-const innerEnv = { ...process.env };
-delete innerEnv.T3CODE_THREAD_ID;
-const hopPy = "import os, subprocess, sys; env = dict(os.environ, T3CODE_THREAD_ID=sys.argv[4]); sys.stdout.write(subprocess.check_output([sys.executable, '-I', '-c', sys.argv[1], sys.argv[2], sys.argv[3]], env=env, text=True))";
-const out = cp.execFileSync(pyBin, ["-I", "-c", hopPy, clientPy, sock, payload, tid], { env: innerEnv, encoding: "utf8" });
-process.stdout.write(out);
-`
-          : `
-const cp = require("node:child_process");
-const [pyBin, clientPy, sock, payload, tid] = process.argv.slice(1);
-const out = cp.execFileSync(pyBin, ["-I", "-c", clientPy, sock, payload], {
-  env: { ...process.env, T3CODE_THREAD_ID: tid },
-  encoding: "utf8",
-});
-process.stdout.write(out);
-`;
-        const helperEnv: NodeJS.ProcessEnv = { ...process.env };
+        const helperEnv: NodeJS.ProcessEnv = {
+          ...process.env,
+          TEST_HOP_MODE: mode,
+          TEST_PY_BIN: pyBin,
+          TEST_CLIENT_PATH: clientScriptPath,
+          TEST_SOCK: socketPath,
+          TEST_PAYLOAD: JSON.stringify(payload),
+          TEST_CHILD_TID: grandchildThreadId,
+        };
         delete helperEnv.T3CODE_THREAD_ID;
         return new Promise((resolve, reject) => {
           NodeChildProcess.execFile(
             process.execPath,
-            [
-              "-e",
-              helperScript,
-              pyBin,
-              clientPy,
-              socketPath,
-              JSON.stringify(payload),
-              grandchildThreadId,
-            ],
+            [scriptPath],
             { env: helperEnv, timeout: 10_000 },
             (err, stdout) => {
               if (err) {
@@ -662,8 +678,11 @@ process.stdout.write(out);
         });
       };
 
+      // 1. Single untagged process-launcher.mjs direct child of server -> allowed.
       const addedPromise = waitForBrokerEvent(broker, (e) => e.type === "pending_added");
-      const okResp = await runViaHelper(
+      const okResp = await runViaScript(
+        launcherMjs,
+        "direct",
         {
           v: 1,
           op: "request",
@@ -675,7 +694,6 @@ process.stdout.write(out);
           refusal: "change playbook/PLAYBOOK.md",
         },
         "thread-via-launcher",
-        false,
       );
       expect(okResp.ok).toBe(true);
       expect(okResp.queued).toBe(true);
@@ -683,8 +701,48 @@ process.stdout.write(out);
       if (added.type !== "pending_added") throw new Error("expected pending_added");
       expect(added.request.threadId).toBe("thread-via-launcher");
 
-      // Must still fail closed if an untagged non-server binary sits between the helper and the tagged process.
-      const spoofResp = await runViaHelper(
+      // 2. Untagged non-launcher script running the same server binary inode -> rejected.
+      const otherHelperResp = await runViaScript(
+        otherMjs,
+        "direct",
+        {
+          v: 1,
+          op: "request",
+          wait: false,
+          guard: "playbook",
+          command: ["playbook", "amend", "playbook/PLAYBOOK.md"],
+          cwd: dir,
+          thread_id: "thread-other-helper",
+          refusal: "change playbook/PLAYBOOK.md",
+        },
+        "thread-other-helper",
+      );
+      expect(otherHelperResp.ok).toBe(false);
+      expect(otherHelperResp.error).toBe("thread_id does not match caller process");
+
+      // 3. Chained double process-launcher.mjs hops -> rejected (at most one hop allowed).
+      const doubleHopResp = await runViaScript(
+        launcherMjs,
+        "double-launcher",
+        {
+          v: 1,
+          op: "request",
+          wait: false,
+          guard: "playbook",
+          command: ["playbook", "amend", "playbook/PLAYBOOK.md"],
+          cwd: dir,
+          thread_id: "thread-double-hop",
+          refusal: "change playbook/PLAYBOOK.md",
+        },
+        "thread-double-hop",
+      );
+      expect(doubleHopResp.ok).toBe(false);
+      expect(doubleHopResp.error).toBe("thread_id does not match caller process");
+
+      // 4. Untagged non-server binary sitting between launcher and tagged process -> rejected.
+      const spoofResp = await runViaScript(
+        launcherMjs,
+        "py-hop",
         {
           v: 1,
           op: "request",
@@ -696,7 +754,6 @@ process.stdout.write(out);
           refusal: "change playbook/PLAYBOOK.md",
         },
         "thread-spoofed",
-        true,
       );
       expect(spoofResp.ok).toBe(false);
       expect(spoofResp.error).toBe("thread_id does not match caller process");
