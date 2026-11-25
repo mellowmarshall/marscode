@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 
 import {
   CERNO_SAFE_READ_FLAGS,
+  HAS_LINUX_PROC,
   isSensitiveCernoLogPath,
   readLinuxProcStartTicksPromise,
   readLinuxProcThreadIdPromise,
@@ -161,7 +162,7 @@ function readLogTailPromise(
     const handle = await NodeFSP.open(logPath, SAFE_READ_FLAGS);
     try {
       const stat = await handle.stat();
-      if (!stat.isFile() || stat.size <= 0) return undefined;
+      if (!stat.isFile() || stat.size <= 0 || stat.nlink > 1) return undefined;
       if (uid !== null && stat.uid !== uid) return undefined;
       const length = Math.min(stat.size, maxBytes);
       const offset = stat.size - length;
@@ -263,9 +264,13 @@ export const layerWithOptions = (options: CernoRunServiceOptions = {}) =>
         const raw = yield* decodeRawSnapshotJson(rawText).pipe(Effect.orElseSucceed(() => null));
         if (!raw || raw.schema_version !== 1) return null;
         if (!isPidAlive(raw.pid)) return null;
-        if (raw.proc_start_ticks !== undefined && raw.proc_start_ticks > 0) {
+        const checkStartTicks =
+          raw.proc_start_ticks !== undefined &&
+          raw.proc_start_ticks > 0 &&
+          (options.readProcStartTicks !== undefined || HAS_LINUX_PROC);
+        if (checkStartTicks) {
           const liveTicks = yield* Effect.promise(() => readProcStartTicks(Math.trunc(raw.pid)));
-          if (liveTicks === null || liveTicks !== Math.trunc(raw.proc_start_ticks)) {
+          if (liveTicks === null || liveTicks !== Math.trunc(raw.proc_start_ticks!)) {
             return null;
           }
         }
@@ -295,12 +300,6 @@ export const layerWithOptions = (options: CernoRunServiceOptions = {}) =>
             )
           : undefined;
 
-        const canonicalLogPath = resolvedLogPath
-          ? yield* Effect.promise(() =>
-              NodeFSP.realpath(resolvedLogPath).catch(() => resolvedLogPath),
-            )
-          : null;
-
         const pidInt = Math.trunc(raw.pid);
         const childPidInt = Math.max(0, Math.trunc(raw.child_pid));
         let threadId = yield* Effect.promise(() => readProcThreadId(pidInt));
@@ -319,7 +318,7 @@ export const layerWithOptions = (options: CernoRunServiceOptions = {}) =>
           engine: clampText(raw.engine, 64),
           cwd: clampText(raw.cwd, 400),
           command: clampText(raw.command, MAX_COMMAND_CHARS),
-          logPath: canonicalLogPath ? clampText(canonicalLogPath, 400) : null,
+          logPath: resolvedLogPath ? clampText(resolvedLogPath, 400) : null,
           state: raw.state,
           confidence: raw.confidence,
           margin: raw.margin,

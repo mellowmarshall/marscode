@@ -3,6 +3,8 @@ import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Linux /proc stat and environ inspection requires direct file descriptor reads.
 import * as NodeFSP from "node:fs/promises";
 
+export const HAS_LINUX_PROC = NodeFS.existsSync("/proc/self");
+
 export const CERNO_SAFE_READ_FLAGS =
   NodeFS.constants.O_RDONLY |
   (NodeFS.constants.O_NOFOLLOW ?? 0) |
@@ -21,6 +23,9 @@ const SENSITIVE_LOG_SEGMENTS = [
   "/.config/gh/",
   "/.config/gcloud/",
   "/.claude/",
+  "/.gemini/",
+  "/.cargo/",
+  "/.terraform.d/",
   "/.docker/",
   "/.kube/",
   "/.system_generated/",
@@ -37,14 +42,23 @@ const SENSITIVE_LOG_BASENAMES = new Set([
   ".pgpass",
   ".my.cnf",
   ".env",
+  ".envrc",
   ".env.local",
   ".env.production",
+  ".vault-token",
+  ".bash_history",
+  ".zsh_history",
   "id_rsa",
   "id_ed25519",
   "kubeconfig",
   "auth.json",
+  "oauth_creds.json",
   "credentials",
   "credentials.json",
+  "credentials.toml",
+  "credentials.tfrc.json",
+  "cookies",
+  "login data",
   "server-owner.sqlite",
   "state.sqlite",
   "statev2.sqlite",

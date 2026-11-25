@@ -316,6 +316,21 @@ describe("cernoRunPresentation", () => {
     expect(standalone.tasks[0]?.taskId).toBe("cerno-run:301");
     expect(standalone.matchedByTaskId.get("cerno-run:301")?.pid).toBe(301);
 
+    // Subdirectory `cd sub && cerno watch --log run.log` matches run.logPath using run.cwd even without thread cwd
+    const subRun = makeRun({
+      pid: 304,
+      cwd: "/repo/wt-a/sub",
+      command: "pytest",
+      logPath: "/repo/wt-a/sub/run.log",
+      threadId: threadA,
+    });
+    const subMatch = matchCernoRunsToTasks(
+      [{ taskId: "task-sub", command: "cd sub && cerno watch --log run.log -- pytest" }],
+      [subRun],
+      "/repo/wt-a",
+    );
+    expect(subMatch.get("task-sub")?.pid).toBe(304);
+
     // matchCernoRunsToTasks matches synthetic cerno-run:<pid> directly (used by BackgroundWorkInspectorDialog)
     const inspectorMatch = matchCernoRunsToTasks(
       standalone.tasks.map((t) => ({ taskId: t.taskId, command: t.command })),

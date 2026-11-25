@@ -284,14 +284,17 @@ export function matchCernoRunsToTasks(
     const rawLogPath = extractCernoLogPath(task.command);
     if (!rawLogPath) continue;
     const resolved = resolveMaybeRelativeLogPath(rawLogPath, cwd);
-    const candidates = runs.filter(
-      (run) =>
-        !usedPids.has(run.pid) &&
-        run.logPath !== null &&
-        (run.logPath === rawLogPath ||
-          run.logPath === resolved ||
-          resolveMaybeRelativeLogPath(run.logPath, run.cwd) === resolved),
-    );
+    const candidates = runs.filter((run) => {
+      if (usedPids.has(run.pid) || run.logPath === null) return false;
+      const runResolved = resolveMaybeRelativeLogPath(run.logPath, run.cwd);
+      const taskResolvedWithRunCwd = resolveMaybeRelativeLogPath(rawLogPath, run.cwd);
+      return (
+        run.logPath === rawLogPath ||
+        run.logPath === resolved ||
+        runResolved === resolved ||
+        runResolved === taskResolvedWithRunCwd
+      );
+    });
     if (candidates.length === 0) continue;
     const picked = (cwd ? candidates.find((run) => run.cwd === cwd) : undefined) ?? candidates[0]!;
     result.set(task.taskId, picked);
