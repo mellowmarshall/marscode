@@ -53,6 +53,12 @@ import * as DevtoolsErrors from "./DevtoolsErrors.ts";
 import * as DevtoolsEventMux from "./DevtoolsEventMux.ts";
 import * as DevtoolsFleetConfig from "./DevtoolsFleetConfig.ts";
 import * as DevtoolsFleetConfigCache from "./DevtoolsFleetConfigCache.ts";
+import { handleNativeFleetRequest } from "./fleet/FleetRoutes.ts";
+import type { NativeFleetService } from "./fleet/NativeFleetService.ts";
+import {
+  makeNativeFleetFromContext,
+  shouldUseLegacyDevdeckProxy,
+} from "./fleet/NativeFleetWiring.ts";
 import { GuardGrantBroker, type GuardBrokerEvent } from "./GuardGrantBroker.ts";
 import * as JobRegistry from "./jobs/JobRegistry.ts";
 import { normalizeExceptions, readPlaybookDeclaration } from "./PlaybookDeclaration.ts";
@@ -149,7 +155,11 @@ function requiredScopesForJsonRoute(
   }
   if (
     method === "POST" &&
-    (/^\/jobs\/[^/?#]+\/cancel$/.test(subPath) || subPath === "/devdeck/start")
+    (/^\/jobs\/[^/?#]+\/cancel$/.test(subPath) ||
+      subPath === "/devdeck/start" ||
+      /^\/devdeck\/sessions\/[^/?#]+\/close$/.test(subPath) ||
+      /^\/devdeck\/servers\/[^/?#]+(?:\/[^/?#]+)?\/stop$/.test(subPath) ||
+      /^\/devdeck\/hosts\/[^/?#]+\/(?:provision|ci)$/.test(subPath))
   ) {
     return {
       scopes: [AuthTerminalOperateScope],
@@ -162,6 +172,7 @@ function requiredScopesForJsonRoute(
   if (
     subPath === "/capabilities" ||
     subPath === "/config/resolved" ||
+    subPath === "/fleet/self" ||
     subPath === "/jobs" ||
     subPath === "/ship-queue/status" ||
     subPath === "/ship-queue/deps"
@@ -409,6 +420,7 @@ export interface DevtoolsDeps {
   readonly broker?: GuardGrantBroker | undefined;
   readonly startBroker?: boolean | undefined;
   readonly devdeckTarget?: DevdeckProxy.DevdeckTarget | undefined;
+  readonly nativeFleet?: NativeFleetService | undefined;
 }
 
 function shouldAutoStartBroker(
@@ -436,6 +448,7 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
   devdeckTarget?: DevdeckProxy.DevdeckTarget,
   sseLimiter: SseLimiter = createSseLimiter(),
   shipQueueRootOverride?: string,
+  nativeFleet?: NativeFleetService,
 ) {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const url = requestUrl(request);
@@ -506,6 +519,7 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
             includeCmdline,
             devdeckApiPath,
             devdeckTarget,
+            nativeFleet,
           }),
         invalidated,
         true,
@@ -552,9 +566,13 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
       if (!DevdeckProxy.isAllowedDevdeckPath("GET", devdeckApiPath)) {
         return jsonResponse({ error: "Invalid DevDeck event parameters" }, 400);
       }
+      const useLegacyProxy = shouldUseLegacyDevdeckProxy(devdeckTarget);
       return webStreamToSseResponse(
         sseLimiter.devdeck,
-        (signal) => DevdeckProxy.createDevdeckEventStream(signal, devdeckApiPath, devdeckTarget),
+        (signal) =>
+          !useLegacyProxy && nativeFleet
+            ? nativeFleet.createEventStream(signal, devdeckApiPath)
+            : DevdeckProxy.createDevdeckEventStream(signal, devdeckApiPath, devdeckTarget),
         invalidated,
       );
     }
@@ -594,11 +612,15 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
       canOperateTerminal &&
       session.scopes.includes(AuthAccessWriteScope) &&
       !isPeerOrMcpSubject(session.subject);
-    // Probe live DevDeck health (supports Unix socket, stale-socket fallback, and standard TCP 127.0.0.1:3210).
-    const devdeckHealth = canReadDiagnostics
-      ? yield* Effect.promise(() => DevdeckProxy.probeDevdeckHealth(devdeckTarget))
-      : { reachable: false, passiveSupported: false };
-    const tools = CliRunners.discoverTools(devdeckHealth.reachable);
+    const useLegacyProxy = shouldUseLegacyDevdeckProxy(devdeckTarget);
+    const useNativeFleet = !useLegacyProxy && Boolean(nativeFleet);
+    const devdeckHealth = useNativeFleet
+      ? { reachable: true, passiveSupported: true }
+      : canReadDiagnostics
+        ? yield* Effect.promise(() => DevdeckProxy.probeDevdeckHealth(devdeckTarget))
+        : { reachable: false, passiveSupported: false };
+    const discovered = CliRunners.discoverTools(devdeckHealth.reachable);
+    const tools = useNativeFleet ? { ...discovered, devdeck: true } : discovered;
     const services = DevtoolsErrors.buildServiceHealth({
       devdeckInstalled: tools.devdeck,
       devdeckReachable: devdeckHealth.reachable,
@@ -617,10 +639,19 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
       canOperateTerminal,
       devdeckReachable: devdeckHealth.reachable,
       devdeckPassiveSupported: devdeckHealth.passiveSupported,
+      nativeFleet: useNativeFleet,
       multiplexedEvents: true,
       tools,
       services,
     });
+  }
+
+  if (method === "GET" && subPath === "/fleet/self") {
+    if (!nativeFleet) {
+      return jsonResponse({ error: "Native fleet telemetry unavailable" }, 503);
+    }
+    const selfState = yield* Effect.promise(() => nativeFleet.readFreshSelfNodeState());
+    return jsonResponse(selfState);
   }
 
   if (method === "GET" && subPath === "/guards/pending") {
@@ -720,6 +751,10 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
   }
 
   if (method === "POST" && subPath === "/devdeck/start") {
+    const useLegacyProxy = shouldUseLegacyDevdeckProxy(devdeckTarget);
+    if (!useLegacyProxy && nativeFleet) {
+      return jsonResponse({ ok: true, reachable: true, native: true });
+    }
     const startRes = yield* Effect.promise(() =>
       CliRunners.startDevdeckService(async () => {
         DevdeckProxy.invalidateDevdeckProbeCache();
@@ -748,10 +783,19 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
       return jsonResponse({ error: "DevDeck route not allowed" }, 404);
     }
     let bodyText: string | undefined;
+    let parsedBody: Record<string, unknown> | undefined;
     if (method === "POST") {
       const parsed = yield* readJsonBody;
       if (!parsed.ok) return jsonResponse({ error: parsed.error }, parsed.status);
       bodyText = parsed.raw || undefined;
+      parsedBody = parsed.value;
+    }
+    const useLegacyProxy = shouldUseLegacyDevdeckProxy(devdeckTarget);
+    if (!useLegacyProxy && nativeFleet) {
+      const nativeRes = yield* Effect.promise(() =>
+        handleNativeFleetRequest(nativeFleet, method, devdeckApiPath, parsedBody),
+      );
+      return jsonResponse(nativeRes.body, nativeRes.status);
     }
     const proxied = yield* Effect.promise((signal) =>
       DevdeckProxy.proxyDevdeckRequest({
@@ -1465,6 +1509,10 @@ export function makeLayer(deps: DevtoolsDeps = {}) {
       const jobRegistry = yield* JobRegistry.JobRegistry;
       const sseLimiter = createSseLimiter();
       const shouldStart = deps.startBroker ?? shouldAutoStartBroker(pathSvc, serverConfig);
+      const nativeFleet = yield* makeNativeFleetFromContext({
+        override: deps.nativeFleet,
+        enableBackground: shouldStart,
+      });
 
       if (shouldStart) {
         DevtoolsFleetConfigCache.warmFleetConfigCache();
@@ -1526,7 +1574,14 @@ export function makeLayer(deps: DevtoolsDeps = {}) {
       return HttpRouter.add(
         "*",
         `${DEVTOOLS_ROUTE_PREFIX}/*`,
-        makeHandler(broker, jobRegistry, deps.devdeckTarget, sseLimiter).pipe(
+        makeHandler(
+          broker,
+          jobRegistry,
+          deps.devdeckTarget,
+          sseLimiter,
+          undefined,
+          nativeFleet,
+        ).pipe(
           Effect.catchDefect((defect) =>
             Effect.logError("DevtoolsHttp unhandled defect", defect).pipe(
               Effect.as(

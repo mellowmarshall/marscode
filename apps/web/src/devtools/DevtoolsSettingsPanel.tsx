@@ -1156,14 +1156,14 @@ function DevtoolsSettingsPanelInner() {
           <SettingsRow
             {...searchableSetting("devtools-devdeck-endpoint")}
             description={gt(
-              "Optional Unix socket path or loopback host:port (leave blank to auto-detect Unix socket or 127.0.0.1:3210).",
+              "Optional legacy DevDeck daemon override (Unix socket path or loopback host:port). Leave blank to use T3's built-in native fleet telemetry.",
             )}
             control={
               <Input
                 type="text"
                 size="sm"
                 className="w-full sm:w-64"
-                placeholder={gt("Auto-detect")}
+                placeholder={gt("Built-in native (default)")}
                 value={draft.devdeck.endpoint_override}
                 onChange={(e) =>
                   setDraft({

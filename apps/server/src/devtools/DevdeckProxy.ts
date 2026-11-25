@@ -75,6 +75,10 @@ export function setDevdeckEndpointOverride(raw: string): void {
   invalidateDevdeckProbeCache();
 }
 
+export function hasDevdeckEndpointOverride(): boolean {
+  return endpointOverrideRaw.length > 0;
+}
+
 function targetCacheKey(target: DevdeckTarget): string {
   return target.kind === "unix"
     ? `unix:${target.socketPath ?? ""}`

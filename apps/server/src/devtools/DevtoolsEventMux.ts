@@ -5,6 +5,8 @@
  */
 import * as CliRunners from "./CliRunners.ts";
 import * as DevdeckProxy from "./DevdeckProxy.ts";
+import type { NativeFleetService } from "./fleet/NativeFleetService.ts";
+import { shouldUseLegacyDevdeckProxy } from "./fleet/NativeFleetWiring.ts";
 import type { GuardGrantBroker } from "./GuardGrantBroker.ts";
 import type * as JobRegistry from "./jobs/JobRegistry.ts";
 
@@ -58,6 +60,7 @@ export interface CreateMuxStreamOptions {
   readonly includeCmdline: boolean;
   readonly devdeckApiPath: string;
   readonly devdeckTarget?: DevdeckProxy.DevdeckTarget | undefined;
+  readonly nativeFleet?: NativeFleetService | undefined;
 }
 
 export function createMultiplexedEventStream(
@@ -189,13 +192,16 @@ export function createMultiplexedEventStream(
         }
 
         if (!innerCtrl.signal.aborted && options.topics.has("devdeck")) {
+          const useProxy = shouldUseLegacyDevdeckProxy(options.devdeckTarget);
           pipeTopic(
             "devdeck",
-            DevdeckProxy.createDevdeckEventStream(
-              innerCtrl.signal,
-              options.devdeckApiPath,
-              options.devdeckTarget,
-            ),
+            !useProxy && options.nativeFleet
+              ? options.nativeFleet.createEventStream(innerCtrl.signal, options.devdeckApiPath)
+              : DevdeckProxy.createDevdeckEventStream(
+                  innerCtrl.signal,
+                  options.devdeckApiPath,
+                  options.devdeckTarget,
+                ),
           );
         }
 

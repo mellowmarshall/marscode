@@ -92,8 +92,8 @@ export function FleetOfflineBanner({
       detail={
         devdeckError && canStartDevdeck ? (
           <T>
-            Host telemetry requires devdeck.service. Start it to restore live CPU, GPU, and remote
-            node metrics.
+            The configured legacy DevDeck override is offline. Start devdeck.service or clear the
+            override in DevTools Settings to use T3 native fleet telemetry.
           </T>
         ) : undefined
       }
