@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt, PositiveInt } from "./baseSchemas.ts";
+import { NonNegativeInt, PositiveInt, ThreadId } from "./baseSchemas.ts";
 
 export const CernoRunState = Schema.Literals([
   "RUNNING",
@@ -77,6 +77,7 @@ export const CernoLiveRun = Schema.Struct({
   alert: Schema.NullOr(Schema.String),
   tail: Schema.String,
   logTail: Schema.optionalKey(Schema.String),
+  threadId: Schema.optionalKey(ThreadId),
 });
 export type CernoLiveRun = typeof CernoLiveRun.Type;
 

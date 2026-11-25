@@ -1,5 +1,3 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect FileSystem lacks O_NOFOLLOW|O_NONBLOCK open flags.
-import * as NodeFS from "node:fs";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect FileSystem lacks fstat ownership checks and bounded offset reads.
 import * as NodeFSP from "node:fs/promises";
 import {
@@ -19,6 +17,13 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import {
+  CERNO_SAFE_READ_FLAGS,
+  isSensitiveCernoLogPath,
+  readLinuxProcStartTicksPromise,
+  readLinuxProcThreadIdPromise,
+} from "./cernoProcGuard.ts";
+
 const MAX_SNAPSHOT_BYTES = 16_384;
 const DEFAULT_MAX_LOG_TAIL_BYTES = 8_192;
 const MAX_SNAPSHOT_FILES = 64;
@@ -28,10 +33,7 @@ const MAX_TAIL_CHARS = 300;
 const STALE_SNAPSHOT_MS = 30_000;
 const LIST_RUNS_TIMEOUT = Duration.seconds(2);
 
-const SAFE_READ_FLAGS =
-  NodeFS.constants.O_RDONLY |
-  (NodeFS.constants.O_NOFOLLOW ?? 0) |
-  (NodeFS.constants.O_NONBLOCK ?? 0);
+const SAFE_READ_FLAGS = CERNO_SAFE_READ_FLAGS;
 
 const Probability = Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 1 }));
 
@@ -101,6 +103,7 @@ export interface CernoRunServiceOptions {
   readonly snapshotDirs?: ReadonlyArray<string>;
   readonly isPidAlive?: (pid: number) => boolean;
   readonly readProcStartTicks?: (pid: number) => Promise<number | null>;
+  readonly readProcThreadId?: (pid: number) => Promise<string | null>;
   readonly expectedUid?: number | null;
   readonly nowMs?: () => number;
   readonly maxLogTailBytes?: number;
@@ -112,20 +115,6 @@ export class CernoRunService extends Context.Service<
     readonly listRuns: Effect.Effect<CernoLiveRunsResult>;
   }
 >()("t3/cerno/CernoRunService") {}
-
-function readLinuxProcStartTicksPromise(pid: number): Promise<number | null> {
-  return (async () => {
-    const text = await NodeFSP.readFile(`/proc/${pid}/stat`, "utf8");
-    const rp = text.lastIndexOf(")");
-    if (rp < 0) return null;
-    const fields = text
-      .slice(rp + 2)
-      .trim()
-      .split(/\s+/u);
-    const val = Number(fields[19]);
-    return Number.isFinite(val) && val > 0 ? val : null;
-  })().catch(() => null);
-}
 
 function defaultIsPidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -158,8 +147,17 @@ function readLogTailPromise(
   logPath: string,
   uid: number | null,
   maxBytes: number,
+  path: Path.Path,
 ): Promise<string | undefined> {
   return (async () => {
+    if (isSensitiveCernoLogPath(logPath)) return undefined;
+    const parentReal = await NodeFSP.realpath(path.dirname(logPath)).catch(() => null);
+    if (
+      parentReal !== null &&
+      isSensitiveCernoLogPath(path.join(parentReal, path.basename(logPath)))
+    ) {
+      return undefined;
+    }
     const handle = await NodeFSP.open(logPath, SAFE_READ_FLAGS);
     try {
       const stat = await handle.stat();
@@ -208,8 +206,8 @@ function listCandidateFilesPromise(
 ): Promise<ReadonlyArray<string>> {
   return (async () => {
     const stat = await NodeFSP.lstat(dirPath);
-    if (!stat.isDirectory()) return [];
-    if (uid !== null && stat.uid !== uid) return [];
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return [];
+    if (uid !== null && (stat.uid !== uid || (stat.mode & 0o077) !== 0)) return [];
     const entries = await NodeFSP.readdir(dirPath);
     const matches = entries.filter((name) => /^\d+\.json$/u.test(name)).slice(0, MAX_SCAN_ENTRIES);
     const ranked: Array<{ readonly filePath: string; readonly mtimeMs: number }> = [];
@@ -240,6 +238,8 @@ export const layerWithOptions = (options: CernoRunServiceOptions = {}) =>
           : typeof process.getuid === "function"
             ? process.getuid()
             : null;
+      const readProcThreadId =
+        options.readProcThreadId ?? ((pid: number) => readLinuxProcThreadIdPromise(pid, uid));
 
       // Per-file helper shares the enclosing listRuns span to avoid per-snapshot trace noise.
       const readOneSnapshot = Effect.fnUntraced(function* (
@@ -265,7 +265,7 @@ export const layerWithOptions = (options: CernoRunServiceOptions = {}) =>
         if (!isPidAlive(raw.pid)) return null;
         if (raw.proc_start_ticks !== undefined && raw.proc_start_ticks > 0) {
           const liveTicks = yield* Effect.promise(() => readProcStartTicks(Math.trunc(raw.pid)));
-          if (liveTicks !== null && liveTicks !== Math.trunc(raw.proc_start_ticks)) {
+          if (liveTicks === null || liveTicks !== Math.trunc(raw.proc_start_ticks)) {
             return null;
           }
         }
@@ -273,25 +273,45 @@ export const layerWithOptions = (options: CernoRunServiceOptions = {}) =>
           return null;
         }
 
-        const logTail =
-          raw.log_path && raw.log_path.startsWith("/")
-            ? yield* Effect.tryPromise({
-                try: () => readLogTailPromise(raw.log_path!, uid, maxLogTailBytes),
-                catch: (cause) => new CernoSnapshotReadError({ operation: "tail", cause }),
-              }).pipe(
-                Effect.catchTags({
-                  CernoSnapshotReadError: () => {
-                    onReadError();
-                    return Effect.undefined;
-                  },
-                }),
-              )
-            : undefined;
+        const resolvedLogPath = (() => {
+          const trimmed = raw.log_path?.trim();
+          if (!trimmed) return null;
+          if (trimmed.startsWith("/")) return path.resolve(trimmed);
+          if (raw.cwd.startsWith("/")) return path.resolve(raw.cwd, trimmed);
+          return null;
+        })();
+
+        const logTail = resolvedLogPath
+          ? yield* Effect.tryPromise({
+              try: () => readLogTailPromise(resolvedLogPath, uid, maxLogTailBytes, path),
+              catch: (cause) => new CernoSnapshotReadError({ operation: "tail", cause }),
+            }).pipe(
+              Effect.catchTags({
+                CernoSnapshotReadError: () => {
+                  onReadError();
+                  return Effect.undefined;
+                },
+              }),
+            )
+          : undefined;
+
+        const canonicalLogPath = resolvedLogPath
+          ? yield* Effect.promise(() =>
+              NodeFSP.realpath(resolvedLogPath).catch(() => resolvedLogPath),
+            )
+          : null;
+
+        const pidInt = Math.trunc(raw.pid);
+        const childPidInt = Math.max(0, Math.trunc(raw.child_pid));
+        let threadId = yield* Effect.promise(() => readProcThreadId(pidInt));
+        if (!threadId && childPidInt > 0 && childPidInt !== pidInt) {
+          threadId = yield* Effect.promise(() => readProcThreadId(childPidInt));
+        }
 
         return yield* decodeLiveRun({
           schemaVersion: Math.trunc(raw.schema_version),
-          pid: Math.trunc(raw.pid),
-          childPid: Math.max(0, Math.trunc(raw.child_pid)),
+          pid: pidInt,
+          childPid: childPidInt,
           startedAtMs: Math.max(0, Math.trunc(raw.started_at_ms)),
           updatedAtMs: Math.max(0, Math.trunc(raw.updated_at_ms)),
           elapsedSec: Math.max(0, raw.elapsed_sec),
@@ -299,7 +319,7 @@ export const layerWithOptions = (options: CernoRunServiceOptions = {}) =>
           engine: clampText(raw.engine, 64),
           cwd: clampText(raw.cwd, 400),
           command: clampText(raw.command, MAX_COMMAND_CHARS),
-          logPath: raw.log_path ? clampText(raw.log_path, 400) : null,
+          logPath: canonicalLogPath ? clampText(canonicalLogPath, 400) : null,
           state: raw.state,
           confidence: raw.confidence,
           margin: raw.margin,
@@ -331,6 +351,7 @@ export const layerWithOptions = (options: CernoRunServiceOptions = {}) =>
           alert: raw.alert ? clampText(raw.alert, 64) : null,
           tail: clampText(raw.tail, MAX_TAIL_CHARS),
           ...(logTail !== undefined ? { logTail } : {}),
+          ...(threadId ? { threadId } : {}),
         }).pipe(Effect.orElseSucceed(() => null));
       });
 

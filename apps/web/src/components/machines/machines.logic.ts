@@ -1,4 +1,5 @@
 import type {
+  CernoLiveRun,
   EnvironmentId,
   HostGpuMetrics,
   OrchestrationV2PendingBackgroundTask,
@@ -9,7 +10,8 @@ import { formatBytes } from "../../lib/formatBytes";
 import { resolveSidebarThreadStatus, type SidebarThreadStatus } from "../Sidebar.logic";
 import type { EnvironmentPresentation } from "../../state/environments";
 import type { SidebarThreadSummary } from "../../types";
-import { isShipQueueBackgroundTask } from "../jobs/shipQueueBackgroundFilter";
+import { matchCernoRunsToTasks } from "../jobs/cernoRunPresentation";
+import { isShipQueueBackgroundTask, isShipQueueCommand } from "../jobs/shipQueueBackgroundFilter";
 
 export type MachinesTab = "overview" | "processes" | "jobs" | "ship-queue" | "servers";
 export type MetricTone = "default" | "warning" | "danger";
@@ -194,6 +196,59 @@ export function selectEnvironmentBackgroundJobs(
     return left.key.localeCompare(right.key);
   });
   return entries;
+}
+
+export function mergeMachineCernoEntries(
+  baseEntries: ReadonlyArray<MachineBackgroundJobEntry>,
+  allThreads: ReadonlyArray<SidebarThreadSummary>,
+  environmentId: EnvironmentId,
+  cernoRuns: ReadonlyArray<CernoLiveRun>,
+  options?: { readonly excludeShipQueue?: boolean | undefined },
+): {
+  readonly entries: ReadonlyArray<MachineBackgroundJobEntry>;
+  readonly matchedCernoByKey: ReadonlyMap<string, CernoLiveRun | null>;
+} {
+  const matchedCernoByKey = new Map<string, CernoLiveRun | null>();
+  const matchedPids = new Set<number>();
+  const baseMatchMap = matchCernoRunsToTasks(
+    baseEntries.map((entry) => ({ taskId: entry.key, command: entry.task.command })),
+    cernoRuns,
+  );
+  for (const [key, run] of baseMatchMap) {
+    matchedCernoByKey.set(key, run);
+    if (run) matchedPids.add(run.pid);
+  }
+  if (cernoRuns.length === 0) {
+    return { entries: baseEntries, matchedCernoByKey };
+  }
+  const threadById = new Map(
+    allThreads.filter((t) => t.environmentId === environmentId).map((t) => [t.id, t] as const),
+  );
+  const standalone: Array<MachineBackgroundJobEntry> = [];
+  for (const run of cernoRuns) {
+    if (matchedPids.has(run.pid)) continue;
+    if (options?.excludeShipQueue && isShipQueueCommand(run.command)) continue;
+    const ownerThread = run.threadId ? threadById.get(run.threadId) : undefined;
+    if (!ownerThread) continue;
+    const taskId = `cerno-run:${run.pid}`;
+    const key = `${ownerThread.id}:${taskId}`;
+    standalone.push({
+      key,
+      thread: ownerThread,
+      task: {
+        taskId,
+        kind: "monitor",
+        command: run.command,
+        sourceThreadId: ownerThread.id,
+      },
+    });
+    matchedCernoByKey.set(key, run);
+    matchedPids.add(run.pid);
+  }
+  return {
+    entries: standalone.length > 0 ? [...baseEntries, ...standalone] : baseEntries,
+    matchedCernoByKey,
+  };
 }
 
 export function formatHostGpuSummary(

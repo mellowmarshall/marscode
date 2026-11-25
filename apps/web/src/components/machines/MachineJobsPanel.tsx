@@ -12,6 +12,7 @@ import {
 import {
   AuthDiagnosticsReadScope,
   AuthOrchestrationOperateScope,
+  type CernoLiveRun,
   type EnvironmentId,
   type OrchestrationV2PendingBackgroundTask,
   type ThreadId,
@@ -41,20 +42,28 @@ import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { useCommandOutputStreaming } from "../chat/CommandOutputPanel";
 import { BackgroundWorkInspectorDialog } from "../jobs/BackgroundWorkInspector";
-import { isCernoCommand } from "../jobs/cernoCommand";
-import { JobSparkline } from "../jobs/JobMetricCharts";
 import {
-  detectSilentStallSeconds,
-  parseCommandOutputMetrics,
-  shortJobLabel,
-} from "../jobs/jobOutputParser";
-import { isShipQueueCommand } from "../jobs/shipQueueBackgroundFilter";
+  CernoCertaintyPips,
+  cernoToneDotClass,
+  cernoToneTextClass,
+} from "../jobs/CernoRunAssessment";
+import {
+  formatCernoElapsed,
+  presentCernoRun,
+  selectCommandOutputMetrics,
+} from "../jobs/cernoRunPresentation";
+import { JobSparkline } from "../jobs/JobMetricCharts";
+import { detectSilentStallSeconds, shortJobLabel } from "../jobs/jobOutputParser";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
-import { type MachineBackgroundJobEntry, selectEnvironmentBackgroundJobs } from "./machines.logic";
+import {
+  type MachineBackgroundJobEntry,
+  mergeMachineCernoEntries,
+  selectEnvironmentBackgroundJobs,
+} from "./machines.logic";
 
 type JobFilter = "all" | "commands" | "subagents";
 
@@ -87,12 +96,14 @@ function JobTimestamp({ timestamp }: { readonly timestamp: string }) {
 function MachineJobRow({
   environmentId,
   entry,
+  cernoRun,
   projectName,
   nowMs,
   onInspect,
 }: {
   readonly environmentId: EnvironmentId;
   readonly entry: MachineBackgroundJobEntry;
+  readonly cernoRun: CernoLiveRun | null;
   readonly projectName: string | null;
   readonly nowMs: number;
   readonly onInspect: (entry: MachineBackgroundJobEntry) => void;
@@ -116,20 +127,28 @@ function MachineJobRow({
   );
 
   const outputText = outputQuery.data?.output.text ?? "";
-  const metrics = outputText ? parseCommandOutputMetrics(outputText) : null;
+  const metrics = selectCommandOutputMetrics(outputText, cernoRun?.logTail);
   const progress = metrics?.progress ?? null;
   const pct = progress ? Math.max(0, Math.min(100, Math.round(progress.fraction * 100))) : null;
   const primarySeries = metrics?.series[0] ?? null;
 
   const isRunningOutput = outputActive && (outputQuery.data ? outputQuery.data.running : true);
   const lastActivityMs = outputQuery.dataUpdatedAt > 0 ? outputQuery.dataUpdatedAt : null;
-  const silentSeconds = detectSilentStallSeconds(lastActivityMs, nowMs, isRunningOutput);
+  const silentSeconds = cernoRun
+    ? null
+    : detectSilentStallSeconds(lastActivityMs, nowMs, isRunningOutput);
 
   const commandTitle = task.description?.trim() || task.command?.split(/\r?\n/u)[0]?.trim() || "";
   const title = commandTitle || shortJobLabel(task, task.command);
   const waiting = backgroundWorkHoldsCompletion([task]);
-  const dotClass =
-    silentSeconds !== null ? "bg-warning" : waiting ? "bg-info" : "bg-muted-foreground/55";
+  const cernoView = cernoRun ? presentCernoRun(cernoRun) : null;
+  const dotClass = cernoView
+    ? cernoToneDotClass(cernoView.tone)
+    : silentSeconds !== null
+      ? "bg-warning"
+      : waiting
+        ? "bg-info"
+        : "bg-muted-foreground/55";
   const subtitle = [projectName, thread.title, thread.branch].filter(Boolean).join(" · ");
 
   return (
@@ -176,7 +195,13 @@ function MachineJobRow({
                 {pct}%
               </span>
             ) : null}
-            {silentSeconds !== null ? (
+            {cernoRun && cernoView ? (
+              <span className="inline-flex shrink-0 items-center gap-1.5 font-mono text-xs tabular-nums">
+                <CernoCertaintyPips pips={cernoView.pips} tone={cernoView.tone} />
+                <span className={cernoToneTextClass(cernoView.tone)}>{cernoView.verdict}</span>
+                <span className="text-muted-foreground">{formatCernoElapsed(cernoRun, nowMs)}</span>
+              </span>
+            ) : silentSeconds !== null ? (
               <span className="font-mono text-xs font-medium text-warning-foreground tabular-nums">
                 {gt("Stalled {seconds}s", { seconds: silentSeconds })}
               </span>
@@ -236,10 +261,22 @@ export function MachineJobsPanel({ environmentId }: { readonly environmentId: En
     shipQueueSupported && shipQueueSnapshot.available && shipQueueSnapshot.jobs.length > 0
       ? new Set(shipQueueSnapshot.jobs.map((job) => job.id))
       : undefined;
-  const entries = selectEnvironmentBackgroundJobs(allThreads, environmentId, {
+  const baseEntries = selectEnvironmentBackgroundJobs(allThreads, environmentId, {
     excludeShipQueue: shipQueueSupported,
     knownShipJobIds,
   });
+  const cernoQuery = useEnvironmentQuery(
+    canReadDiagnostics ? serverEnvironment.cernoRuns({ environmentId, input: {} }) : null,
+  );
+  const cernoRuns = cernoQuery.data?.runs ?? [];
+  const { entries, matchedCernoByKey } = mergeMachineCernoEntries(
+    baseEntries,
+    allThreads,
+    environmentId,
+    cernoRuns,
+    { excludeShipQueue: shipQueueSupported },
+  );
+
   const inspectedEntry = inspectedKey
     ? (entries.find((candidate) => candidate.key === inspectedKey) ?? null)
     : null;
@@ -247,21 +284,6 @@ export function MachineJobsPanel({ environmentId }: { readonly environmentId: En
     inspectedEntry ? scopeThreadRef(environmentId, inspectedEntry.thread.id) : null,
   );
   const inspectedTurnItems = inspectedProjectedItems.map((projected) => projected.item);
-  const hasCernoJobs =
-    entries.some((entry) => isCernoCommand(entry.task.command)) ||
-    inspectedTurnItems.some(
-      (item) =>
-        item.type === "command_execution" &&
-        item.status === "running" &&
-        !(shipQueueSupported && isShipQueueCommand(item.input)) &&
-        isCernoCommand(item.input),
-    );
-  const cernoQuery = useEnvironmentQuery(
-    canReadDiagnostics && hasCernoJobs
-      ? serverEnvironment.cernoRuns({ environmentId, input: {} })
-      : null,
-  );
-  const cernoRuns = cernoQuery.data?.runs ?? [];
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- poll 5s clock only while background jobs exist on this machine
   useEffect(() => {
@@ -409,6 +431,7 @@ export function MachineJobsPanel({ environmentId }: { readonly environmentId: En
                   key={entry.key}
                   environmentId={environmentId}
                   entry={entry}
+                  cernoRun={matchedCernoByKey.get(entry.key) ?? null}
                   projectName={projectName}
                   nowMs={nowMs}
                   onInspect={(picked) => setInspectedKey(picked.key)}

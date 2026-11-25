@@ -1,3 +1,7 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Spawns a short-lived child process to test real Linux /proc/<pid>/environ thread attribution.
+import * as NodeChildProcess from "node:child_process";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Checks /proc/self availability on Linux.
+import * as NodeFS from "node:fs";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -255,5 +259,109 @@ describe("CernoRunService", () => {
       assert.strictEqual(result.runs[0]?.pid, 10_070);
       assert.isFalse(result.runs.some((run) => run.pid === 10_001));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.live(
+    "reads T3CODE_THREAD_ID from real Linux /proc/<pid>/environ, blocks sensitive log paths, and fails closed on null ticks or loose dir perms",
+    () =>
+      Effect.gen(function* () {
+        if (!NodeFS.existsSync("/proc/self")) return;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cerno-proc-" });
+
+        // Spawn a real child process with T3CODE_THREAD_ID set so /proc/<pid>/environ is exercised.
+        const child = NodeChildProcess.spawn(
+          process.execPath,
+          ["-e", "setTimeout(() => {}, 30000)"],
+          {
+            env: { ...process.env, T3CODE_THREAD_ID: "thread-real-cerno-env" },
+            stdio: "ignore",
+          },
+        );
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            try {
+              child.kill("SIGKILL");
+            } catch {
+              // already exited
+            }
+          }),
+        );
+        const childPid = child.pid!;
+
+        // Sensitive .env file must NOT be read into logTail even if referenced as log_path.
+        const secretPath = path.join(root, ".env");
+        yield* fs.writeFileString(secretPath, "API_KEY=super-secret-value\n");
+
+        // Regular relative log path under cwd must resolve cleanly.
+        const relLog = path.join(root, "run.log");
+        yield* fs.writeFileString(relLog, "step 1/4 ok\n");
+
+        yield* fs.writeFileString(
+          path.join(root, `${childPid}.json`),
+          JSON.stringify(
+            sampleRawSnapshot({
+              pid: childPid,
+              child_pid: 0,
+              cwd: root,
+              log_path: "run.log",
+            }),
+          ),
+        );
+        yield* fs.writeFileString(
+          path.join(root, "4244.json"),
+          JSON.stringify(
+            sampleRawSnapshot({
+              pid: 4244,
+              child_pid: 0,
+              cwd: root,
+              log_path: secretPath,
+            }),
+          ),
+        );
+        // Snapshot claiming proc_start_ticks must be dropped if live ticks cannot be read (null).
+        yield* fs.writeFileString(
+          path.join(root, "4245.json"),
+          JSON.stringify(
+            sampleRawSnapshot({
+              pid: 4245,
+              proc_start_ticks: 999_999,
+            }),
+          ),
+        );
+
+        const layer = CernoRunService.layerWithOptions({
+          snapshotDirs: [root],
+          isPidAlive: (pid) => pid === childPid || pid === 4244 || pid === 4245,
+          readProcStartTicks: async () => null,
+          nowMs: () => 1_795_458_330_000,
+        }).pipe(Layer.provide(NodeServices.layer));
+
+        const result = yield* Effect.flatMap(
+          CernoRunService.CernoRunService,
+          (svc) => svc.listRuns,
+        ).pipe(Effect.provide(layer));
+
+        const realRun = result.runs.find((r) => r.pid === childPid);
+        assert.isDefined(realRun);
+        assert.strictEqual(realRun?.threadId, "thread-real-cerno-env");
+        assert.strictEqual(realRun?.logPath, relLog);
+        assert.include(realRun?.logTail ?? "", "step 1/4 ok");
+
+        const secretRun = result.runs.find((r) => r.pid === 4244);
+        assert.isDefined(secretRun);
+        assert.isUndefined(secretRun?.logTail);
+
+        assert.isUndefined(result.runs.find((r) => r.pid === 4245));
+
+        // Loose directory permissions (0755) must be rejected when uid enforcement is active.
+        yield* fs.chmod(root, 0o755);
+        const looseResult = yield* Effect.flatMap(
+          CernoRunService.CernoRunService,
+          (svc) => svc.listRuns,
+        ).pipe(Effect.provide(layer));
+        assert.strictEqual(looseResult.runs.length, 0);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

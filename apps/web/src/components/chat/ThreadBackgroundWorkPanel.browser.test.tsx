@@ -482,7 +482,6 @@ describe("ThreadBackgroundWorkPanel", () => {
     expect(
       onlyShipScreen.container.querySelector("[data-thread-details-background-work]"),
     ).toBeNull();
-    expect(mockState.cernoQueryRequests).toBe(0);
 
     await using mixedScreen = await render(
       <TooltipProvider>
@@ -528,5 +527,59 @@ describe("ThreadBackgroundWorkPanel", () => {
       </TooltipProvider>,
     );
     expect(unfilteredScreen.container.textContent).toContain("ship-queue watch");
+  });
+
+  it("keeps live thread-attributed cerno runs visible when pendingBackgroundTasks and turnItems are empty", async () => {
+    using _mock = withResetCernoMock();
+    mockState.canReadDiagnostics = true;
+    mockState.cernoRuns = [
+      {
+        ...sampleCernoRun,
+        pid: 88_101,
+        threadId,
+        command: "python3 train_overnight.py",
+        logPath: "/dataprivate-repo/logs/overnight.log",
+        logTail: "Epoch 4/10 loss=0.312\n",
+      },
+      {
+        ...sampleCernoRun,
+        pid: 88_102,
+        threadId: ThreadId.make("other-thread-id"),
+        command: "cargo test --workspace",
+        logPath: "/data/Dev/other/test.log",
+      },
+      {
+        ...sampleCernoRun,
+        pid: 88_103,
+        threadId,
+        command: "ship-queue watch 11139",
+        logPath: "/tmp/sq.log",
+      },
+    ];
+
+    await using screen = await render(
+      <TooltipProvider>
+        <div style={{ width: 280 }}>
+          <ThreadBackgroundWorkPanel
+            density="full"
+            environmentId={environmentId}
+            threadId={threadId}
+            tasks={[]}
+            turnItems={[]}
+            excludeShipQueue
+            stopDisabled={false}
+            stopping={false}
+            onStop={async () => {}}
+            onOpenThread={() => {}}
+          />
+        </div>
+      </TooltipProvider>,
+    );
+
+    expect(screen.container.querySelector("[data-thread-details-background-work]")).not.toBeNull();
+    expect(screen.container.textContent).toContain("python3 train_overnight.py");
+    expect(screen.container.textContent).toContain("Healthy");
+    expect(screen.container.textContent).not.toContain("cargo test");
+    expect(screen.container.textContent).not.toContain("ship-queue");
   });
 });

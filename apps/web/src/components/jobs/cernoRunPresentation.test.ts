@@ -1,5 +1,11 @@
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
-import { RunId, ThreadId, TurnItemId, type CernoLiveRun } from "@t3tools/contracts";
+import {
+  RunId,
+  ThreadId,
+  TurnItemId,
+  type CernoLiveRun,
+  type OrchestrationV2PendingBackgroundTask,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -8,6 +14,7 @@ import {
   matchCernoRunForTask,
   matchCernoRunsToTasks,
   mergeRunningCernoTurnTasks,
+  mergeStandaloneThreadCernoTasks,
   presentCernoRun,
 } from "./cernoRunPresentation";
 
@@ -246,5 +253,74 @@ describe("cernoRunPresentation", () => {
     expect(merged).toHaveLength(1);
     expect(merged[0]?.itemId).toBe(itemId);
     expect(merged[0]?.kind).toBe("monitor");
+  });
+
+  it("matches relative --log paths and keeps standalone thread-attributed cerno runs visible after postSettleCommandHold", () => {
+    const threadA = ThreadId.make("thread-a");
+    const threadB = ThreadId.make("thread-b");
+
+    const relRun = makeRun({
+      pid: 301,
+      cwd: "/repo/wt-a",
+      command: "python3 train.py",
+      logPath: "/repo/wt-a/logs/train.log",
+      threadId: threadA,
+    });
+    const otherThreadRun = makeRun({
+      pid: 302,
+      cwd: "/repo/wt-b",
+      command: "cargo test",
+      logPath: "/repo/wt-b/logs/test.log",
+      threadId: threadB,
+    });
+    const shipRun = makeRun({
+      pid: 303,
+      cwd: "/repo/wt-a",
+      command: "ship-queue watch 11139",
+      logPath: "/tmp/sq.log",
+      threadId: threadA,
+    });
+
+    // Relative --log path in task command deduplicates cleanly against canonical run.logPath
+    const relTask: OrchestrationV2PendingBackgroundTask = {
+      taskId: "task-rel",
+      kind: "command",
+      command: "cerno watch --monitor --log logs/train.log -- python3 train.py",
+      awaited: true,
+    };
+    const matched = matchCernoRunsToTasks(
+      [{ taskId: relTask.taskId, command: relTask.command }],
+      [relRun, otherThreadRun, shipRun],
+      "/repo/wt-a",
+    );
+    expect(matched.get("task-rel")?.pid).toBe(301);
+
+    const deduped = mergeStandaloneThreadCernoTasks(
+      [relTask],
+      matched,
+      [relRun, otherThreadRun, shipRun],
+      threadA,
+      { excludeShipQueue: true },
+    );
+    expect(deduped.tasks).toHaveLength(1);
+
+    // Once postSettleCommandHold empties pendingBackgroundTasks, standalone live thread-bound cerno run stays visible
+    const standalone = mergeStandaloneThreadCernoTasks(
+      [],
+      new Map(),
+      [relRun, otherThreadRun, shipRun],
+      threadA,
+      { excludeShipQueue: true },
+    );
+    expect(standalone.tasks).toHaveLength(1);
+    expect(standalone.tasks[0]?.taskId).toBe("cerno-run:301");
+    expect(standalone.matchedByTaskId.get("cerno-run:301")?.pid).toBe(301);
+
+    // matchCernoRunsToTasks matches synthetic cerno-run:<pid> directly (used by BackgroundWorkInspectorDialog)
+    const inspectorMatch = matchCernoRunsToTasks(
+      standalone.tasks.map((t) => ({ taskId: t.taskId, command: t.command })),
+      [relRun, otherThreadRun, shipRun],
+    );
+    expect(inspectorMatch.get("cerno-run:301")?.pid).toBe(301);
   });
 });

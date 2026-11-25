@@ -1,5 +1,9 @@
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
-import type { CernoLiveRun, OrchestrationV2PendingBackgroundTask } from "@t3tools/contracts";
+import type {
+  CernoLiveRun,
+  OrchestrationV2PendingBackgroundTask,
+  ThreadId,
+} from "@t3tools/contracts";
 import { msg } from "gt-react";
 
 import { m } from "../../i18n/messages";
@@ -14,6 +18,7 @@ import {
   parseCommandOutputMetrics,
   type ParsedJobMetrics,
 } from "./jobOutputParser";
+import { isShipQueueCommand } from "./shipQueueBackgroundFilter";
 
 export type CernoOperatorTone = "neutral" | "info" | "success" | "warning" | "destructive";
 
@@ -223,6 +228,28 @@ function cwdMatches(run: CernoLiveRun, cwd: string | null | undefined): boolean 
  * are eligible; matches prioritize exact `--log` path, then exact unwrapped child command
  * scoped by `cwd` when present.
  */
+const STANDALONE_CERNO_TASK_PREFIX = "cerno-run:";
+
+function resolveMaybeRelativeLogPath(rawLogPath: string, cwd: string | null | undefined): string {
+  const cleaned = rawLogPath.replace(/\/+$/u, "");
+  if (cleaned.startsWith("/")) return cleaned;
+  if (cwd && cwd.startsWith("/")) {
+    const base = cwd.replace(/\/+$/u, "");
+    const parts = `${base}/${cleaned}`.split("/");
+    const stack: string[] = [];
+    for (const part of parts) {
+      if (!part || part === ".") continue;
+      if (part === "..") {
+        stack.pop();
+      } else {
+        stack.push(part);
+      }
+    }
+    return `/${stack.join("/")}`;
+  }
+  return cleaned;
+}
+
 export function matchCernoRunsToTasks(
   tasks: ReadonlyArray<CernoMatchCandidate>,
   runs: ReadonlyArray<CernoLiveRun>,
@@ -235,13 +262,36 @@ export function matchCernoRunsToTasks(
   if (runs.length === 0) return result;
 
   const usedPids = new Set<number>();
-  const cernoTasks = tasks.filter((task) => isCernoCommand(task.command));
 
-  // Pass 1: exact --log / tail file path match.
+  // Pass 0: synthetic standalone cerno-run:<pid> tasks match directly by PID.
+  for (const task of tasks) {
+    if (!task.taskId.startsWith(STANDALONE_CERNO_TASK_PREFIX)) continue;
+    const pid = Number(task.taskId.slice(STANDALONE_CERNO_TASK_PREFIX.length));
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    const picked = runs.find((run) => !usedPids.has(run.pid) && run.pid === pid);
+    if (picked) {
+      result.set(task.taskId, picked);
+      usedPids.add(picked.pid);
+    }
+  }
+
+  const cernoTasks = tasks.filter(
+    (task) => !result.get(task.taskId) && isCernoCommand(task.command),
+  );
+
+  // Pass 1: exact --log / tail file path match (resolving relative --log against cwd).
   for (const task of cernoTasks) {
-    const logPath = extractCernoLogPath(task.command);
-    if (!logPath) continue;
-    const candidates = runs.filter((run) => !usedPids.has(run.pid) && run.logPath === logPath);
+    const rawLogPath = extractCernoLogPath(task.command);
+    if (!rawLogPath) continue;
+    const resolved = resolveMaybeRelativeLogPath(rawLogPath, cwd);
+    const candidates = runs.filter(
+      (run) =>
+        !usedPids.has(run.pid) &&
+        run.logPath !== null &&
+        (run.logPath === rawLogPath ||
+          run.logPath === resolved ||
+          resolveMaybeRelativeLogPath(run.logPath, run.cwd) === resolved),
+    );
     if (candidates.length === 0) continue;
     const picked = (cwd ? candidates.find((run) => run.cwd === cwd) : undefined) ?? candidates[0]!;
     result.set(task.taskId, picked);
@@ -267,6 +317,52 @@ export function matchCernoRunsToTasks(
   }
 
   return result;
+}
+
+/**
+ * Keeps live thread-attributed `cerno` runs visible in the thread rail even after the harness's
+ * post-settle command hold empties `pendingBackgroundTasks` and `turnItems`.
+ */
+export function mergeStandaloneThreadCernoTasks(
+  tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
+  matchedByTaskId: ReadonlyMap<string, CernoLiveRun | null>,
+  runs: ReadonlyArray<CernoLiveRun>,
+  threadId: ThreadId,
+  options?: { readonly excludeShipQueue?: boolean | undefined },
+): {
+  readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+  readonly matchedByTaskId: ReadonlyMap<string, CernoLiveRun | null>;
+} {
+  if (runs.length === 0) {
+    return { tasks, matchedByTaskId };
+  }
+  const matchedPids = new Set<number>();
+  for (const run of matchedByTaskId.values()) {
+    if (run) matchedPids.add(run.pid);
+  }
+  const synthetic: Array<OrchestrationV2PendingBackgroundTask> = [];
+  const nextMatched = new Map(matchedByTaskId);
+  for (const run of runs) {
+    if (matchedPids.has(run.pid)) continue;
+    if (run.threadId !== threadId) continue;
+    if (options?.excludeShipQueue && isShipQueueCommand(run.command)) continue;
+    const taskId = `${STANDALONE_CERNO_TASK_PREFIX}${run.pid}`;
+    synthetic.push({
+      taskId,
+      kind: "monitor",
+      command: run.command,
+      sourceThreadId: threadId,
+    });
+    nextMatched.set(taskId, run);
+    matchedPids.add(run.pid);
+  }
+  if (synthetic.length === 0) {
+    return { tasks, matchedByTaskId };
+  }
+  return {
+    tasks: [...tasks, ...synthetic],
+    matchedByTaskId: nextMatched,
+  };
 }
 
 export function matchCernoRunForTask(

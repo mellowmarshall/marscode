@@ -38,7 +38,6 @@ import { resolveThreadDetailsVisibility, THREAD_DETAILS_ITEMS } from "./threadDe
 import { useClientSettings } from "../../hooks/useSettings";
 import { ThreadBackgroundWorkPanel } from "./ThreadBackgroundWorkPanel";
 import { ThreadShipQueuePanel } from "./ThreadShipQueuePanel";
-import { selectVisibleBackgroundWorkTasks } from "../jobs/shipQueueBackgroundFilter";
 import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import type { OrchestrationV2PendingBackgroundTask } from "@t3tools/contracts";
 import { useProject, useServerConfigs } from "../../state/entities";
@@ -129,15 +128,6 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     shipQueueSupported && shipQueueSnapshot.available && shipQueueSnapshot.jobs.length > 0
       ? new Set(shipQueueSnapshot.jobs.map((job) => job.id))
       : undefined;
-  const visibleBackgroundTasks =
-    !props.draftId && visible.backgroundWork && props.backgroundWork
-      ? selectVisibleBackgroundWorkTasks({
-          tasks: props.backgroundWork.tasks,
-          turnItems: props.backgroundWork.turnItems,
-          excludeShipQueue: shipQueueSupported,
-          knownShipJobIds,
-        })
-      : [];
   const tracksFolders = (project?.trackedFolders?.length ?? 0) > 0;
   // A worktree thread reaches tracked repositories only through its own task folder.
   const taskFolderQuery = useEnvironmentQuery(
@@ -346,7 +336,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 />
               ) : null}
 
-              {visibleBackgroundTasks.length > 0 && props.backgroundWork ? (
+              {!props.draftId && visible.backgroundWork && props.backgroundWork ? (
                 <ThreadBackgroundWorkPanel
                   density={density}
                   environmentId={props.environmentId}

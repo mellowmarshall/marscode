@@ -23,7 +23,6 @@ import {
   BackgroundWorkInspectorDialog,
   resolveBackgroundTaskTurnItem,
 } from "../jobs/BackgroundWorkInspector";
-import { isCernoCommand } from "../jobs/cernoCommand";
 import {
   CernoCertaintyPips,
   cernoToneDotClass,
@@ -32,6 +31,7 @@ import {
 import {
   formatCernoElapsed,
   matchCernoRunsToTasks,
+  mergeStandaloneThreadCernoTasks,
   presentCernoRun,
   selectCommandOutputMetrics,
   type CernoOperatorTone,
@@ -341,25 +341,29 @@ export function ThreadBackgroundWorkPanel({
       command: task.command ?? (item?.type === "command_execution" ? item.input : undefined),
     };
   });
-  const hasCernoCandidate = taskCandidates.some((candidate) => isCernoCommand(candidate.command));
 
   const cernoQuery = useEnvironmentQuery(
-    canReadDiagnostics && hasCernoCandidate
-      ? serverEnvironment.cernoRuns({ environmentId, input: {} })
-      : null,
+    canReadDiagnostics ? serverEnvironment.cernoRuns({ environmentId, input: {} }) : null,
   );
   const cernoRuns = cernoQuery.data?.runs ?? [];
 
+  const initialMatched = matchCernoRunsToTasks(taskCandidates, cernoRuns, cwd);
+  const { tasks: allTasks, matchedByTaskId } = mergeStandaloneThreadCernoTasks(
+    mergedTasks,
+    initialMatched,
+    cernoRuns,
+    threadId,
+    { excludeShipQueue },
+  );
+
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- poll 5s clock while active background tasks render in the thread rail
   useEffect(() => {
-    if (mergedTasks.length === 0) return;
+    if (allTasks.length === 0) return;
     const id = window.setInterval(() => setNowMs(Date.now()), 5_000);
     return () => window.clearInterval(id);
-  }, [mergedTasks.length]);
+  }, [allTasks.length]);
 
-  if (mergedTasks.length === 0) return null;
-
-  const matchedByTaskId = matchCernoRunsToTasks(taskCandidates, cernoRuns, cwd);
+  if (allTasks.length === 0) return null;
 
   let worstTone: CernoOperatorTone = "info";
   let worstVerdict: string | null = null;
@@ -382,7 +386,7 @@ export function ThreadBackgroundWorkPanel({
     }
   }
 
-  const showInlineRows = density === "full" && mergedTasks.length <= MAX_INLINE_RAIL_JOBS;
+  const showInlineRows = density === "full" && allTasks.length <= MAX_INLINE_RAIL_JOBS;
 
   return (
     <ThreadDetailsSection
@@ -392,7 +396,7 @@ export function ThreadBackgroundWorkPanel({
     >
       <div data-thread-details-background-work className="flex flex-col">
         {showInlineRows ? (
-          mergedTasks.map((task) => (
+          allTasks.map((task) => (
             <BackgroundWorkRailRow
               key={task.taskId}
               environmentId={environmentId}
@@ -409,7 +413,7 @@ export function ThreadBackgroundWorkPanel({
             size="sm"
             variant="ghost"
             part="row"
-            onClick={() => setInspectTaskId(mergedTasks[0]?.taskId ?? null)}
+            onClick={() => setInspectTaskId(allTasks[0]?.taskId ?? null)}
           >
             <TerminalIcon aria-hidden className={THREAD_DETAILS_PANEL_ICON_CLASS} />
             <span className={cn("min-w-0 flex-1 truncate", THREAD_DETAILS_PANEL_LABEL_CLASS)}>
@@ -420,9 +424,7 @@ export function ThreadBackgroundWorkPanel({
                 aria-hidden
                 className={cn("size-1.5 rounded-full", cernoToneDotClass(worstTone))}
               />
-              <span>
-                {worstVerdict ? `${mergedTasks.length} · ${worstVerdict}` : mergedTasks.length}
-              </span>
+              <span>{worstVerdict ? `${allTasks.length} · ${worstVerdict}` : allTasks.length}</span>
               <ChevronRightIcon aria-hidden className={THREAD_DETAILS_PANEL_CHEVRON_CLASS} />
             </span>
           </ThreadDetailsControl>
@@ -436,7 +438,7 @@ export function ThreadBackgroundWorkPanel({
         }}
         environmentId={environmentId}
         threadId={threadId}
-        tasks={mergedTasks}
+        tasks={allTasks}
         turnItems={turnItems}
         cernoRuns={cernoRuns}
         initialTaskId={inspectTaskId}
