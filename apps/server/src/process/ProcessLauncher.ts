@@ -250,6 +250,8 @@ export const make = Effect.fn("ProcessLauncher.make")(function* (
     if (current !== undefined) return current;
     const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: "1" };
     delete env.NODE_OPTIONS;
+    // Never inherit a parent T3 thread's tag onto the shared process launcher.
+    delete env.T3CODE_THREAD_ID;
     // `node --watch` children would report their imports over the launcher's IPC channel.
     delete env.WATCH_REPORT_DEPENDENCIES;
     let worker: NodeChildProcess.ChildProcess;

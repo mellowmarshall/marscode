@@ -122,6 +122,31 @@ def is_codex_app_server(p):
     except OSError:
         return False
 
+def exe_id(p):
+    try:
+        st = os.stat(f"/proc/{p}/exe")
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+def is_t3_process_launcher(p, server_exe):
+    try:
+        if os.stat(f"/proc/{p}").st_uid != os.getuid():
+            return False
+        if exe_id(p) != server_exe:
+            return False
+        with open(f"/proc/{p}/cmdline", "rb") as fh:
+            argv = [a.decode("utf-8", errors="replace") for a in fh.read().split(b"\\0") if a]
+    except OSError:
+        return False
+    if len(argv) == 2 and argv[1] == "__process-launcher":
+        return True
+    if len(argv) == 2 and os.path.basename(argv[1]) == "process-launcher.mjs":
+        return True
+    if len(argv) == 3 and argv[1] == "--experimental-strip-types" and os.path.basename(argv[2]) == "process-launcher.ts":
+        return True
+    return False
+
 def resolve_pid(p):
     if p == srv:
         return ""
@@ -138,12 +163,15 @@ def resolve_pid(p):
         cur = ppid_of(cur)
     if not (reached and chain):
         return ""
-    top = chain[-1]
-    tid = env_tid(top)
+    top = len(chain) - 1
+    server_exe = exe_id(srv)
+    if top > 0 and server_exe is not None and not env_tid(chain[top]) and is_t3_process_launcher(chain[top], server_exe):
+        top -= 1
+    tid = env_tid(chain[top])
     if tid:
         return tid
-    if len(chain) >= 2 and is_codex_app_server(top):
-        return env_tid(chain[-2])
+    if top >= 1 and is_codex_app_server(chain[top]):
+        return env_tid(chain[top - 1])
     return ""
 
 peer_pid = pids[0]

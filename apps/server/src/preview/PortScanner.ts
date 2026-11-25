@@ -375,6 +375,21 @@ const AGENT_THREAD_ASSIGNMENT = new RegExp(`(?:^|\\s)${AGENT_THREAD_ENV}=(\\S+)`
 /** A browser an agent's tool drives listens only for DevTools, which is not a page to preview. */
 const DEVTOOLS_PORT_ARGUMENT = /(?:^|[\s\0])--remote-debugging-port=/;
 
+/** Matches the T3 server's Linux process-launcher helper argv in `/proc/<pid>/cmdline`. */
+const isProcessLauncherCmdline = (raw: string): boolean => {
+  const argv = raw.split("\0").filter((entry) => entry.length > 0);
+  if (argv.length === 2 && argv[1] === "__process-launcher") return true;
+  if (argv.length === 2 && /(?:^|\/)process-launcher\.mjs$/u.test(argv[1]!)) return true;
+  if (
+    argv.length === 3 &&
+    argv[1] === "--experimental-strip-types" &&
+    /(?:^|\/)process-launcher\.ts$/u.test(argv[2]!)
+  ) {
+    return true;
+  }
+  return false;
+};
+
 /** Reads `/proc/<pid>/environ`, whose entries are NUL-separated. */
 const parseProcEnvironThread = (raw: string): ThreadId | null => {
   const prefix = `${AGENT_THREAD_ENV}=`;
@@ -586,7 +601,20 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
         Effect.map(parseProcStatParent),
         Effect.orElseSucceed(() => null),
       );
-      return [pid, { threadId, isAgentCli: parent === process.pid }] as const;
+      let isAgentCli = parent === process.pid;
+      if (!isAgentCli && parent !== null && parent > 1) {
+        const grandParent = yield* fileSystem.readFileString(`/proc/${parent}/stat`).pipe(
+          Effect.map(parseProcStatParent),
+          Effect.orElseSucceed(() => null),
+        );
+        if (grandParent === process.pid) {
+          isAgentCli = yield* fileSystem.readFileString(`/proc/${parent}/cmdline`).pipe(
+            Effect.map(isProcessLauncherCmdline),
+            Effect.orElseSucceed(() => false),
+          );
+        }
+      }
+      return [pid, { threadId, isAgentCli }] as const;
     });
     const read: ReadonlyMap<number, AgentListener | null> =
       unread.length === 0

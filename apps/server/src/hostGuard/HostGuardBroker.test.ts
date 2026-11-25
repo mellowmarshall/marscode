@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Integration tests bind isolated owner-only Unix domain sockets.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
@@ -488,4 +489,174 @@ describe("GuardGrantBroker", () => {
       );
     },
   );
+
+  it("steps past one untagged T3 process-launcher helper and rejects generic or chained helpers on Linux", async () => {
+    if (!NodeFS.existsSync("/proc/self")) return;
+    const tmp = makeTempSocketDir("t3hg-launcher-");
+    const broker = new GuardGrantBroker({ socketPath: tmp.socketPath });
+    await broker.start("linux");
+    try {
+      const pyBin = NodeFS.existsSync("/usr/bin/python3") ? "/usr/bin/python3" : "python3";
+      const clientScriptPath = NodePath.join(tmp.dir, "client.py");
+      NodeFS.writeFileSync(
+        clientScriptPath,
+        `
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect(sys.argv[1])
+s.sendall((sys.argv[2] + "\\n").encode("utf-8"))
+buf = b""
+while b"\\n" not in buf:
+    c = s.recv(4096)
+    if not c: break
+    buf += c
+s.close()
+sys.stdout.write(buf.decode("utf-8").splitlines()[0])
+`,
+        "utf8",
+      );
+      const launcherMjs = NodePath.join(tmp.dir, "process-launcher.mjs");
+      const otherMjs = NodePath.join(tmp.dir, "other-helper.mjs");
+      const runnerBody = `
+import cp from "node:child_process";
+const mode = process.env.TEST_HOP_MODE || "direct";
+const pyBin = process.env.TEST_PY_BIN;
+const clientPath = process.env.TEST_CLIENT_PATH;
+const sock = process.env.TEST_SOCK;
+const payload = process.env.TEST_PAYLOAD;
+const tid = process.env.TEST_CHILD_TID;
+if (mode === "direct") {
+  const out = cp.execFileSync(pyBin, ["-I", clientPath, sock, payload], {
+    env: { ...process.env, T3CODE_THREAD_ID: tid },
+    encoding: "utf8",
+  });
+  process.stdout.write(out);
+} else if (mode === "double-launcher") {
+  const innerEnv = { ...process.env, TEST_HOP_MODE: "direct" };
+  delete innerEnv.T3CODE_THREAD_ID;
+  const out = cp.execFileSync(process.execPath, [process.argv[1]], { env: innerEnv, encoding: "utf8" });
+  process.stdout.write(out);
+} else {
+  const innerEnv = { ...process.env };
+  delete innerEnv.T3CODE_THREAD_ID;
+  const hopPy = "import os, subprocess, sys; env = dict(os.environ, T3CODE_THREAD_ID=sys.argv[4]); sys.stdout.write(subprocess.check_output([sys.executable, '-I', sys.argv[1], sys.argv[2], sys.argv[3]], env=env, text=True))";
+  const out = cp.execFileSync(pyBin, ["-I", "-c", hopPy, clientPath, sock, payload, tid], { env: innerEnv, encoding: "utf8" });
+  process.stdout.write(out);
+}
+`;
+      NodeFS.writeFileSync(launcherMjs, runnerBody, "utf8");
+      NodeFS.writeFileSync(otherMjs, runnerBody, "utf8");
+
+      const runViaScript = (
+        scriptPath: string,
+        mode: "direct" | "double-launcher" | "py-hop",
+        payload: Record<string, unknown>,
+        grandchildThreadId: string,
+      ): Promise<Record<string, unknown>> => {
+        const helperEnv: NodeJS.ProcessEnv = {
+          ...process.env,
+          TEST_HOP_MODE: mode,
+          TEST_PY_BIN: pyBin,
+          TEST_CLIENT_PATH: clientScriptPath,
+          TEST_SOCK: tmp.socketPath,
+          TEST_PAYLOAD: JSON.stringify(payload),
+          TEST_CHILD_TID: grandchildThreadId,
+        };
+        delete helperEnv.T3CODE_THREAD_ID;
+        return new Promise((resolve, reject) => {
+          NodeChildProcess.execFile(
+            process.execPath,
+            [scriptPath],
+            { env: helperEnv, timeout: 10_000 },
+            (err, stdout) => {
+              if (err) {
+                reject(err);
+                return;
+              }
+              resolve(JSON.parse(stdout.trim()) as Record<string, unknown>);
+            },
+          );
+        });
+      };
+
+      const addedPromise = waitForBrokerEvent(broker, (e) => e.type === "pending_added");
+      const okResp = await runViaScript(
+        launcherMjs,
+        "direct",
+        {
+          v: 1,
+          op: "request",
+          wait: false,
+          guard: "playbook",
+          command: ["playbook", "amend", "playbook/PLAYBOOK.md"],
+          cwd: tmp.dir,
+          thread_id: "thread-via-launcher",
+          refusal: "change playbook/PLAYBOOK.md",
+        },
+        "thread-via-launcher",
+      );
+      expect(okResp.ok).toBe(true);
+      expect(okResp.queued).toBe(true);
+      const added = await addedPromise;
+      if (added.type !== "pending_added") throw new Error("expected pending_added");
+      expect(added.request.threadId).toBe("thread-via-launcher");
+
+      const otherResp = await runViaScript(
+        otherMjs,
+        "direct",
+        {
+          v: 1,
+          op: "request",
+          wait: false,
+          guard: "playbook",
+          command: ["playbook", "amend", "playbook/PLAYBOOK.md"],
+          cwd: tmp.dir,
+          thread_id: "thread-other-helper",
+          refusal: "change playbook/PLAYBOOK.md",
+        },
+        "thread-other-helper",
+      );
+      expect(otherResp.ok).toBe(false);
+      expect(otherResp.error).toBe("thread_id does not match caller process");
+
+      const doubleResp = await runViaScript(
+        launcherMjs,
+        "double-launcher",
+        {
+          v: 1,
+          op: "request",
+          wait: false,
+          guard: "playbook",
+          command: ["playbook", "amend", "playbook/PLAYBOOK.md"],
+          cwd: tmp.dir,
+          thread_id: "thread-double-hop",
+          refusal: "change playbook/PLAYBOOK.md",
+        },
+        "thread-double-hop",
+      );
+      expect(doubleResp.ok).toBe(false);
+      expect(doubleResp.error).toBe("thread_id does not match caller process");
+
+      const pyHopResp = await runViaScript(
+        launcherMjs,
+        "py-hop",
+        {
+          v: 1,
+          op: "request",
+          wait: false,
+          guard: "playbook",
+          command: ["playbook", "amend", "playbook/PLAYBOOK.md"],
+          cwd: tmp.dir,
+          thread_id: "thread-py-hop",
+          refusal: "change playbook/PLAYBOOK.md",
+        },
+        "thread-py-hop",
+      );
+      expect(pyHopResp.ok).toBe(false);
+      expect(pyHopResp.error).toBe("thread_id does not match caller process");
+    } finally {
+      await broker.close();
+      tmp.cleanup();
+    }
+  });
 });
