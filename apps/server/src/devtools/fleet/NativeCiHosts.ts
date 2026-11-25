@@ -23,7 +23,7 @@ function legacyDevdeckHostsCheckPath(): string {
   return NodePath.join(base, "devdeck", "hosts-check.json");
 }
 
-export function resolveCiHostsManifestPath(): string | null {
+function resolveCiHostsManifestPath(): string | null {
   const candidates: string[] = [];
   const mainCheckout = process.env.SHIP_QUEUE_MAIN_CHECKOUT?.trim() || "/dataprivate-repo/main";
   candidates.push(NodePath.join(mainCheckout, "ship-queue", "ci-hosts.json"));

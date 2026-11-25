@@ -649,6 +649,21 @@ def is_codex_app_server(p):
     except OSError:
         return False
 
+def exe_id(p):
+    try:
+        st = os.stat(f"/proc/{p}/exe")
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+def is_t3_server_binary(p, server_exe):
+    try:
+        if os.stat(f"/proc/{p}").st_uid != os.getuid():
+            return False
+    except OSError:
+        return False
+    return exe_id(p) == server_exe
+
 def resolve_pid(p):
     if p == srv:
         return ""
@@ -665,12 +680,15 @@ def resolve_pid(p):
         cur = ppid_of(cur)
     if not (reached and chain):
         return ""
-    top = chain[-1]
-    tid = env_tid(top)
+    top = len(chain) - 1
+    server_exe = exe_id(srv)
+    while top > 0 and server_exe is not None and not env_tid(chain[top]) and is_t3_server_binary(chain[top], server_exe):
+        top -= 1
+    tid = env_tid(chain[top])
     if tid:
         return tid
-    if len(chain) >= 2 and is_codex_app_server(top):
-        return env_tid(chain[-2])
+    if top >= 1 and is_codex_app_server(chain[top]):
+        return env_tid(chain[top - 1])
     return ""
 
 peer_pid = pids[0]

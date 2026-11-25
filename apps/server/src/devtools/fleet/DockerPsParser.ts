@@ -44,7 +44,7 @@ export function parseDockerPorts(raw: string): ReadonlyArray<FleetServerPort> {
   return out;
 }
 
-export function parseDockerStatusUptime(status: string): number | undefined {
+function parseDockerStatusUptime(status: string): number | undefined {
   const m = /^Up\s+(?:About\s+)?(?:an?|\d+)\s+(second|minute|hour|day|week|month)/i.exec(
     status.trim(),
   );

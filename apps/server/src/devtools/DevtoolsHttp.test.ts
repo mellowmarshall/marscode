@@ -590,6 +590,120 @@ print(json.dumps({
       await broker.close();
     }
   });
+
+  it("steps past untagged T3 server-binary helpers (process-launcher.mjs) when resolving peer thread_id on Linux", async () => {
+    if (!NodeFS.existsSync("/proc/self")) return;
+    const dir = mkTempDir("t3-guard-launcher-");
+    const socketPath = NodePath.join(dir, "t3-guard-grant.sock");
+    const broker = new GuardGrantBroker({ socketPath });
+    await broker.start("linux");
+    try {
+      const pyBin = NodeFS.existsSync("/usr/bin/python3") ? "/usr/bin/python3" : "python3";
+      const clientPy = `
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect(sys.argv[1])
+s.sendall((sys.argv[2] + "\\n").encode("utf-8"))
+buf = b""
+while b"\\n" not in buf:
+    c = s.recv(4096)
+    if not c: break
+    buf += c
+s.close()
+sys.stdout.write(buf.decode("utf-8").splitlines()[0])
+`;
+      const runViaHelper = (
+        payload: Record<string, unknown>,
+        grandchildThreadId: string,
+        extraUntaggedHop: boolean,
+      ): Promise<Record<string, unknown>> => {
+        const helperScript = extraUntaggedHop
+          ? `
+const cp = require("node:child_process");
+const [pyBin, clientPy, sock, payload, tid] = process.argv.slice(1);
+const innerEnv = { ...process.env };
+delete innerEnv.T3CODE_THREAD_ID;
+const hopPy = "import os, subprocess, sys; env = dict(os.environ, T3CODE_THREAD_ID=sys.argv[4]); sys.stdout.write(subprocess.check_output([sys.executable, '-I', '-c', sys.argv[1], sys.argv[2], sys.argv[3]], env=env, text=True))";
+const out = cp.execFileSync(pyBin, ["-I", "-c", hopPy, clientPy, sock, payload, tid], { env: innerEnv, encoding: "utf8" });
+process.stdout.write(out);
+`
+          : `
+const cp = require("node:child_process");
+const [pyBin, clientPy, sock, payload, tid] = process.argv.slice(1);
+const out = cp.execFileSync(pyBin, ["-I", "-c", clientPy, sock, payload], {
+  env: { ...process.env, T3CODE_THREAD_ID: tid },
+  encoding: "utf8",
+});
+process.stdout.write(out);
+`;
+        const helperEnv: NodeJS.ProcessEnv = { ...process.env };
+        delete helperEnv.T3CODE_THREAD_ID;
+        return new Promise((resolve, reject) => {
+          NodeChildProcess.execFile(
+            process.execPath,
+            [
+              "-e",
+              helperScript,
+              pyBin,
+              clientPy,
+              socketPath,
+              JSON.stringify(payload),
+              grandchildThreadId,
+            ],
+            { env: helperEnv, timeout: 10_000 },
+            (err, stdout) => {
+              if (err) {
+                reject(err);
+                return;
+              }
+              resolve(JSON.parse(stdout.trim()) as Record<string, unknown>);
+            },
+          );
+        });
+      };
+
+      const addedPromise = waitForBrokerEvent(broker, (e) => e.type === "pending_added");
+      const okResp = await runViaHelper(
+        {
+          v: 1,
+          op: "request",
+          wait: false,
+          guard: "playbook",
+          command: ["playbook", "amend", "playbook/PLAYBOOK.md"],
+          cwd: dir,
+          thread_id: "thread-via-launcher",
+          refusal: "change playbook/PLAYBOOK.md",
+        },
+        "thread-via-launcher",
+        false,
+      );
+      expect(okResp.ok).toBe(true);
+      expect(okResp.queued).toBe(true);
+      const added = await addedPromise;
+      if (added.type !== "pending_added") throw new Error("expected pending_added");
+      expect(added.request.threadId).toBe("thread-via-launcher");
+
+      // Must still fail closed if an untagged non-server binary sits between the helper and the tagged process.
+      const spoofResp = await runViaHelper(
+        {
+          v: 1,
+          op: "request",
+          wait: false,
+          guard: "playbook",
+          command: ["playbook", "amend", "playbook/PLAYBOOK.md"],
+          cwd: dir,
+          thread_id: "thread-spoofed",
+          refusal: "change playbook/PLAYBOOK.md",
+        },
+        "thread-spoofed",
+        true,
+      );
+      expect(spoofResp.ok).toBe(false);
+      expect(spoofResp.error).toBe("thread_id does not match caller process");
+    } finally {
+      await broker.close();
+    }
+  });
 });
 
 describe("DevdeckProxy & CliRunners validation", () => {
