@@ -1,8 +1,9 @@
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off - Unified in-process Jobs registry bridging Ship Queue and T3 native background commands.
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off - Unified in-process Jobs registry bridging Ship Queue, T3 native background commands, and live cerno processes.
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 
 import { CommandId, ThreadId } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -14,6 +15,8 @@ import * as KnownWorkspaces from "../../workspace/KnownWorkspaces.ts";
 import * as CliRunners from "../CliRunners.ts";
 import { BackgroundTaskBridge, type BackgroundTaskBridgeOptions } from "./BackgroundTaskBridge.ts";
 import type { CommandExecutionTurnItem } from "./BackgroundTaskLifecycle.ts";
+import { CernoVisibilityCoordinator } from "./cernoJobMatcher.ts";
+import { CernoProcessBridge, type CernoProcessBridgeOptions } from "./CernoProcessBridge.ts";
 import { JobEventBroadcaster } from "./JobEventStream.ts";
 import { stripJobSummaryCmdline } from "./managedJobHelpers.ts";
 import { ShipQueueBridge } from "./ShipQueueBridge.ts";
@@ -30,6 +33,8 @@ export type BackgroundBridgeConfig = Omit<
 
 export interface JobRegistryOptions {
   readonly enableShipBridge?: boolean | undefined;
+  readonly enableCernoBridge?: boolean | undefined;
+  readonly cernoBridge?: CernoProcessBridgeOptions | null | undefined;
   readonly backgroundBridge?: BackgroundBridgeConfig | null | undefined;
 }
 
@@ -88,40 +93,116 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
         localHostname: options.backgroundBridge.localHostname ?? NodeOS.hostname(),
         hasShipJobId: (id) =>
           shipJobs.has(`ship:${id}`) || (options.backgroundBridge?.hasShipJobId?.(id) ?? false),
-        onMutated: (jobId, urgent) => broadcaster.markDirty(jobId, urgent),
-        onRemoved: (jobId) => broadcaster.markRemoved(jobId),
+        onMutated: (jobId, urgent) => {
+          const matchChanged =
+            visibility !== null && (urgent || !visibility.hasBgCached(jobId))
+              ? visibility.refreshBgEntry(jobId)
+              : false;
+          if (matchChanged) {
+            visibility?.sync();
+          }
+          if (!visibility?.suppressedBgIds.has(jobId)) {
+            broadcaster.markDirty(jobId, urgent);
+          }
+        },
+        onRemoved: (jobId) => {
+          visibility?.removeBgEntry(jobId);
+          broadcaster.markRemoved(jobId);
+          visibility?.sync();
+        },
       })
     : null;
+
+  const cernoBridge =
+    options.cernoBridge != null || options.enableCernoBridge === true
+      ? new CernoProcessBridge({
+          ...options.cernoBridge,
+          localHostname:
+            options.cernoBridge?.localHostname ??
+            options.backgroundBridge?.localHostname ??
+            NodeOS.hostname(),
+          isWorkspaceAllowed:
+            options.cernoBridge?.isWorkspaceAllowed ?? options.backgroundBridge?.isWorkspaceAllowed,
+          hasShipJobId: (id) =>
+            shipJobs.has(`ship:${id}`) ||
+            (options.cernoBridge?.hasShipJobId?.(id) ??
+              options.backgroundBridge?.hasShipJobId?.(id) ??
+              false),
+          onChanged: (changedIds, removedIds) => {
+            visibility?.sync(new Set(changedIds), removedIds);
+          },
+        })
+      : null;
+
+  const visibility = cernoBridge
+    ? new CernoVisibilityCoordinator({
+        listBgSummaries: () => backgroundBridge?.listSummaries() ?? [],
+        getBgSummary: (id) => backgroundBridge?.getSummary(id),
+        getBgDetail: (id) => backgroundBridge?.getDetail(id) ?? null,
+        listCernoCandidates: () => cernoBridge.listMatchCandidates(),
+        markDirty: (id, urgent) => broadcaster.markDirty(id, urgent),
+        markRemoved: (id) => broadcaster.markRemoved(id),
+      })
+    : null;
+
+  const readVisibleCernoSummaries = (includeCmdline: boolean): JobSummary[] => {
+    if (!cernoBridge || !visibility) return [];
+    const out: JobSummary[] = [];
+    for (const id of visibility.visibleCernoIds) {
+      const summary = cernoBridge.getSummary(id);
+      if (summary) out.push(formatSummaryForScope(summary, includeCmdline));
+    }
+    return out;
+  };
 
   const ensureLoaded = async (): Promise<void> => {
     if (backgroundBridge) {
       backgroundBridge.start();
       await backgroundBridge.ensureHydrated();
     }
+    if (cernoBridge) {
+      await cernoBridge.ensureFresh();
+      visibility?.sync();
+    }
   };
 
   const broadcaster = new JobEventBroadcaster({
     ensureLoaded,
-    getInitialSnapshot: (includeCmdline) => ({
-      jobs: [
-        ...(backgroundBridge
-          ? backgroundBridge.listSummaries().map((s) => formatSummaryForScope(s, includeCmdline))
-          : []),
-        ...shipJobs.values(),
-      ],
-      queueMeta,
-    }),
+    getInitialSnapshot: (includeCmdline) => {
+      visibility?.sync();
+      return {
+        jobs: [
+          ...(backgroundBridge
+            ? backgroundBridge
+                .listSummaries()
+                .filter((s) => !visibility?.suppressedBgIds.has(s.id))
+                .map((s) => formatSummaryForScope(s, includeCmdline))
+            : []),
+          ...readVisibleCernoSummaries(includeCmdline),
+          ...shipJobs.values(),
+        ],
+        queueMeta,
+      };
+    },
     getSummaryById: (id, includeCmdline) => {
+      if (visibility?.suppressedBgIds.has(id)) return undefined;
       const bg = backgroundBridge?.getSummary(id);
-      return bg ? formatSummaryForScope(bg, includeCmdline) : shipJobs.get(id);
+      if (bg) return formatSummaryForScope(bg, includeCmdline);
+      if (id.startsWith("cerno:") && cernoBridge && visibility?.visibleCernoIds.has(id)) {
+        const cerno = cernoBridge.getSummary(id);
+        return cerno ? formatSummaryForScope(cerno, includeCmdline) : undefined;
+      }
+      return shipJobs.get(id);
     },
     getQueueMeta: () => queueMeta,
     onFirstSubscriber: () => {
       shipBridge?.start();
       backgroundBridge?.start();
+      cernoBridge?.start();
     },
     onLastSubscriberGone: () => {
       shipBridge?.stop();
+      cernoBridge?.stop();
       shipJobs.clear();
       queueMeta = {};
       lastShipRefreshAtMs = 0;
@@ -145,13 +226,22 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
         await shipBridge.refresh(true);
         lastShipRefreshAtMs = Date.now();
       }
+      if (cernoBridge && filter?.refresh) {
+        await cernoBridge.refresh();
+      }
+      visibility?.sync();
       const includeCmdline = filter?.includeCmdline !== false;
       const out: JobSummary[] = [];
       if (backgroundBridge) {
         for (const summary of backgroundBridge.listSummaries()) {
+          if (visibility?.suppressedBgIds.has(summary.id)) continue;
           if (filter?.threadId && summary.binding.threadId !== filter.threadId) continue;
           out.push(formatSummaryForScope(summary, includeCmdline));
         }
+      }
+      for (const summary of readVisibleCernoSummaries(includeCmdline)) {
+        if (filter?.threadId && summary.binding.threadId !== filter.threadId) continue;
+        out.push(summary);
       }
       for (const job of shipJobs.values()) {
         if (
@@ -176,8 +266,27 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
 
     async getJobDetail(id) {
       await ensureLoaded();
+      if (id.startsWith("cerno:") && cernoBridge) {
+        return visibility?.visibleCernoIds.has(id) ? cernoBridge.getDetail(id) : null;
+      }
+      if (visibility?.suppressedBgIds.has(id)) return null;
       const bgDetail = backgroundBridge?.getDetail(id) ?? null;
-      if (bgDetail) return bgDetail;
+      if (bgDetail) {
+        if (visibility && backgroundBridge) {
+          const bgSummary = backgroundBridge.getSummary(id);
+          const matched = bgSummary
+            ? visibility.findLiveCernoForBg(bgSummary, bgDetail)
+            : undefined;
+          if (matched) {
+            return {
+              ...bgDetail,
+              ...(matched.cerno ? { cerno: matched.cerno } : {}),
+              ...(!bgDetail.pidStats && matched.pidStats ? { pidStats: matched.pidStats } : {}),
+            };
+          }
+        }
+        return bgDetail;
+      }
       const ship = shipJobs.get(id);
       return ship ? { id: ship.id, revision: ship.revision, series: [], logTail: [] } : null;
     },
@@ -189,6 +298,11 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
         if (!/^[0-9]{1,16}$/.test(num)) return { ok: false, error: "Invalid Ship Queue job id" };
         const res = await CliRunners.cancelShipQueueJob(num, signal);
         return { ok: res.ok, ...(res.error ? { error: res.error } : {}) };
+      }
+      if (id.startsWith("cerno:")) {
+        return cernoBridge && visibility?.visibleCernoIds.has(id)
+          ? cernoBridge.cancelJob(id)
+          : { ok: false, error: `Unknown job id "${id}"` };
       }
       if (backgroundBridge) {
         return backgroundBridge.cancelJob(id);
@@ -206,6 +320,7 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
 
     async dispose() {
       shipBridge?.stop();
+      cernoBridge?.dispose();
       broadcaster.closeAll();
       await backgroundBridge?.dispose();
     },
@@ -220,12 +335,14 @@ export const layer = Layer.effect(
     const knownWorkspaces = yield* KnownWorkspaces.KnownWorkspaces;
     const threadMgmt = yield* ThreadManagementService.ThreadManagementService;
     const commandOutputHub = yield* CommandOutputHub.CommandOutputHub;
+    const platform = yield* HostProcess.Platform;
 
     const isWorkspaceAllowed = (realPath: string) =>
       runPromise(knownWorkspaces.contains(realPath).pipe(Effect.orElseSucceed(() => false)));
 
     const registry = makeJobRegistry({
       enableShipBridge: true,
+      cernoBridge: { platform, isWorkspaceAllowed },
       backgroundBridge: {
         isWorkspaceAllowed,
         getShellSnapshot: () => runPromise(threadMgmt.getShellSnapshot({ location: "active" })),

@@ -59,6 +59,8 @@ export function ThreadManagedJobCard({
         ? "text-success-foreground"
         : "text-muted-foreground";
 
+  const isCernoProcessJob = job.id.startsWith("cerno:");
+  const stopsWholeThread = job.source === "background" && !isCernoProcessJob;
   const isStallAnomaly = Boolean(job.anomaly && job.anomaly.startsWith("No output for "));
 
   return (
@@ -111,9 +113,11 @@ export function ThreadManagedJobCard({
             variant="ghost"
             disabled={cancelling || job.state === "cancelling"}
             aria-label={
-              job.source === "background"
+              stopsWholeThread
                 ? gt("Stop thread (stops active turn and background commands)")
-                : gt("Cancel job")
+                : isCernoProcessJob
+                  ? gt("Stop process")
+                  : gt("Cancel job")
             }
             onClick={() => {
               if (job.source === "background") {
@@ -135,7 +139,7 @@ export function ThreadManagedJobCard({
       {confirmingStop ? (
         <div className="flex flex-wrap items-center justify-between gap-1 rounded border border-destructive/40 bg-destructive/10 px-1.5 py-1 text-3xs">
           <span className="text-foreground">
-            <T>Stop thread?</T>
+            {isCernoProcessJob ? <T>Stop process?</T> : <T>Stop thread?</T>}
           </span>
           <div className="flex items-center gap-1">
             <Button size="xs" variant="ghost" onClick={() => setConfirmStopJobId(null)}>

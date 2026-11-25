@@ -109,6 +109,8 @@ export function ManagedJobInspector({
     job.revision,
   );
   const live = isJobLive(job);
+  const isCernoProcessJob = job.id.startsWith("cerno:");
+  const stopsWholeThread = job.source === "background" && !isCernoProcessJob;
   const confirmingStop = confirmStopJobId === job.id;
   const commandExpanded = expandedCommandJobId === job.id;
   const elapsed = formatJobElapsed(job.timing, nowMs);
@@ -173,7 +175,7 @@ export function ManagedJobInspector({
                   }}
                 >
                   <XCircleIcon className="mr-1 size-3.5" />
-                  <T>Confirm stop thread</T>
+                  {isCernoProcessJob ? <T>Confirm stop process</T> : <T>Confirm stop thread</T>}
                 </Button>
               </>
             ) : (
@@ -182,9 +184,11 @@ export function ManagedJobInspector({
                 variant="destructive"
                 disabled={cancelling || job.state === "cancelling"}
                 title={
-                  job.source === "background"
+                  stopsWholeThread
                     ? gt("Stop owning thread, active turn, and all running background commands")
-                    : undefined
+                    : isCernoProcessJob
+                      ? gt("Stop running cerno process (SIGTERM)")
+                      : undefined
                 }
                 onClick={() =>
                   job.source === "background" ? setConfirmStopJobId(job.id) : onCancel()
@@ -193,8 +197,10 @@ export function ManagedJobInspector({
                 <XCircleIcon className="mr-1 size-3.5" />
                 {job.state === "cancelling" ? (
                   <T>Stopping…</T>
-                ) : job.source === "background" ? (
+                ) : stopsWholeThread ? (
                   <T>Stop thread</T>
+                ) : isCernoProcessJob ? (
+                  <T>Stop process</T>
                 ) : (
                   <T>Cancel</T>
                 )}
