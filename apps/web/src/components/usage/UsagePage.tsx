@@ -95,6 +95,7 @@ import { usePrimaryEnvironmentId } from "../../state/environments";
 import {
   METRIC_OPTIONS,
   USAGE_TAB_OPTIONS,
+  USAGE_WINDOW_OPTIONS,
   WINDOW_OPTIONS,
   resolveUsageShortcut,
   type UsageMetric,
@@ -116,7 +117,7 @@ function isUsageMetric(value: string | null | undefined): value is UsageMetric {
 }
 
 function isUsageWindowDays(value: number): value is UsagePagePreferences["windowDays"] {
-  return WINDOW_OPTIONS.some((option) => option.days === value);
+  return USAGE_WINDOW_OPTIONS.some((option) => option.days === value);
 }
 
 const providerLabel = (provider: UsageProviderKind) => PROVIDER_PRESENTATION[provider].label;
@@ -192,7 +193,7 @@ export function UsagePage() {
   const locale = useLocale();
   const m = useMessages();
   const shortcutTitle = (
-    option: (typeof USAGE_TAB_OPTIONS)[number] | (typeof WINDOW_OPTIONS)[number],
+    option: (typeof USAGE_TAB_OPTIONS)[number] | (typeof USAGE_WINDOW_OPTIONS)[number],
   ) => {
     if (!option.command) return m(option.label);
     const shortcut = shortcutLabelForCommand(keybindings, option.command, {
@@ -358,7 +359,11 @@ export function UsagePage() {
     if (showingLimits && connectedLimitsEnvironments) autoRefreshLimits();
   }, [showingLimits, connectedLimitsEnvironments]);
 
-  const days = enumerateDays(shownWindow.sinceDay, shownWindow.untilDay);
+  const effectiveSinceDay =
+    windowDays === 0 && merged.daily.length > 0
+      ? (merged.daily[0]?.day ?? shownWindow.sinceDay)
+      : shownWindow.sinceDay;
+  const days = enumerateDays(effectiveSinceDay, shownWindow.untilDay);
   const hours =
     shownWindow.sinceTime === undefined || shownWindow.untilTime === undefined
       ? []
@@ -378,10 +383,12 @@ export function UsagePage() {
           end: formatDateTimeShort(shownWindow.untilTime, shownWindow.timeZone, hour12, locale),
         })
       : gt("{start} to {end}", {
-          start: formatDayShort(shownWindow.sinceDay, locale),
+          start: formatDayShort(effectiveSinceDay, locale),
           end: formatDayShort(shownWindow.untilDay, locale),
         });
-  const windowOptionLabel = WINDOW_OPTIONS.find((option) => option.days === windowDays)?.label;
+  const windowOptionLabel = USAGE_WINDOW_OPTIONS.find(
+    (option) => option.days === windowDays,
+  )?.label;
   const metricOptionLabel = USAGE_TAB_OPTIONS.find((option) => option.value === metric)?.label;
   const topbarContent = (
     <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-2 @4xl/usage-header:flex">
@@ -432,7 +439,7 @@ export function UsagePage() {
               if (value) selectWindow(Number(value));
             }}
           >
-            {WINDOW_OPTIONS.map((option) => (
+            {USAGE_WINDOW_OPTIONS.map((option) => (
               <Toggle key={option.days} value={String(option.days)} title={shortcutTitle(option)}>
                 {m(option.label)}
               </Toggle>
@@ -477,7 +484,7 @@ export function UsagePage() {
               <SelectValue>{windowOptionLabel && m(windowOptionLabel)}</SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
-              {WINDOW_OPTIONS.map((option) => (
+              {USAGE_WINDOW_OPTIONS.map((option) => (
                 <SelectItem
                   key={option.days}
                   value={String(option.days)}

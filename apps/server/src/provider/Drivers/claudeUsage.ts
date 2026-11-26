@@ -1,10 +1,14 @@
 import type { ClaudeSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import {
   parseTimestampMs,
+  resolveExtraUsageDirs,
+  resolveSessionArchiveRoot,
+  resolveSessionArchiveSubdir,
   tokenCount,
   type ProviderUsageReader,
   type TranscriptUsageFormat,
@@ -132,18 +136,42 @@ export const claudeUsageFormat: TranscriptUsageFormat<void> = {
   parseProjected: (projected) => parseClaudeRecord(projected),
 };
 
-export const claudeUsageReader: ProviderUsageReader<ClaudeSettings, Path.Path> = {
+export const claudeUsageReader: ProviderUsageReader<
+  ClaudeSettings,
+  FileSystem.FileSystem | Path.Path
+> = {
   kind: "transcripts",
   provider: "claude",
   format: claudeUsageFormat,
   directories: Effect.fn("claudeUsageReader.directories")(function* ({ config, environment }) {
     if (config === undefined) return [];
+    const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const homeDirectory = yield* HostProcess.HomeDirectory;
     const configured = config.homePath.trim();
     const home = configured
       ? expandHomePath(configured, homeDirectory)
       : environment.CLAUDE_CONFIG_DIR?.trim() || path.join(homeDirectory, ".claude");
-    return [{ dir: path.resolve(home, "projects") }];
+    const dirs: Array<{ readonly dir: string; readonly archive?: true }> = [
+      { dir: path.resolve(home, "projects") },
+    ];
+    const archiveRoot = yield* resolveSessionArchiveRoot(
+      fileSystem,
+      path,
+      homeDirectory,
+      environment,
+    );
+    if (archiveRoot !== undefined) {
+      dirs.push({ dir: resolveSessionArchiveSubdir(path, archiveRoot, "claude"), archive: true });
+    }
+    for (const extra of resolveExtraUsageDirs(
+      environment,
+      "T3CODE_USAGE_EXTRA_CLAUDE_DIRS",
+      homeDirectory,
+      path,
+    )) {
+      dirs.push({ dir: extra, archive: true });
+    }
+    return dirs;
   }),
 };

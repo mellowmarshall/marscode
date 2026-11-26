@@ -139,7 +139,11 @@ export type GrokDriverEnv =
   | Path.Path
   | ProviderEventLoggers.ProviderEventLoggers;
 
-export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> = {
+export const GrokDriver: ProviderDriver<
+  GrokSettings,
+  GrokDriverEnv,
+  FileSystem.FileSystem | Path.Path
+> = {
   driverKind: DRIVER_KIND,
   metadata: {
     displayName: "Grok",

@@ -6,8 +6,11 @@ import type {
   UsageSource,
   UsageTokenTotals,
 } from "@t3tools/contracts";
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import type * as Path from "effect/Path";
 import type * as Schema from "effect/Schema";
+import { expandHomePath } from "./pathExpansion.ts";
 
 export type UsageSpeed = "standard" | "fast" | "ultrafast";
 
@@ -130,6 +133,8 @@ export type ProviderUsageReader<Config, R> =
           readonly dir: string;
           readonly fileName?: string;
           readonly refreshing?: true;
+          /** Cold/immutable archive root; scanned on demand with dir-mtime skipping and offline cache fallback. */
+          readonly archive?: true;
         }>,
         never,
         R
@@ -143,3 +148,61 @@ export type ProviderUsageReader<Config, R> =
         input: ProviderUsageScanInput<Config>,
       ) => Effect.Effect<ReadonlyArray<ProviderUsageScan>, UsageReadError, R>;
     });
+
+/** True when a path exists or is a symlink (even if its remote target is temporarily unmounted). */
+export const pathOrSymlinkExists = (
+  fileSystem: FileSystem.FileSystem,
+  target: string,
+): Effect.Effect<boolean> =>
+  fileSystem.readLink(target).pipe(
+    Effect.as(true),
+    Effect.catch(() => fileSystem.exists(target).pipe(Effect.orElseSucceed(() => false))),
+  );
+
+/** Resolves an optional session-archive root if configured or symlinked under ~/.local/state/session-archive/remote. */
+export const resolveSessionArchiveRoot = Effect.fn("usage.resolveSessionArchiveRoot")(function* (
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  homeDirectory: string,
+  environment: NodeJS.ProcessEnv,
+): Effect.fn.Return<string | undefined> {
+  const explicit = environment["T3CODE_USAGE_SESSION_ARCHIVE_DIR"]?.trim();
+  if (explicit) return path.resolve(expandHomePath(explicit, homeDirectory));
+  const defaultLink = path.join(homeDirectory, ".local", "state", "session-archive", "remote");
+  return (yield* pathOrSymlinkExists(fileSystem, defaultLink)) ? defaultLink : undefined;
+});
+
+/**
+ * Resolves a provider subdirectory beneath a session-archive root without probing the
+ * filesystem synchronously, so `UsageService` guards remote/SMB access with bounded timeouts
+ * and negative caching.
+ */
+export function resolveSessionArchiveSubdir(
+  path: Path.Path,
+  archiveRoot: string,
+  subdir: string,
+): string {
+  return path.join(archiveRoot, subdir);
+}
+
+/** Parses comma-separated extra archive directories from an environment variable. */
+export function resolveExtraUsageDirs(
+  environment: NodeJS.ProcessEnv,
+  envKey: string,
+  homeDirectory: string,
+  path: Path.Path,
+): readonly string[] {
+  const raw = environment[envKey]?.trim();
+  if (!raw) return [];
+  const resolved: string[] = [];
+  const seen = new Set<string>();
+  for (const part of raw.split(",")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const dir = path.resolve(expandHomePath(trimmed, homeDirectory));
+    if (seen.has(dir)) continue;
+    seen.add(dir);
+    resolved.push(dir);
+  }
+  return resolved;
+}

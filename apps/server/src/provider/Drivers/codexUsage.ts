@@ -1,15 +1,21 @@
 import type { CodexSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import {
   parseTimestampMs,
+  pathOrSymlinkExists,
+  resolveExtraUsageDirs,
+  resolveSessionArchiveRoot,
+  resolveSessionArchiveSubdir,
   type ProviderUsageReader,
   type TranscriptUsageFormat,
   type UsageRecord,
   type UsageSpeed,
 } from "@t3tools/provider-core/server/usage";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import type { UsageTokenTotals } from "@t3tools/contracts";
 
 import * as CodexUsageHistory from "../../usage/CodexUsageHistory.ts";
@@ -525,7 +531,7 @@ export const codexUsageFormat: TranscriptUsageFormat<CodexScanState> = {
 
 export const codexUsageReader: ProviderUsageReader<
   CodexSettings,
-  Path.Path | CodexUsageHistory.CodexUsageHistory
+  FileSystem.FileSystem | Path.Path | CodexUsageHistory.CodexUsageHistory
 > = {
   kind: "transcripts",
   provider: "codex",
@@ -559,13 +565,49 @@ export const codexUsageReader: ProviderUsageReader<
   }),
   directories: Effect.fn("codexUsageReader.directories")(function* ({ config, environment }) {
     if (config === undefined) return [];
+    const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const homeDirectory = yield* HostProcess.HomeDirectory;
     const environmentHome = environment.CODEX_HOME?.trim();
     const layout = yield* resolveCodexHomeLayout(
       config.setupMode !== "managed" && !config.homePath.trim() && environmentHome
         ? { ...config, homePath: environmentHome }
         : config,
     );
-    return [{ dir: path.resolve(layout.sharedHomePath, "sessions") }];
+    const dirs: Array<{ readonly dir: string; readonly archive?: true }> = [
+      { dir: path.resolve(layout.sharedHomePath, "sessions") },
+    ];
+    const archivedSessions = path.resolve(layout.sharedHomePath, "archived_sessions");
+    if (yield* pathOrSymlinkExists(fileSystem, archivedSessions)) {
+      dirs.push({ dir: archivedSessions });
+    }
+    const archiveRoot = yield* resolveSessionArchiveRoot(
+      fileSystem,
+      path,
+      homeDirectory,
+      environment,
+    );
+    let hasRemoteCodex = false;
+    if (archiveRoot !== undefined) {
+      for (const subdir of ["codex", "codex_codex_archived-sessions"] as const) {
+        if (subdir === "codex") hasRemoteCodex = true;
+        dirs.push({ dir: resolveSessionArchiveSubdir(path, archiveRoot, subdir), archive: true });
+      }
+    }
+    if (!hasRemoteCodex) {
+      const tieredSessions = path.resolve(layout.sharedHomePath, "sessions-tiered");
+      if (yield* pathOrSymlinkExists(fileSystem, tieredSessions)) {
+        dirs.push({ dir: tieredSessions, archive: true });
+      }
+    }
+    for (const extra of resolveExtraUsageDirs(
+      environment,
+      "T3CODE_USAGE_EXTRA_CODEX_DIRS",
+      homeDirectory,
+      path,
+    )) {
+      dirs.push({ dir: extra, archive: true });
+    }
+    return dirs;
   }),
 };

@@ -56,6 +56,36 @@ import { DESKTOP_HOST_SCOPE_ENV, physicalSourceIdOf } from "./usageTranscriptRea
 import * as MuseSdk from "../../../../packages/provider-muse/src/server/sdk.ts";
 import { MuseUsageHome } from "@t3tools/provider-muse/server";
 import { makeScanCacheWriter, SCAN_CACHE_FILE_NAME } from "./usageScanCache.ts";
+import { USAGE_SQLITE_INDEX_FILE, UsageSqliteIndex } from "./usageSqliteIndex.ts";
+import { BUILT_IN_USAGE_DRIVERS } from "../provider/builtInDrivers.ts";
+
+const testTranscriptFormats = new Map(
+  BUILT_IN_USAGE_DRIVERS.flatMap((driver) =>
+    driver.usage?.kind === "transcripts"
+      ? [[driver.usage.provider, driver.usage.format] as const]
+      : [],
+  ),
+);
+
+async function exportSqliteCacheAsJson(stateDir: string): Promise<string> {
+  const index = new UsageSqliteIndex(stateDir);
+  try {
+    const files = new Map(
+      index
+        .loadFilesRange(testTranscriptFormats, -Infinity, Infinity)
+        .map((f) => [f.path, f.entry]),
+    );
+    const meta = index.loadMeta();
+    return [...makeScanCacheWriter()(files, meta)].join("");
+  } finally {
+    index.close();
+    for (const suffix of ["", "-wal", "-shm"]) {
+      await NodeFSP.rm(NodePath.join(stateDir, `${USAGE_SQLITE_INDEX_FILE}${suffix}`), {
+        force: true,
+      });
+    }
+  }
+}
 
 vi.mock("node:fs/promises", { spy: true });
 vi.mock("../../../../packages/provider-muse/src/server/sdk.ts", async (importOriginal) => {
@@ -657,7 +687,7 @@ describe("UsageService", () => {
           -4,
         );
         yield* Effect.promise(async () => {
-          const document = decodeUnknownJsonString(await NodeFSP.readFile(cachePath, "utf8")) as {
+          const document = decodeUnknownJsonString(await exportSqliteCacheAsJson(stateDir)) as {
             files: Record<
               string,
               { cs: Record<string, unknown>; r: unknown[]; t: unknown[]; mr: number }
@@ -684,10 +714,12 @@ describe("UsageService", () => {
         );
         yield* restarted.awaitPersisted;
         yield* Effect.promise(async () => {
-          const document = decodeUnknownJsonString(await NodeFSP.readFile(cachePath, "utf8")) as {
-            files: Record<string, unknown>;
-          };
-          assert.strictEqual(document.files[originalPath], undefined);
+          const index = new UsageSqliteIndex(stateDir);
+          try {
+            assert.strictEqual(index.getFile(originalPath, testTranscriptFormats), undefined);
+          } finally {
+            index.close();
+          }
           await NodeFSP.rm(compressedPath);
         });
         const removed = yield* UsageService.make;
@@ -1004,9 +1036,7 @@ describe("UsageService", () => {
 
           // Downgrade the saved cache to v14, whose clean Codex entries cannot resume.
           yield* Effect.promise(async () => {
-            const cachePath = NodePath.join(stateDir, SCAN_CACHE_FILE_NAME);
-            const document = JSON.parse(await NodeFSP.readFile(cachePath, "utf8"));
-            await NodeFSP.rm(cachePath);
+            const document = JSON.parse(await exportSqliteCacheAsJson(stateDir));
             await NodeFSP.writeFile(
               NodePath.join(stateDir, "usage-scan-cache-v14.json"),
               encodeUnknownJsonString({ ...document, version: 14 }),
@@ -3007,7 +3037,7 @@ describe("UsageService", () => {
           const { stateDir } = yield* ServerConfig.ServerConfig;
           const cachePath = NodePath.join(stateDir, SCAN_CACHE_FILE_NAME);
           yield* Effect.promise(async () => {
-            const document = decodeUnknownJsonString(await NodeFSP.readFile(cachePath, "utf8")) as {
+            const document = decodeUnknownJsonString(await exportSqliteCacheAsJson(stateDir)) as {
               files: Record<string, Record<string, unknown>>;
             };
             const [entry] = Object.values(document.files);
@@ -3531,7 +3561,7 @@ describe("UsageService", () => {
 
           yield* Effect.promise(async () => {
             const livePath = await NodeFSP.realpath(live);
-            const document = decodeUnknownJsonString(await NodeFSP.readFile(cachePath, "utf8")) as {
+            const document = decodeUnknownJsonString(await exportSqliteCacheAsJson(stateDir)) as {
               files: Record<string, { r: unknown[][]; mr: number; cs: Record<string, unknown> }>;
             };
             for (const [path, file] of Object.entries(document.files)) {
@@ -3553,7 +3583,6 @@ describe("UsageService", () => {
               }
             }
             const text = encodeUnknownJsonString({ ...document, version });
-            await NodeFSP.rm(cachePath);
             await NodeFSP.writeFile(legacyPath, text);
             if (version === 6) {
               for (const [name, olderVersion] of [
@@ -3580,12 +3609,11 @@ describe("UsageService", () => {
             60 + 20 * (version === 4 ? 1 : 2),
           );
           yield* upgraded.awaitPersisted;
-          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v17.json");
+          const stateEntries = yield* Effect.promise(() => NodeFSP.readdir(stateDir));
+          assert.isTrue(stateEntries.includes(USAGE_SQLITE_INDEX_FILE));
           assert.deepStrictEqual(
-            (yield* Effect.promise(() => NodeFSP.readdir(stateDir)))
-              .filter((name) => name.startsWith("usage-scan-cache"))
-              .toSorted(),
-            [SCAN_CACHE_FILE_NAME, `${SCAN_CACHE_FILE_NAME}.active`],
+            stateEntries.filter((name) => name.startsWith("usage-scan-cache")).toSorted(),
+            [`${SCAN_CACHE_FILE_NAME}.active`],
           );
         }).pipe(
           Effect.provide(
@@ -3658,8 +3686,7 @@ describe("UsageService", () => {
         yield* first.awaitPersisted;
 
         yield* Effect.promise(async () => {
-          const cachePath = NodePath.join(stateDir, SCAN_CACHE_FILE_NAME);
-          const document = decodeUnknownJsonString(await NodeFSP.readFile(cachePath, "utf8")) as {
+          const document = decodeUnknownJsonString(await exportSqliteCacheAsJson(stateDir)) as {
             files: Record<string, { cs: Record<string, unknown> }>;
           };
           // The v10 parser ignored `token_usage_record`, so its clean state held nothing pending.
@@ -3668,7 +3695,6 @@ describe("UsageService", () => {
               Object.entries(file.cs).filter(([key]) => !key.startsWith("unreported")),
             );
           }
-          await NodeFSP.rm(cachePath);
           await NodeFSP.writeFile(
             NodePath.join(stateDir, "usage-scan-cache-v10.json"),
             encodeUnknownJsonString({ ...document, version: 10 }),
@@ -4406,5 +4432,155 @@ describe("UsageService", () => {
         `interruption left the next matching request pending at scheduler check ${orphanedAt}`,
       );
     }),
+  );
+
+  it.effect(
+    "discovers archived sessions, deduplicates overlap, skips cold archive re-walks, and serves cached history when archive is offline",
+    () =>
+      Effect.gen(function* () {
+        const { home, transcript, settings } = yield* setup;
+        const codexSessions = NodePath.join(home, "codex", "sessions", "2026", "08", "01");
+        const codexArchived = NodePath.join(home, "codex", "archived_sessions");
+        const remoteRoot = NodePath.join(home, "nas-share", "host");
+        const remoteClaude = NodePath.join(remoteRoot, "claude", "proj");
+        const remoteCodex = NodePath.join(remoteRoot, "codex", "2026", "08", "01");
+        const grokPreserved = NodePath.join(home, ".grok-preserved", "sessions", "proj", "sess-1");
+        const archiveLinkDir = NodePath.join(home, ".local", "state", "session-archive");
+        const archiveLink = NodePath.join(archiveLinkDir, "remote");
+
+        const codexRollout = (sessionId: string, outputTokens: number) =>
+          [
+            JSON.stringify({
+              timestamp: "2026-08-01T10:00:00Z",
+              type: "session_meta",
+              payload: { id: sessionId, model_provider: "openai" },
+            }),
+            JSON.stringify({
+              timestamp: "2026-08-01T10:00:01Z",
+              type: "turn_context",
+              payload: { turn_id: "t1", model: "gpt-6-astra" },
+            }),
+            JSON.stringify({
+              timestamp: "2026-08-01T10:00:02Z",
+              type: "event_msg",
+              payload: {
+                type: "token_count",
+                info: {
+                  last_token_usage: {
+                    input_tokens: 10,
+                    cached_input_tokens: 0,
+                    output_tokens: outputTokens,
+                    reasoning_output_tokens: 0,
+                    total_tokens: 10 + outputTokens,
+                  },
+                  total_token_usage: {
+                    input_tokens: 10,
+                    cached_input_tokens: 0,
+                    output_tokens: outputTokens,
+                    reasoning_output_tokens: 0,
+                    total_tokens: 10 + outputTokens,
+                  },
+                },
+              },
+            }),
+          ].join("\n") + "\n";
+
+        const grokUpdate = JSON.stringify({
+          timestamp: Date.parse("2026-08-01T11:00:00Z"),
+          params: {
+            sessionId: "grok-old",
+            update: {
+              sessionUpdate: "turn_completed",
+              prompt_id: "p1",
+              usage: {
+                inputTokens: 10,
+                outputTokens: 7,
+                cachedReadTokens: 0,
+                cacheCreationTokens: 0,
+                reasoningTokens: 0,
+              },
+            },
+          },
+        });
+
+        yield* Effect.promise(async () => {
+          for (const dir of [
+            codexSessions,
+            codexArchived,
+            remoteClaude,
+            remoteCodex,
+            grokPreserved,
+            archiveLinkDir,
+          ]) {
+            await NodeFSP.mkdir(dir, { recursive: true });
+          }
+          await NodeFSP.symlink(remoteRoot, archiveLink);
+          // Live Claude has msg 1 (out=10); archive Claude has msg 1 (duplicate) + msg 2 (out=20).
+          await NodeFSP.writeFile(transcript, `${claudeLine(1, 10)}\n`);
+          await NodeFSP.writeFile(
+            NodePath.join(remoteClaude, "session.jsonl"),
+            `${claudeLine(1, 10)}\n${claudeLine(2, 20)}\n`,
+          );
+          // Live Codex has sess-live (out=15); remoteCodex has sess-live (duplicate) + sess-remote (out=25);
+          // archived_sessions has sess-arch (out=30).
+          await NodeFSP.writeFile(
+            NodePath.join(codexSessions, "live.jsonl"),
+            codexRollout("sess-live", 15),
+          );
+          await NodeFSP.writeFile(
+            NodePath.join(remoteCodex, "live.jsonl"),
+            codexRollout("sess-live", 15),
+          );
+          await NodeFSP.writeFile(
+            NodePath.join(remoteCodex, "remote.jsonl"),
+            codexRollout("sess-remote", 25),
+          );
+          await NodeFSP.writeFile(
+            NodePath.join(codexArchived, "arch.jsonl"),
+            codexRollout("sess-arch", 30),
+          );
+          // Preserved Grok has out=7.
+          await NodeFSP.writeFile(NodePath.join(grokPreserved, "updates.jsonl"), `${grokUpdate}\n`);
+        });
+
+        const expectTotals = (summary: UsageSummary) => {
+          const outByProvider = new Map<string, number>();
+          for (const bucket of summary.buckets) {
+            outByProvider.set(
+              bucket.provider,
+              (outByProvider.get(bucket.provider) ?? 0) + bucket.totals.outputTokens,
+            );
+          }
+          // Claude: 10 (live) + 20 (archive, msg 1 deduped) = 30
+          assert.strictEqual(outByProvider.get("claude"), 30);
+          // Codex: 15 (live) + 25 (remote, sess-live deduped) + 30 (archived_sessions) = 70
+          assert.strictEqual(outByProvider.get("codex"), 70);
+          // Grok: 7 (preserved)
+          assert.strictEqual(outByProvider.get("grok"), 7);
+        };
+
+        yield* Effect.gen(function* () {
+          const first = yield* UsageService.make;
+          const summary1 = yield* first.readSummary(WINDOW);
+          expectTotals(summary1);
+          yield* first.awaitPersisted;
+
+          // Simulate NAS/SMB archive going offline after initial indexing.
+          yield* Effect.promise(() => NodeFSP.rm(remoteRoot, { recursive: true, force: true }));
+
+          // Restarted server still serves all cached archive totals cleanly while offline.
+          const restarted = yield* UsageService.make;
+          const summary2 = yield* restarted.readSummary({ ...WINDOW, awaitRefresh: true });
+          expectTotals(summary2);
+        }).pipe(
+          Effect.provide(
+            layerService({
+              prefix: "usage-archive-e2e",
+              home,
+              settings: { ...settings, usageHistoryRetentionDays: "unlimited" },
+            }),
+          ),
+        );
+      }),
   );
 });

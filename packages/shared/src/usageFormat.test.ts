@@ -175,6 +175,16 @@ describe("hourly usage formatting", () => {
       resolvedOptions.mockRestore();
     }
   });
+
+  it("supports All-time (days=0) and clamps negative days to 1 day", () => {
+    const now = new Date("2026-08-11T12:37:42.123Z");
+    const all = makeWindow(0, now);
+    expect(all.sinceDay).toBe("2024-01-01");
+    expect(all.untilDay >= all.sinceDay).toBe(true);
+
+    const neg = makeWindow(-5, now);
+    expect(neg.sinceDay).toBe(neg.untilDay);
+  });
 });
 
 describe("token formatting", () => {

@@ -26,6 +26,16 @@ export const WINDOW_OPTIONS = [
   { days: 90, label: msg("90 days"), command: "usage.period.quarter" },
 ] as const;
 
+export const USAGE_WINDOW_OPTIONS = [
+  ...WINDOW_OPTIONS,
+  { days: 365, label: msg("1 year"), command: null },
+  { days: 0, label: msg("All"), command: null },
+] as const satisfies readonly {
+  readonly days: number;
+  readonly label: string;
+  readonly command: KeybindingCommand | null;
+}[];
+
 export function resolveUsageShortcut(
   event: ShortcutEventLike & { target: EventTarget | null },
   keybindings: ResolvedKeybindingsConfig,

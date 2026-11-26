@@ -4,6 +4,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import * as NodeStream from "node:stream";
 import * as NodeStringDecoder from "node:string_decoder";
 import * as NodeUtil from "node:util";
 import * as NodeZlib from "node:zlib";
@@ -17,6 +18,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { createTranscriptJsonReader } from "../project/AgentSessionJson.ts";
+import { runArchiveFsOp, withTimeout } from "./usageArchiveFsGuard.ts";
 
 export interface TranscriptFile {
   readonly path: string;
@@ -306,22 +308,24 @@ async function* readChunks(
   handle: NodeFSP.FileHandle,
   start: number,
   compressed: boolean,
+  runFs: <A>(fn: () => Promise<A>) => Promise<A>,
 ): AsyncGenerator<Buffer> {
+  const raw = async function* (copyBuffer: boolean): AsyncGenerator<Buffer> {
+    const buffer = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+    for (let position = start; ;) {
+      const { bytesRead } = await runFs(() => handle.read(buffer, 0, buffer.length, position));
+      if (bytesRead === 0) return;
+      position += bytesRead;
+      yield copyBuffer ? Buffer.from(buffer.subarray(0, bytesRead)) : buffer.subarray(0, bytesRead);
+    }
+  };
   if (compressed) {
-    // Compressed snapshots cache a full parse; decoded byte offsets cannot
-    // resume the compressed input.
-    yield* handle
-      .createReadStream({ start, autoClose: true, highWaterMark: READ_CHUNK_BYTES })
-      .compose(NodeZlib.createZstdDecompress());
+    yield* NodeStream.Readable.from(raw(true), { highWaterMark: 1 }).compose(
+      NodeZlib.createZstdDecompress(),
+    );
     return;
   }
-  const buffer = Buffer.allocUnsafe(READ_CHUNK_BYTES);
-  for (let position = start; ;) {
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
-    if (bytesRead === 0) return;
-    position += bytesRead;
-    yield buffer.subarray(0, bytesRead);
-  }
+  yield* raw(false);
 }
 
 // Match ASCII markers as raw bytes: UTF-8 cannot false-match them mid-sequence, and no line string is allocated.
@@ -335,17 +339,44 @@ export async function readTranscriptRecords<State>(
   filePath: string,
   format: TranscriptUsageFormat<State>,
   resumeFrom?: TranscriptParsePosition,
-  options?: { readonly streamingThresholdBytes?: number },
+  options?: {
+    readonly streamingThresholdBytes?: number;
+    readonly readTimeoutMs?: number;
+    readonly onTimeout?: () => void;
+    readonly useArchiveSlot?: boolean;
+  },
 ): Promise<TranscriptParseResult | null> {
   const streamingThresholdBytes = options?.streamingThresholdBytes ?? STREAMING_THRESHOLD_BYTES;
+  const readTimeoutMs = options?.readTimeoutMs;
+  const runFs = <A>(fn: () => Promise<A>): Promise<A> => {
+    if (readTimeoutMs === undefined) return fn();
+    return options?.useArchiveSlot
+      ? runArchiveFsOp(fn, readTimeoutMs, "transcript read")
+      : withTimeout(fn(), readTimeoutMs, "transcript read");
+  };
   const compressed = filePath.endsWith(".jsonl.zst");
   let handle: NodeFSP.FileHandle;
+  let openTimedOut = false;
   try {
-    handle = await NodeFSP.open(filePath, "r");
-  } catch {
+    handle = await runFs(() => {
+      const opened = NodeFSP.open(filePath, "r");
+      void opened.then(
+        (h) => {
+          if (openTimedOut) void runFs(() => h.close()).catch(() => undefined);
+        },
+        () => undefined,
+      );
+      return opened;
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("timed out")) {
+      openTimedOut = true;
+      options?.onTimeout?.();
+    }
     return null;
   }
 
+  let didTimeout = false;
   try {
     const codec = format.state;
     const decodeState = codec === undefined ? undefined : Schema.decodeUnknownOption(codec.schema);
@@ -362,7 +393,7 @@ export async function readTranscriptRecords<State>(
       resumeFrom !== undefined &&
       resumeFrom.resumeOffset > 0 &&
       (codec === undefined || Option.isSome(savedState)) &&
-      (await guardMatches(handle, resumeFrom))
+      (await runFs(() => guardMatches(handle, resumeFrom)))
     ) {
       if (Option.isSome(savedState)) state = savedState.value;
       start = resumeFrom.resumeOffset;
@@ -426,7 +457,7 @@ export async function readTranscriptRecords<State>(
       streaming = undefined;
       decoder = undefined;
     };
-    for await (const chunk of readChunks(handle, start, compressed)) {
+    for await (const chunk of readChunks(handle, start, compressed, runFs)) {
       let lineStart = 0;
       while (lineStart < chunk.length) {
         const newlineIndex = chunk.indexOf(NEWLINE, lineStart);
@@ -457,7 +488,7 @@ export async function readTranscriptRecords<State>(
     let guardHash = 0;
     if (guardLength > 0) {
       const window = Buffer.alloc(guardLength);
-      await handle.read(window, 0, guardLength, resumeOffset - guardLength);
+      await runFs(() => handle.read(window, 0, guardLength, resumeOffset - guardLength));
       guardHash = fnv1a(window);
     }
 
@@ -473,9 +504,14 @@ export async function readTranscriptRecords<State>(
       },
       resumed,
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("timed out")) {
+      didTimeout = true;
+      options?.onTimeout?.();
+    }
     return null;
   } finally {
-    await handle.close().catch(() => undefined);
+    if (didTimeout) void runFs(() => handle.close()).catch(() => undefined);
+    else await handle.close().catch(() => undefined);
   }
 }

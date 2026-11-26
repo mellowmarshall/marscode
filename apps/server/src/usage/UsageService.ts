@@ -62,12 +62,25 @@ import {
   decodeScanCache,
   dedupeWithinFile,
   LEGACY_SCAN_CACHE_FILE_NAMES,
-  makeScanCacheWriter,
   pruneScanCache,
   SCAN_CACHE_FILE_NAME,
   type CachedFile,
   type ScanCache,
 } from "./usageScanCache.ts";
+import {
+  buildLiveDuplicateIndex,
+  scanArchiveTranscriptDir,
+  type LiveDuplicateIndex,
+} from "./usageArchiveScan.ts";
+import {
+  ARCHIVE_PROBE_TIMEOUT_MS,
+  isArchivePathCachedOffline,
+  markArchiveOffline,
+  runArchiveFsOp,
+} from "./usageArchiveFsGuard.ts";
+import { boundedRealPath, probeArchiveRoot } from "./usageArchiveWalk.ts";
+import type { ArchiveDirState, ArchiveRootState, UsageSqliteIndex } from "./usageSqliteIndex.ts";
+import { acquireUsageSqliteIndex, type SharedUsageSqliteHandle } from "./usageSqlitePool.ts";
 
 const LITELLM_RATES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -111,6 +124,7 @@ interface TranscriptSource {
   readonly volumeId: string;
   readonly physicalSourceId?: string;
   readonly fileName?: string;
+  readonly archive?: true;
 }
 
 const RatesCacheFile = Schema.Struct({
@@ -198,6 +212,101 @@ export const make = Effect.gen(function* () {
   const readerContext = yield* Effect.context<BuiltInUsageReadersEnv>();
 
   const fileCache: ScanCache = new Map();
+  const fileOrderIdx = new Map<string, number>();
+  let fileCacheOrderDirty = false;
+  let nextOrderIdx = 1;
+  const dirtyUpserts = new Map<string, CachedFile>();
+  const dirtyDeletes = new Set<string>();
+  const dirtyOrderUpdates = new Map<string, number>();
+  const pendingArchiveDirs = new Map<string, ArchiveDirState>();
+  const pendingArchiveRoots = new Map<string, ArchiveRootState>();
+  let loadedSinceMs = Infinity;
+  let sqliteHandle: SharedUsageSqliteHandle | null = null;
+  let sqliteOpenRetryAfterMs = 0;
+  const SQLITE_OPEN_RETRY_COOLDOWN_MS = 60_000;
+  const getSqliteIndex = (nowMs?: number): UsageSqliteIndex | null => {
+    if (sqliteHandle !== null) return sqliteHandle.index;
+    if (nowMs !== undefined && nowMs < sqliteOpenRetryAfterMs) return null;
+    if (nowMs === undefined && sqliteOpenRetryAfterMs > 0) return null;
+    try {
+      const handle = acquireUsageSqliteIndex(config.stateDir);
+      sqliteHandle = handle;
+      sqliteOpenRetryAfterMs = 0;
+      const maxIdx = handle.index.getMaxOrderIdx();
+      if (maxIdx > 0 && fileOrderIdx.size > 0) {
+        // Shift pre-open in-memory entries above existing SQLite order_idx values to avoid collisions.
+        for (const [filePath, idx] of fileOrderIdx) {
+          if (dirtyUpserts.has(filePath)) fileOrderIdx.set(filePath, idx + maxIdx);
+        }
+        nextOrderIdx += maxIdx;
+      } else if (maxIdx >= nextOrderIdx) {
+        nextOrderIdx = maxIdx + 1;
+      }
+      return handle.index;
+    } catch {
+      sqliteOpenRetryAfterMs = (nowMs ?? 0) + SQLITE_OPEN_RETRY_COOLDOWN_MS;
+      return null;
+    }
+  };
+  const flushFileCacheOrder = () => {
+    if (!fileCacheOrderDirty) return;
+    fileCacheOrderDirty = false;
+    const sorted = [...fileCache.entries()].toSorted(
+      ([a], [b]) => (fileOrderIdx.get(a) ?? 0) - (fileOrderIdx.get(b) ?? 0),
+    );
+    fileCache.clear();
+    for (const [filePath, entry] of sorted) fileCache.set(filePath, entry);
+  };
+  const setCachedFile = (filePath: string, entry: CachedFile) => {
+    fileCache.set(filePath, entry);
+    if (!fileOrderIdx.has(filePath)) {
+      fileOrderIdx.set(filePath, nextOrderIdx);
+      nextOrderIdx += 1;
+    }
+    dirtyUpserts.set(filePath, entry);
+    dirtyDeletes.delete(filePath);
+    cacheDirty = true;
+  };
+  const deleteCachedFile = (filePath: string): boolean => {
+    const existed = fileCache.delete(filePath);
+    fileOrderIdx.delete(filePath);
+    dirtyUpserts.delete(filePath);
+    dirtyOrderUpdates.delete(filePath);
+    // Always queue SQLite deletion so unloaded rows (e.g. superseded .jsonl originals) are removed too.
+    dirtyDeletes.add(filePath);
+    cacheDirty = true;
+    return existed;
+  };
+  const ensureFilesLoadedSince = (minMtimeMs: number, nowMs: number) => {
+    if (loadedSinceMs <= minMtimeMs) return;
+    const index = getSqliteIndex(nowMs);
+    if (index === null) return;
+    let loaded;
+    try {
+      loaded = index.loadFilesRange(transcriptFormats, minMtimeMs, loadedSinceMs, () => {
+        coveredSince.clear();
+      });
+    } catch {
+      return;
+    }
+    if (loaded.length > 0) {
+      let needsResort = false;
+      for (const { path: filePath, entry, orderIdx } of loaded) {
+        if (orderIdx >= nextOrderIdx) nextOrderIdx = orderIdx + 1;
+        if (dirtyDeletes.has(filePath)) continue;
+        if (!fileCache.has(filePath)) {
+          if (fileCache.size > 0) needsResort = true;
+          fileCache.set(filePath, entry);
+          fileOrderIdx.set(filePath, orderIdx);
+        }
+      }
+      if (needsResort) {
+        fileCacheOrderDirty = true;
+        flushFileCacheOrder();
+      }
+    }
+    loadedSinceMs = minMtimeMs;
+  };
   // Reads from concurrent windows can still hold the original record after it is corrected.
   const resolvedRecords = new WeakMap<UsageRecord, UsageRecord>();
   const correctedRecord = (record: UsageRecord) => resolvedRecords.get(record) ?? record;
@@ -395,6 +504,7 @@ export const make = Effect.gen(function* () {
     retentionCutoffMs: number,
     awaitRefresh: boolean,
   ) {
+    const nowMs = yield* Clock.currentTimeMillis;
     const dirs: Array<TranscriptSource> = [];
     const pending: Array<ScannedDir> = [];
     const seen = new Set<string>();
@@ -404,7 +514,7 @@ export const make = Effect.gen(function* () {
         yield* usageInstances(driver, settings),
         (instance) => reader.directories(instance, { awaitRefresh }),
       );
-      for (const { dir: directory, fileName, refreshing } of directories.flat()) {
+      for (const { dir: directory, fileName, refreshing, archive } of directories.flat()) {
         if (refreshing) {
           const key = `${provider}\0${directory}`;
           if (seen.has(key)) continue;
@@ -414,10 +524,41 @@ export const make = Effect.gen(function* () {
         }
         const sourceKey = provider + "\0" + directory;
         const previous = sourceCache.get(sourceKey);
-        const dir = yield* fileSystem
-          .realPath(directory)
-          .pipe(Effect.orElseSucceed(() => previous?.dir ?? directory));
-        const currentVolumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
+        const archiveCachedOffline =
+          archive === true &&
+          (isArchivePathCachedOffline(directory, nowMs) ||
+            (previous?.dir !== undefined && isArchivePathCachedOffline(previous.dir, nowMs)));
+        const dir = archive
+          ? archiveCachedOffline
+            ? (previous?.dir ?? directory)
+            : ((yield* Effect.promise(() => boundedRealPath(directory, { nowMs }))) ??
+              previous?.dir ??
+              directory)
+          : yield* fileSystem
+              .realPath(directory)
+              .pipe(Effect.orElseSucceed(() => previous?.dir ?? directory));
+        const currentVolumeId = archive
+          ? archiveCachedOffline || isArchivePathCachedOffline(dir, nowMs)
+            ? previous?.dir === dir
+              ? previous.volumeId
+              : ""
+            : previous?.dir === dir && previous.volumeId
+              ? previous.volumeId
+              : yield* Effect.promise(async () => {
+                  const probe = await probeArchiveRoot(dir, { nowMs });
+                  if (!probe.accessible) return "";
+                  try {
+                    return await runArchiveFsOp(
+                      () => readDirectoryVolumeId(dir),
+                      ARCHIVE_PROBE_TIMEOUT_MS,
+                      "volume id",
+                    );
+                  } catch {
+                    markArchiveOffline(dir, nowMs, "timeout", [directory]);
+                    return "";
+                  }
+                })
+          : yield* Effect.promise(() => readDirectoryVolumeId(dir));
         const hasRetainedHistory = fileCache
           .entries()
           .some(
@@ -439,7 +580,22 @@ export const make = Effect.gen(function* () {
         const key = `${provider}\0${dir}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        const sourceId = yield* physicalSourceId(dir);
+        const sourceId = archive
+          ? archiveCachedOffline || isArchivePathCachedOffline(dir, nowMs)
+            ? undefined
+            : yield* Effect.promise(async () => {
+                try {
+                  return await runArchiveFsOp(
+                    () => readPhysicalSourceId(dir, hostScope, hostPlatform),
+                    ARCHIVE_PROBE_TIMEOUT_MS,
+                    "physical source id",
+                  );
+                } catch {
+                  markArchiveOffline(dir, nowMs, "timeout", [directory]);
+                  return undefined;
+                }
+              })
+          : yield* physicalSourceId(dir);
         dirs.push({
           provider,
           format,
@@ -447,6 +603,7 @@ export const make = Effect.gen(function* () {
           volumeId,
           ...(sourceId === undefined ? {} : { physicalSourceId: sourceId }),
           ...(fileName === undefined ? {} : { fileName }),
+          ...(archive ? { archive } : {}),
         });
       }
     }
@@ -456,6 +613,27 @@ export const make = Effect.gen(function* () {
   // Share first loads so concurrent readers cannot scan against a still-empty cache.
   const ensureScanCacheLoaded = yield* Effect.cached(
     Effect.gen(function* () {
+      const nowMs = yield* Clock.currentTimeMillis;
+      const index = getSqliteIndex(nowMs);
+      let sqliteAlreadyPopulated = false;
+      if (index !== null) {
+        const meta = yield* Effect.try({
+          try: () => index.loadMeta(),
+          catch: () => ({ sources: {}, coveredSince: {} }),
+        }).pipe(Effect.orElseSucceed(() => ({ sources: {}, coveredSince: {} })));
+        for (const [key, source] of Object.entries(meta.sources)) sourceCache.set(key, source);
+        for (const [key, since] of Object.entries(meta.coveredSince)) coveredSince.set(key, since);
+        sqliteAlreadyPopulated = yield* Effect.try({
+          try: () => index.getMaxOrderIdx() > 0,
+          catch: () => false,
+        }).pipe(Effect.orElseSucceed(() => false));
+      }
+      // If SQLite already holds migrated rows (e.g. crash before legacy JSON cleanup), do not overwrite with stale JSON.
+      if (sqliteAlreadyPopulated) {
+        yield* removeSupersededCacheFiles;
+        return;
+      }
+
       const readDocument = (filePath: string) =>
         fileSystem.readFileString(filePath).pipe(
           Effect.flatMap((raw) => decodeScanCacheFile(raw)),
@@ -466,11 +644,11 @@ export const make = Effect.gen(function* () {
       for (const fileName of LEGACY_SCAN_CACHE_FILE_NAMES) {
         if (document !== null) break;
         document = yield* readDocument(path.join(config.stateDir, fileName));
-        cacheDirty = document !== null;
       }
       if (document === null) return;
       const decoded = decodeScanCache(document, transcriptFormats);
-      for (const [path, entry] of decoded) fileCache.set(path, entry);
+      for (const [filePath, entry] of decoded) setCachedFile(filePath, entry);
+      cacheDirty = true;
       const saved = (document as { readonly files?: unknown }).files;
       const complete =
         typeof saved === "object" && saved !== null && Object.keys(saved).length === decoded.size;
@@ -482,20 +660,21 @@ export const make = Effect.gen(function* () {
         if (current && complete && fileCache.size > 0) {
           for (const [key, since] of Object.entries(sources.value.coveredSince ?? {}))
             coveredSince.set(key, since);
+        } else {
+          coveredSince.clear();
         }
       }
     }),
   );
 
-  const writeScanCache = makeScanCacheWriter();
   // Serialize writes so concurrently finished window scans cannot overwrite newer snapshots.
   const persistLock = yield* Semaphore.make(1);
 
-  // The saved cache supersedes older versions. Temp folders an aborted write left behind are
+  // SQLite supersedes legacy JSON caches. Temp folders an aborted write left behind are
   // removed once idle for an hour, so a write in progress from another server survives.
   let supersededFilesRemoved = false;
   const removeSupersededCacheFiles = Effect.gen(function* () {
-    for (const fileName of LEGACY_SCAN_CACHE_FILE_NAMES) {
+    for (const fileName of [SCAN_CACHE_FILE_NAME, ...LEGACY_SCAN_CACHE_FILE_NAMES]) {
       yield* fileSystem.remove(path.join(config.stateDir, fileName)).pipe(Effect.ignore);
     }
     const tempPrefixes = [SCAN_CACHE_FILE_NAME, ...LEGACY_SCAN_CACHE_FILE_NAMES].map(
@@ -517,31 +696,77 @@ export const make = Effect.gen(function* () {
     }
   }).pipe(Effect.ignore);
 
-  // Clear dirty before encoding to retain concurrent changes; restore it on failure for retry.
+  // Clear dirty before flushing to retain concurrent changes; restore it on failure for retry.
   const persistCaches = Effect.gen(function* () {
-    if (cacheDirty) {
-      cacheDirty = false;
-      yield* Effect.sync(() =>
-        writeScanCache(fileCache, {
+    if (!cacheDirty) return;
+    const nowMs = yield* Clock.currentTimeMillis;
+    const index = getSqliteIndex(nowMs);
+    if (index === null) return;
+    cacheDirty = false;
+    const upserts = new Map(dirtyUpserts);
+    const deletes = new Set(dirtyDeletes);
+    const orderIndices = new Map<string, number>();
+    for (const filePath of upserts.keys()) {
+      const idx = fileOrderIdx.get(filePath);
+      if (idx !== undefined) orderIndices.set(filePath, idx);
+    }
+    const orderUpdates = new Map(dirtyOrderUpdates);
+    const archiveDirs = [...pendingArchiveDirs.values()];
+    const archiveRoots = [...pendingArchiveRoots.values()];
+    dirtyUpserts.clear();
+    dirtyDeletes.clear();
+    dirtyOrderUpdates.clear();
+    pendingArchiveDirs.clear();
+    pendingArchiveRoots.clear();
+    yield* Effect.try({
+      try: () =>
+        index.flushTranscriptChanges({
+          upserts,
+          deletes,
+          ...(orderIndices.size > 0 ? { orderIndices } : {}),
+          ...(orderUpdates.size > 0 ? { orderUpdates } : {}),
+          ...(archiveDirs.length > 0 ? { archiveDirs } : {}),
+          ...(archiveRoots.length > 0 ? { archiveRoots } : {}),
           sources: Object.fromEntries(sourceCache),
           coveredSince: Object.fromEntries(coveredSince),
         }),
-      ).pipe(
-        Effect.flatMap((contents) => writeCacheFile(scanCachePath, contents)),
-        Effect.andThen(
-          Effect.suspend(() => {
-            if (supersededFilesRemoved) return Effect.void;
-            supersededFilesRemoved = true;
-            return removeSupersededCacheFiles;
-          }),
-        ),
-        Effect.catchCause(() =>
-          Effect.sync(() => {
-            cacheDirty = true;
-          }),
-        ),
-      );
-    }
+      catch: (cause) =>
+        new UsageReadError({
+          reason: "scanFailed",
+          detail: "Usage index write failed.",
+          cause,
+        }),
+    }).pipe(
+      Effect.andThen(
+        Effect.suspend(() => {
+          if (supersededFilesRemoved) return Effect.void;
+          supersededFilesRemoved = true;
+          return removeSupersededCacheFiles;
+        }),
+      ),
+      Effect.catchCause(() =>
+        Effect.sync(() => {
+          cacheDirty = true;
+          for (const [filePath, entry] of upserts) {
+            if (!dirtyUpserts.has(filePath)) dirtyUpserts.set(filePath, entry);
+          }
+          for (const filePath of deletes) {
+            if (!dirtyUpserts.has(filePath)) dirtyDeletes.add(filePath);
+          }
+          for (const [filePath, orderIdx] of orderUpdates) {
+            if (!dirtyOrderUpdates.has(filePath)) dirtyOrderUpdates.set(filePath, orderIdx);
+          }
+          for (const entry of archiveDirs) {
+            const key = `${entry.provider}\0${entry.dirPath}`;
+            if (!pendingArchiveDirs.has(key)) pendingArchiveDirs.set(key, entry);
+          }
+          for (const entry of archiveRoots) {
+            const key = `${entry.provider}\0${entry.rootDir}`;
+            if (!pendingArchiveRoots.has(key)) pendingArchiveRoots.set(key, entry);
+          }
+        }),
+      ),
+    );
   }).pipe(persistLock.withPermit, Effect.withSpan("UsageService.persistCaches"));
 
   const pendingPersists = new Set<Fiber.Fiber<void>>();
@@ -554,7 +779,16 @@ export const make = Effect.gen(function* () {
   const awaitPersisted = Effect.suspend(() => Fiber.awaitAll([...pendingPersists])).pipe(
     Effect.asVoid,
   );
-  yield* Effect.addFinalizer(() => awaitPersisted);
+  yield* Effect.addFinalizer(() =>
+    awaitPersisted.pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          sqliteHandle?.release();
+          sqliteHandle = null;
+        }),
+      ),
+    ),
+  );
 
   /**
    * Reads run concurrently, and the caller stores updates in walk order rather
@@ -568,13 +802,37 @@ export const make = Effect.gen(function* () {
     mtimeMs: number,
     provider: UsageProviderKind,
     format: TranscriptUsageFormat<unknown>,
+    options?: {
+      readonly readTimeoutMs?: number;
+      readonly onTimeout?: () => void;
+      readonly useArchiveSlot?: boolean;
+    },
   ): Effect.fn.Return<{
     readonly records: readonly UsageRecord[];
     readonly malformedRecords: readonly number[];
     readonly failed?: true;
     readonly update?: { readonly entry: CachedFile; readonly replaces: CachedFile | undefined };
   }> {
-    const cached = fileCache.get(filePath);
+    let cached = fileCache.get(filePath);
+    if (cached === undefined && !dirtyDeletes.has(filePath) && loadedSinceMs > -Infinity) {
+      const nowMs = yield* Clock.currentTimeMillis;
+      const fromIndex = yield* Effect.try({
+        try: () =>
+          getSqliteIndex(nowMs)?.getFile(filePath, transcriptFormats, () => {
+            coveredSince.clear();
+          }),
+        catch: () => undefined,
+      }).pipe(Effect.orElseSucceed(() => undefined));
+      if (fromIndex !== undefined) {
+        if (fileCache.size > 0 && fromIndex.orderIdx < nextOrderIdx - 1) {
+          fileCacheOrderDirty = true;
+        }
+        fileCache.set(filePath, fromIndex.entry);
+        fileOrderIdx.set(filePath, fromIndex.orderIdx);
+        if (fromIndex.orderIdx >= nextOrderIdx) nextOrderIdx = fromIndex.orderIdx + 1;
+        cached = fromIndex.entry;
+      }
+    }
     // Provider is part of the identity: if both providers were ever pointed
     // at one directory, a hit parsed by the other parser must not be reused.
     if (
@@ -599,7 +857,9 @@ export const make = Effect.gen(function* () {
         ? cached.position
         : undefined;
 
-    const parsed = yield* Effect.promise(() => readTranscriptRecords(filePath, format, resumeFrom));
+    const parsed = yield* Effect.promise(() =>
+      readTranscriptRecords(filePath, format, resumeFrom, options),
+    );
     // A read failure is not an empty transcript: caching it under this
     // (size, mtime) would silently drop the file's usage until it changes.
     if (parsed === null)
@@ -704,15 +964,51 @@ export const make = Effect.gen(function* () {
   const scanTranscriptDir = Effect.fn("UsageService.scanTranscriptDir")(function* (
     source: TranscriptSource,
     windowStartMs: number,
+    retentionCutoffMs: number,
     fromMemory: boolean,
+    _awaitRefresh: boolean,
+    liveDuplicateIndex?: LiveDuplicateIndex,
+    liveRootsKey?: string,
   ) {
-    const { provider, format, dir, volumeId, physicalSourceId, fileName } = source;
+    const { provider, format, dir, volumeId, physicalSourceId, fileName, archive } = source;
     const identity = {
       provider,
       dir,
       volumeId,
       ...(physicalSourceId === undefined ? {} : { physicalSourceId }),
     };
+
+    // Cold archive roots skip re-walking while fresh and fall back cleanly to SQLite when offline.
+    if (archive) {
+      return yield* scanArchiveTranscriptDir({
+        provider,
+        format,
+        dir,
+        volumeId,
+        physicalSourceId,
+        fileName,
+        windowStartMs,
+        retentionCutoffMs,
+        fromMemory,
+        liveDuplicateIndex,
+        liveRootsKey: liveRootsKey ?? "",
+        fileCache,
+        pendingArchiveDirs,
+        pendingArchiveRoots,
+        getSqliteIndex,
+        isWithinDirectory,
+        isLaterRead,
+        correctedBatch,
+        setCachedFile,
+        deleteCachedFile,
+        markDirty: () => {
+          cacheDirty = true;
+        },
+        cover: (sinceMs) => cover(source, sinceMs),
+        readFileRecords,
+      });
+    }
+
     const exists = yield* fileSystem
       .exists(dir)
       .pipe(Effect.catchCause(() => Effect.succeed(false)));
@@ -744,12 +1040,11 @@ export const make = Effect.gen(function* () {
         current === undefined ||
         isLaterRead(update.entry, current)
       ) {
-        fileCache.set(path, {
+        setCachedFile(path, {
           ...update.entry,
           records: correctedBatch(update.entry.records),
           tailRecords: correctedBatch(update.entry.tailRecords),
         });
-        cacheDirty = true;
       }
       return { path, records, malformedRecords };
     });
@@ -758,7 +1053,7 @@ export const make = Effect.gen(function* () {
       if (file.failed || !file.path.endsWith(".jsonl.zst")) continue;
       const originalPath = file.path.slice(0, -4);
       // A successfully read archive replaces the original's saved records and diagnostics.
-      if (!livePaths.has(originalPath) && fileCache.delete(originalPath)) cacheDirty = true;
+      if (!livePaths.has(originalPath)) deleteCachedFile(originalPath);
     }
     const unread = failedPaths + read.filter((file) => file.failed).length;
     if (unread === 0) cover(source, windowStartMs);
@@ -819,11 +1114,49 @@ export const make = Effect.gen(function* () {
       { concurrency: "unbounded" },
     );
 
+    // Scan live transcript directories first so archive walks can skip redundant live backup copies.
+    const scanAllTranscripts = Effect.gen(function* () {
+      const results = new Array<ScannedDir>(dirs.length);
+      const liveRootsByProvider = new Map<UsageProviderKind, string[]>();
+      for (const [index, dir] of dirs.entries()) {
+        if (dir.archive) continue;
+        results[index] = yield* scanTranscriptDir(
+          dir,
+          windowStartMs,
+          retentionCutoffMs,
+          fromMemory,
+          awaitRefresh,
+        );
+        const list = liveRootsByProvider.get(dir.provider) ?? [];
+        list.push(dir.dir);
+        liveRootsByProvider.set(dir.provider, list);
+      }
+      const hasArchive = dirs.some((dir) => dir.archive === true);
+      const liveDuplicateIndex = hasArchive
+        ? buildLiveDuplicateIndex(fileCache, liveRootsByProvider)
+        : undefined;
+      for (const [index, dir] of dirs.entries()) {
+        if (!dir.archive) continue;
+        const liveRootsKey = [...(liveRootsByProvider.get(dir.provider) ?? [])]
+          .toSorted()
+          .join("\0");
+        results[index] = yield* scanTranscriptDir(
+          dir,
+          windowStartMs,
+          retentionCutoffMs,
+          fromMemory,
+          awaitRefresh,
+          liveDuplicateIndex,
+          liveRootsKey,
+        );
+      }
+      return results;
+    });
+
     // Scan independent sources together, directories sequentially to bound open files; keep order, since the first copy decides a duplicate's bucket.
-    const [transcripts, scanDirs] = yield* Effect.all(
-      [Effect.forEach(dirs, (dir) => scanTranscriptDir(dir, windowStartMs, fromMemory)), scans],
-      { concurrency: "unbounded" },
-    );
+    const [transcripts, scanDirs] = yield* Effect.all([scanAllTranscripts, scans], {
+      concurrency: "unbounded",
+    });
     const scanned: readonly ScannedDir[] = [...transcripts, ...pending, ...scanDirs.flat()];
     return scanned;
   });
@@ -882,6 +1215,8 @@ export const make = Effect.gen(function* () {
         ? 0
         : Math.max(0, startedAtMs - settings.usageHistoryRetentionDays * 24 * 60 * 60 * 1000);
 
+    ensureFilesLoadedSince(Math.max(windowStartMs, retentionCutoffMs), startedAtMs);
+
     const inWindow = usageTimestampFilter({ ...input, ...hourlyWindow });
     const windowEndMs =
       hourlyWindow?.untilTimeMs ??
@@ -927,6 +1262,7 @@ export const make = Effect.gen(function* () {
     const sources: UsageSource[] = [];
 
     // Deleted transcripts' saved usage still aggregates and deduplicates normally.
+    flushFileCacheOrder();
     const retainedSinceMs = Math.max(windowStartMs, retentionCutoffMs);
     // Saved paths are files below a scanned root, so their folder decides; folders repeat thousands of times.
     const withinDir = (dir: string) => {
@@ -993,9 +1329,20 @@ export const make = Effect.gen(function* () {
       let next = 0;
       const ordered = saved.map((filePath) => (members.has(filePath) ? target[next++]! : filePath));
       if (ordered.every((filePath, index) => filePath === saved[index])) continue;
+      const memberOrderSlots = saved
+        .filter((filePath) => members.has(filePath))
+        .map((filePath) => fileOrderIdx.get(filePath) ?? 0);
       const entries = new Map(fileCache);
       fileCache.clear();
       for (const filePath of ordered) fileCache.set(filePath, entries.get(filePath)!);
+      // Reassign only the swapped member slots so unloaded SQLite rows keep their original order_idx.
+      for (const [slotIndex, filePath] of target.entries()) {
+        const orderIdx = memberOrderSlots[slotIndex];
+        if (orderIdx !== undefined && fileOrderIdx.get(filePath) !== orderIdx) {
+          fileOrderIdx.set(filePath, orderIdx);
+          dirtyOrderUpdates.set(filePath, orderIdx);
+        }
+      }
       cacheDirty = true;
     }
 
@@ -1065,8 +1412,7 @@ export const make = Effect.gen(function* () {
         const tailRecords = correctedBatch(entry.tailRecords);
         if (records === entry.records && tailRecords === entry.tailRecords) continue;
         // Update the current entry by identity; a slow resolver cannot restore an older file.
-        fileCache.set(filePath, { ...entry, records, tailRecords });
-        cacheDirty = true;
+        setCachedFile(filePath, { ...entry, records, tailRecords });
       }
     }
     const crossFileSessions = sharedSessions(filesByDir.flat());
@@ -1168,7 +1514,36 @@ export const make = Effect.gen(function* () {
         Effect.sync(() => {
           if (settings.usageHistoryRetentionDays === currentSettings.usageHistoryRetentionDays) {
             const pruned = pruneScanCache(fileCache, retentionCutoffMs);
-            if (pruned > 0) {
+            if (retentionCutoffMs > 0) {
+              for (const [filePath, entry] of dirtyUpserts) {
+                if (entry.mtimeMs < retentionCutoffMs) dirtyUpserts.delete(filePath);
+              }
+              for (const filePath of fileOrderIdx.keys()) {
+                if (!fileCache.has(filePath)) {
+                  fileOrderIdx.delete(filePath);
+                  dirtyOrderUpdates.delete(filePath);
+                }
+              }
+            }
+            let prunedSqlite = 0;
+            try {
+              prunedSqlite = getSqliteIndex(startedAtMs)?.pruneFilesBefore(retentionCutoffMs) ?? 0;
+            } catch {
+              prunedSqlite = 0;
+            }
+            if (retentionCutoffMs > 0) {
+              for (const [key, root] of pendingArchiveRoots) {
+                if (root.coveredSinceMs < retentionCutoffMs) {
+                  pendingArchiveRoots.set(key, { ...root, coveredSinceMs: retentionCutoffMs });
+                }
+              }
+              for (const [key, dir] of pendingArchiveDirs) {
+                if (dir.coveredSinceMs < retentionCutoffMs) {
+                  pendingArchiveDirs.set(key, { ...dir, coveredSinceMs: retentionCutoffMs });
+                }
+              }
+            }
+            if (pruned > 0 || prunedSqlite > 0) {
               cacheDirty = true;
               // Pruned files are no longer saved, so nothing before the cutoff stays covered.
               for (const [key, since] of coveredSince) {

@@ -7,6 +7,7 @@ import type {
   ProviderUsageScan,
 } from "@t3tools/provider-core/server/usage";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
@@ -15,6 +16,11 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import { resolveAntigravityInstanceDirectories } from "../antigravityAuthSupport.ts";
+import type { AntigravityCachedPayload } from "../../usage/usageSqliteIndex.ts";
+import {
+  acquireUsageSqliteIndex,
+  type SharedUsageSqliteHandle,
+} from "../../usage/usageSqlitePool.ts";
 import {
   antigravityRateModel,
   makeAntigravityUsageCache,
@@ -37,6 +43,36 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const host = yield* ProviderHost.ProviderHost;
   const cache = makeAntigravityUsageCache();
+  const persistedFingerprints = new Map<string, string>();
+  let sqliteHandle: SharedUsageSqliteHandle | null = null;
+  let sqliteRetryAfterMs = 0;
+  const SQLITE_RETRY_COOLDOWN_MS = 60_000;
+  const getSqliteIndex = (nowMs: number) => {
+    if (sqliteHandle !== null) return sqliteHandle.index;
+    if (nowMs < sqliteRetryAfterMs) return null;
+    try {
+      const handle = acquireUsageSqliteIndex(host.paths.stateDir);
+      sqliteHandle = handle;
+      sqliteRetryAfterMs = 0;
+      for (const [key, entry] of handle.index.loadAntigravityCache()) {
+        if (!cache.has(key)) {
+          cache.set(key, entry as NonNullable<ReturnType<typeof cache.get>>);
+        }
+        persistedFingerprints.set(key, entry.fingerprint);
+      }
+      return handle.index;
+    } catch {
+      sqliteRetryAfterMs = nowMs + SQLITE_RETRY_COOLDOWN_MS;
+      return null;
+    }
+  };
+  getSqliteIndex(yield* Clock.currentTimeMillis);
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      sqliteHandle?.release();
+      sqliteHandle = null;
+    }),
+  );
 
   const dataRoots = Effect.fn("AntigravityUsage.dataRoots")(function* (
     environment: NodeJS.ProcessEnv,
@@ -97,10 +133,41 @@ const make = Effect.gen(function* () {
         : resolvedRoot;
       conversationDirs.add(yield* fileSystem.realPath(dir).pipe(Effect.orElseSucceed(() => dir)));
     }
+    const nowMs = yield* Clock.currentTimeMillis;
+    const sqliteIndex = getSqliteIndex(nowMs);
     const result = yield* readAntigravityUsage([...conversationDirs], windowStartMs, cache).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );
+    if (sqliteIndex !== null) {
+      const upserts = new Map<string, AntigravityCachedPayload>();
+      const deletes = new Set<string>();
+      for (const [key, entry] of cache) {
+        if (persistedFingerprints.get(key) !== entry.fingerprint) {
+          upserts.set(key, entry as AntigravityCachedPayload);
+        }
+      }
+      // Do not persist cache evictions when any root had read errors; an unreadable root would wipe cached DBs.
+      if (result.errors.length === 0) {
+        for (const key of persistedFingerprints.keys()) {
+          if (!cache.has(key)) deletes.add(key);
+        }
+      }
+      if (upserts.size > 0 || deletes.size > 0) {
+        const updatedAtMs = yield* Clock.currentTimeMillis;
+        const saved = yield* Effect.try({
+          try: () => {
+            sqliteIndex.saveAntigravityChanges({ upserts, deletes, updatedAtMs });
+            return true;
+          },
+          catch: () => false,
+        }).pipe(Effect.orElseSucceed(() => false));
+        if (saved) {
+          for (const [key, entry] of upserts) persistedFingerprints.set(key, entry.fingerprint);
+          for (const key of deletes) persistedFingerprints.delete(key);
+        }
+      }
+    }
     const scanned: ProviderUsageScan[] = [];
     for (const dir of conversationDirs) {
       const exists = yield* fileSystem

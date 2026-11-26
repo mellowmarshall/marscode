@@ -294,9 +294,13 @@ function UsageReviewsPanelInner({
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-lg border border-border/70 bg-card/40 p-3">
             <div className="text-2xs text-muted-foreground">
-              <T>
-                Reviews (<Var>{windowDays}</Var>d)
-              </T>
+              {windowDays === 0 ? (
+                <T>Reviews (All)</T>
+              ) : (
+                <T>
+                  Reviews (<Var>{windowDays}</Var>d)
+                </T>
+              )}
             </div>
             <div className="mt-1 font-mono text-2xl font-semibold tabular-nums">
               {totals.reviews}

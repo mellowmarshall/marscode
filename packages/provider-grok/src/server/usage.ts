@@ -1,9 +1,12 @@
 import type { UsageTokenTotals } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import {
+  pathOrSymlinkExists,
+  resolveExtraUsageDirs,
   tokenCount,
   totalTokens,
   type ProviderUsageReader,
@@ -194,20 +197,41 @@ export const grokUsageFormat: TranscriptUsageFormat<void> = {
   usageMarkers: ['"turn_completed"'],
   parseLine: (line) => parseGrokLine(line),
   parseProjected: (projected) => parseGrokRecord(projected),
+  // Preserved or archived session copies can overlap with live sessions.
+  sharedSessionsAcrossFiles: true,
 };
 
-export const grokUsageReader: ProviderUsageReader<GrokSettings, Path.Path> = {
-  kind: "transcripts",
-  provider: "grok",
-  format: grokUsageFormat,
-  directories: Effect.fn("grokUsageReader.directories")(function* ({ environment }) {
-    const path = yield* Path.Path;
-    const homeDirectory = yield* HostProcess.HomeDirectory;
-    const home = expandHomePath(
-      environment.GROK_HOME?.trim() || path.join(homeDirectory, ".grok"),
-      homeDirectory,
-    );
-    // Only updates.jsonl carries usage; skip large chat_history and events logs.
-    return [{ dir: path.resolve(home, "sessions"), fileName: "updates.jsonl" }];
-  }),
-};
+export const grokUsageReader: ProviderUsageReader<GrokSettings, FileSystem.FileSystem | Path.Path> =
+  {
+    kind: "transcripts",
+    provider: "grok",
+    format: grokUsageFormat,
+    directories: Effect.fn("grokUsageReader.directories")(function* ({ environment }) {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const homeDirectory = yield* HostProcess.HomeDirectory;
+      const home = expandHomePath(
+        environment.GROK_HOME?.trim() || path.join(homeDirectory, ".grok"),
+        homeDirectory,
+      );
+      // Only updates.jsonl carries usage; skip large chat_history and events logs.
+      const dirs: Array<{
+        readonly dir: string;
+        readonly fileName: string;
+        readonly archive?: true;
+      }> = [{ dir: path.resolve(home, "sessions"), fileName: "updates.jsonl" }];
+      const preserved = path.resolve(homeDirectory, ".grok-preserved", "sessions");
+      if (yield* pathOrSymlinkExists(fileSystem, preserved)) {
+        dirs.push({ dir: preserved, fileName: "updates.jsonl", archive: true });
+      }
+      for (const extra of resolveExtraUsageDirs(
+        environment,
+        "T3CODE_USAGE_EXTRA_GROK_DIRS",
+        homeDirectory,
+        path,
+      )) {
+        dirs.push({ dir: extra, fileName: "updates.jsonl", archive: true });
+      }
+      return dirs;
+    }),
+  };

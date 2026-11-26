@@ -326,11 +326,20 @@ export function makeWindow(
       untilTime: untilTime.toISOString(),
     };
   }
+  if (days === 0) {
+    return {
+      sinceDay: UsageDay.make("2024-01-01"),
+      untilDay: UsageDay.make(untilDay),
+      timeZone,
+      resolution,
+    };
+  }
+  const effectiveDays = Math.max(1, Math.trunc(days));
   // Use calendar arithmetic in UTC; fixed millisecond subtraction crosses DST days incorrectly.
   const [year = 0, month = 1, dayOfMonth = 1] = untilDay
     .split("-")
     .map((part) => Number.parseInt(part, 10));
-  const start = new Date(Date.UTC(year, month - 1, dayOfMonth - (days - 1)));
+  const start = new Date(Date.UTC(year, month - 1, dayOfMonth - (effectiveDays - 1)));
   return {
     sinceDay: UsageDay.make(start.toISOString().slice(0, 10)),
     untilDay: UsageDay.make(untilDay),
