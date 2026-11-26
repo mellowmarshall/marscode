@@ -629,6 +629,7 @@ describe("CernoProcessBridge", () => {
       proc_start_ticks: 66666,
       command: "custom-tool",
       state: "WAITING_CUSTOM",
+      confidence: undefined,
     });
 
     const bridge = new CernoProcessBridge({
