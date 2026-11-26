@@ -616,6 +616,20 @@ describe("CernoProcessBridge", () => {
       state: "HEALTHY",
       confidence: 0.35,
     });
+    writeSnapshot(snapDir, "3005.json", {
+      pid: 3005,
+      proc_start_ticks: 55555,
+      command: "python3 eval.py",
+      state: "HEALTHY",
+      confidence: 0.78,
+      alert: "stall:warning",
+    });
+    writeSnapshot(snapDir, "3006.json", {
+      pid: 3006,
+      proc_start_ticks: 66666,
+      command: "custom-tool",
+      state: "WAITING_CUSTOM",
+    });
 
     const bridge = new CernoProcessBridge({
       snapshotDirs: [snapDir],
@@ -634,6 +648,8 @@ describe("CernoProcessBridge", () => {
       const s2 = bridge.getSummary("cerno:3002:22222");
       const s3 = bridge.getSummary("cerno:3003:33333");
       const s4 = bridge.getSummary("cerno:3004:44444");
+      const s5 = bridge.getSummary("cerno:3005:55555");
+      const s6 = bridge.getSummary("cerno:3006:66666");
 
       expect(s1?.cerno).toMatchObject({
         pips: 4,
@@ -658,6 +674,17 @@ describe("CernoProcessBridge", () => {
         tone: "neutral",
         label: "Uncertain",
         confidence: 0.35,
+      });
+      expect(s5?.cerno).toMatchObject({
+        pips: 3,
+        tone: "warning",
+        label: "Possibly stalled",
+        confidence: 0.78,
+      });
+      expect(s6?.cerno).toMatchObject({
+        pips: 2,
+        tone: "neutral",
+        label: "Unknown",
       });
     } finally {
       bridge.dispose();

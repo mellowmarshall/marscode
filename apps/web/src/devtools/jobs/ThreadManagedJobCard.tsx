@@ -46,6 +46,16 @@ function cernoToneBarClass(tone: JobCernoTone | undefined): string {
   }
 }
 
+function formatCernoAriaStatus(cerno: JobCernoVerdict | undefined): string | null {
+  if (!cerno?.pips) return null;
+  const pct =
+    typeof cerno.confidence === "number" && Number.isFinite(cerno.confidence)
+      ? `${Math.round(cerno.confidence * 100)}%`
+      : null;
+  if (cerno.label) return pct ? `${cerno.label} ${pct}` : cerno.label;
+  return cerno.summary ?? null;
+}
+
 function CernoSignalBars({ cerno }: { readonly cerno: JobCernoVerdict }) {
   const pips = cerno.pips ?? 2;
   const activeClass = cernoToneBarClass(cerno.tone);
@@ -65,7 +75,7 @@ function CernoSignalBars({ cerno }: { readonly cerno: JobCernoVerdict }) {
         render={
           <span
             data-testid="cerno-signal-bars"
-            aria-label={title}
+            aria-hidden
             className="inline-flex h-2.5 shrink-0 items-end gap-0.5"
           >
             <span
@@ -124,6 +134,10 @@ export function ThreadManagedJobCard({
   const isCernoProcessJob = job.id.startsWith("cerno:");
   const stopsWholeThread = job.source === "background" && !isCernoProcessJob;
   const isStallAnomaly = Boolean(job.anomaly && job.anomaly.startsWith("No output for "));
+  const cernoAriaStatus = live ? formatCernoAriaStatus(job.cerno) : null;
+  const inspectAriaLabel = cernoAriaStatus
+    ? gt("Inspect job: {title} ({status})", { title: label, status: cernoAriaStatus })
+    : gt("Inspect job: {title}", { title: label });
 
   return (
     <div className="group space-y-1.5 rounded-md border border-border/70 bg-card/60 px-2 py-1.5 text-2xs transition-colors hover:border-border hover:bg-muted/30">
@@ -131,7 +145,7 @@ export function ThreadManagedJobCard({
       <div className="flex items-center justify-between gap-1">
         <button
           type="button"
-          aria-label={gt("Inspect job: {title}", { title: label })}
+          aria-label={inspectAriaLabel}
           className="flex min-w-0 flex-1 items-center justify-between gap-1.5 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           onClick={onInspect}
         >

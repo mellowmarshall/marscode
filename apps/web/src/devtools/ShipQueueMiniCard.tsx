@@ -76,7 +76,7 @@ export function ShipQueueMiniCard({
 
   const tooltipDetail =
     routeHost && current?.id === "ci"
-      ? `${current.detail ? `${current.detail} · ` : ""}${routeHost}`
+      ? `${current.detail ?? current.label} · ${routeHost}`
       : (current?.detail ?? current?.label ?? resolveShipJobDisplayState(job));
 
   return (

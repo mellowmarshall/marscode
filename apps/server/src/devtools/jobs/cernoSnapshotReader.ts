@@ -437,9 +437,11 @@ function confidenceToPips(confidence: number): 1 | 2 | 3 | 4 {
   return 1;
 }
 
+const HEALTHY_CERNO_STATES = new Set(["HEALTHY", "RUNNING", "WORKING", "ACTIVE", "STARTING"]);
+
 export function buildCernoVerdict(snap: RawCernoLiveSnapshot): JobCernoVerdict {
-  const needsInput = Boolean(snap.prompt || snap.auth_required || snap.state === "NEEDS_INPUT");
   const upperState = snap.state.toUpperCase();
+  const needsInput = Boolean(snap.prompt || snap.auth_required || upperState === "NEEDS_INPUT");
   const upperOutcome = (snap.outcome ?? "").toUpperCase();
   const outcome: JobCernoVerdict["outcome"] =
     upperOutcome === "PASS" ? "pass" : upperOutcome === "FAIL" ? "fail" : "unknown";
@@ -450,14 +452,17 @@ export function buildCernoVerdict(snap: RawCernoLiveSnapshot): JobCernoVerdict {
   const pips: 1 | 2 | 3 | 4 = confidence !== undefined ? confidenceToPips(confidence) : 2;
   const alert = snap.alert ?? "";
 
-  let tone: NonNullable<JobCernoVerdict["tone"]> = "info";
-  let label = "Healthy";
+  let tone: NonNullable<JobCernoVerdict["tone"]> = "neutral";
+  let label = "Unknown";
   if (needsInput) {
     tone = "destructive";
     label = "Needs input";
-  } else if (snap.hang_loop || upperState === "STUCK_LOOP" || alert.startsWith("stall:")) {
+  } else if (snap.hang_loop || upperState === "STUCK_LOOP" || alert === "stall:confirmed") {
     tone = "destructive";
     label = "Stalled";
+  } else if (alert.startsWith("stall:")) {
+    tone = "warning";
+    label = "Possibly stalled";
   } else if (
     upperState === "FAILED" ||
     upperOutcome === "FAIL" ||
@@ -481,6 +486,9 @@ export function buildCernoVerdict(snap: RawCernoLiveSnapshot): JobCernoVerdict {
   } else if (confidence !== undefined && confidence < 0.55) {
     tone = "neutral";
     label = "Uncertain";
+  } else if (HEALTHY_CERNO_STATES.has(upperState)) {
+    tone = "info";
+    label = "Healthy";
   }
 
   const pct = confidence !== undefined ? `${Math.round(confidence * 100)}%` : null;
