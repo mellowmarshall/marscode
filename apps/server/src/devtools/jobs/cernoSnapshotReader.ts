@@ -430,21 +430,71 @@ export async function resolveCernoTailLines(
     .slice(-100);
 }
 
+function confidenceToPips(confidence: number): 1 | 2 | 3 | 4 {
+  if (confidence >= 0.9) return 4;
+  if (confidence >= 0.72) return 3;
+  if (confidence >= 0.5) return 2;
+  return 1;
+}
+
 export function buildCernoVerdict(snap: RawCernoLiveSnapshot): JobCernoVerdict {
   const needsInput = Boolean(snap.prompt || snap.auth_required || snap.state === "NEEDS_INPUT");
+  const upperState = snap.state.toUpperCase();
   const upperOutcome = (snap.outcome ?? "").toUpperCase();
   const outcome: JobCernoVerdict["outcome"] =
     upperOutcome === "PASS" ? "pass" : upperOutcome === "FAIL" ? "fail" : "unknown";
-  const pct =
+  const confidence =
     typeof snap.confidence === "number" && Number.isFinite(snap.confidence)
-      ? `${Math.round(snap.confidence * 100)}%`
-      : null;
+      ? Math.max(0, Math.min(1, snap.confidence))
+      : undefined;
+  const pips: 1 | 2 | 3 | 4 = confidence !== undefined ? confidenceToPips(confidence) : 2;
+  const alert = snap.alert ?? "";
+
+  let tone: NonNullable<JobCernoVerdict["tone"]> = "info";
+  let label = "Healthy";
+  if (needsInput) {
+    tone = "destructive";
+    label = "Needs input";
+  } else if (snap.hang_loop || upperState === "STUCK_LOOP" || alert.startsWith("stall:")) {
+    tone = "destructive";
+    label = "Stalled";
+  } else if (
+    upperState === "FAILED" ||
+    upperOutcome === "FAIL" ||
+    alert === "mid_stream_fail:confirmed"
+  ) {
+    tone = "destructive";
+    label = "Failing";
+  } else if (
+    alert.startsWith("mid_stream_fail:") ||
+    (snap.resource_kill && snap.resource_kill !== "NORMAL") ||
+    (snap.git_conflict && snap.git_conflict !== "NORMAL")
+  ) {
+    tone = "warning";
+    label = "Likely failing";
+  } else if (snap.server_ready || alert === "server_ready") {
+    tone = "success";
+    label = "Server ready";
+  } else if (upperState === "SUCCEEDED" || upperOutcome === "PASS") {
+    tone = "success";
+    label = "Succeeded";
+  } else if (confidence !== undefined && confidence < 0.55) {
+    tone = "neutral";
+    label = "Uncertain";
+  }
+
+  const pct = confidence !== undefined ? `${Math.round(confidence * 100)}%` : null;
   const parts: string[] = [pct ? `${snap.state} (${pct})` : snap.state];
   if (snap.alert) parts.push(snap.alert);
   else if (snap.has_remote_socket) parts.push("remote socket");
   else if (snap.cpu_active) parts.push("CPU active");
   return {
     checkedAt: new Date(snap.updated_at_ms).toISOString(),
+    state: snap.state,
+    ...(confidence !== undefined ? { confidence } : {}),
+    tone,
+    pips,
+    label,
     outcome,
     hangLoop: Boolean(snap.hang_loop),
     needsInput,

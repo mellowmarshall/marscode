@@ -892,9 +892,12 @@ effectIt.effect.each(["linux", "darwin"] as const)(
   (platform) => {
     const agentPort = 43_124;
     const otherPort = 43_125;
-    // The agent CLI has the thread in its environment too; its own port is not a server.
+    // The agent CLI has the thread in its environment too; its own port is not a server
+    // (whether launched directly by the server or through Linux process-launcher.mjs).
     const agentListener =
-      `p4242\ncnode\nn127.0.0.1:${agentPort}\n` + `p4300\ncagy\nn127.0.0.1:43126\n`;
+      `p4242\ncnode\nn127.0.0.1:${agentPort}\n` +
+      `p4300\ncagy\nn127.0.0.1:43126\n` +
+      (platform === "linux" ? `p4301\ncantigravity\nn127.0.0.1:43127\n` : "");
     const otherListener = `p5000\ncpostgres\nn127.0.0.1:${otherPort}\n`;
     let lsofStdout = otherListener;
     let lsofFails = false;
@@ -911,6 +914,11 @@ effectIt.effect.each(["linux", "darwin"] as const)(
       "/proc/4242/stat": "4242 (node) S 4300 4300 4300 0",
       "/proc/4300/environ": `${PortScanner.AGENT_THREAD_ENV}=thread-agent\0`,
       "/proc/4300/stat": `4300 (agy acp) S ${process.pid} 4300 4300 0`,
+      "/proc/4299/stat": `4299 (t3code) S ${process.pid} 4299 4299 0`,
+      "/proc/4299/cmdline":
+        "/tmp/.mount_T3/t3code\0/tmp/.mount_T3/resources/app.asar/apps/server/dist/process-launcher.mjs\0",
+      "/proc/4301/environ": `${PortScanner.AGENT_THREAD_ENV}=thread-agent\0`,
+      "/proc/4301/stat": "4301 (antigravity) S 4299 4301 4301 0",
     };
     const layer = layerScanner.pipe(
       Layer.provide(

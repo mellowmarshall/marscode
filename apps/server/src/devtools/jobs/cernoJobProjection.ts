@@ -115,6 +115,9 @@ export function upsertCernoRecord(
     cerno.hangLoop,
     cerno.needsInput,
     cerno.serverReady,
+    cerno.tone ?? "",
+    cerno.pips ?? 0,
+    cerno.label ?? "",
     buildRecentTail(tailLines) ?? [],
   ]);
   const pidStats: JobPidStats = {
@@ -229,6 +232,7 @@ export function buildCernoSummary(rec: CernoJobRecord): JobSummary {
     ...(recentTail ? { recentTail } : {}),
     cancellable: rec.cancellable,
     ...(rec.anomaly ? { anomaly: rec.anomaly } : {}),
+    cerno: rec.cerno,
   };
 }
 

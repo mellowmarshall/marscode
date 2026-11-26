@@ -583,4 +583,84 @@ describe("CernoProcessBridge", () => {
       ),
     ).toBe(false);
   });
+
+  it("projects cerno signal bars (pips, tone, label, confidence) onto JobSummary", async () => {
+    const snapDir = mkTempDir("t3-cerno-pips-");
+    writeSnapshot(snapDir, "3001.json", {
+      pid: 3001,
+      proc_start_ticks: 11111,
+      command: "pytest tests/",
+      state: "HEALTHY",
+      confidence: 0.94,
+    });
+    writeSnapshot(snapDir, "3002.json", {
+      pid: 3002,
+      proc_start_ticks: 22222,
+      command: "npm run dev",
+      state: "HEALTHY",
+      confidence: 0.8,
+      server_ready: true,
+    });
+    writeSnapshot(snapDir, "3003.json", {
+      pid: 3003,
+      proc_start_ticks: 33333,
+      command: "cargo build",
+      state: "STUCK_LOOP",
+      confidence: 0.88,
+      hang_loop: true,
+    });
+    writeSnapshot(snapDir, "3004.json", {
+      pid: 3004,
+      proc_start_ticks: 44444,
+      command: "make all",
+      state: "HEALTHY",
+      confidence: 0.35,
+    });
+
+    const bridge = new CernoProcessBridge({
+      snapshotDirs: [snapDir],
+      platform: "linux",
+      ciHostsPath: null,
+      expectedUid: null,
+      nowMs: () => FIXED_NOW_MS,
+      isPidAlive: () => true,
+      readProcStartTicks: async (pid) => (pid - 3000) * 11111,
+      resolveThreadId: async () => "thread-pips",
+    });
+
+    try {
+      await bridge.refresh();
+      const s1 = bridge.getSummary("cerno:3001:11111");
+      const s2 = bridge.getSummary("cerno:3002:22222");
+      const s3 = bridge.getSummary("cerno:3003:33333");
+      const s4 = bridge.getSummary("cerno:3004:44444");
+
+      expect(s1?.cerno).toMatchObject({
+        pips: 4,
+        tone: "info",
+        label: "Healthy",
+        confidence: 0.94,
+      });
+      expect(s2?.cerno).toMatchObject({
+        pips: 3,
+        tone: "success",
+        label: "Server ready",
+        confidence: 0.8,
+      });
+      expect(s3?.cerno).toMatchObject({
+        pips: 3,
+        tone: "destructive",
+        label: "Stalled",
+        confidence: 0.88,
+      });
+      expect(s4?.cerno).toMatchObject({
+        pips: 1,
+        tone: "neutral",
+        label: "Uncertain",
+        confidence: 0.35,
+      });
+    } finally {
+      bridge.dispose();
+    }
+  });
 });

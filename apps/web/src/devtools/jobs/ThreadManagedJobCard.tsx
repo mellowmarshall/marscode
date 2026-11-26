@@ -8,6 +8,7 @@ import { XCircleIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "../../components/ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../../components/ui/tooltip";
 import { TruncatedText } from "../TruncatedText";
 import { JobSparkline } from "./JobCharts";
 import {
@@ -15,6 +16,8 @@ import {
   isJobLive,
   jobKindLabel,
   jobTerminalStateLabel,
+  type JobCernoTone,
+  type JobCernoVerdict,
   type JobSummary,
 } from "./jobTypes";
 
@@ -26,6 +29,65 @@ function statusDotClass(state: JobSummary["state"]): string {
     return "bg-destructive";
   }
   return "bg-muted-foreground";
+}
+
+function cernoToneBarClass(tone: JobCernoTone | undefined): string {
+  switch (tone) {
+    case "destructive":
+      return "bg-destructive";
+    case "warning":
+      return "bg-warning";
+    case "success":
+      return "bg-success";
+    case "neutral":
+      return "bg-muted-foreground";
+    default:
+      return "bg-info";
+  }
+}
+
+function CernoSignalBars({ cerno }: { readonly cerno: JobCernoVerdict }) {
+  const pips = cerno.pips ?? 2;
+  const activeClass = cernoToneBarClass(cerno.tone);
+  const pct =
+    typeof cerno.confidence === "number" && Number.isFinite(cerno.confidence)
+      ? `${Math.round(cerno.confidence * 100)}%`
+      : null;
+  const title = cerno.label
+    ? pct
+      ? `${cerno.label} (${pct})`
+      : cerno.label
+    : (cerno.summary ?? "cerno");
+  const detail = cerno.summary && cerno.summary !== title ? `${title} · ${cerno.summary}` : title;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            data-testid="cerno-signal-bars"
+            aria-label={title}
+            className="inline-flex h-2.5 shrink-0 items-end gap-0.5"
+          >
+            <span
+              className={`h-1 w-0.5 rounded-xs ${pips >= 1 ? activeClass : "bg-muted-foreground/25"}`}
+            />
+            <span
+              className={`h-1.5 w-0.5 rounded-xs ${pips >= 2 ? activeClass : "bg-muted-foreground/25"}`}
+            />
+            <span
+              className={`h-2 w-0.5 rounded-xs ${pips >= 3 ? activeClass : "bg-muted-foreground/25"}`}
+            />
+            <span
+              className={`h-2.5 w-0.5 rounded-xs ${pips >= 4 ? activeClass : "bg-muted-foreground/25"}`}
+            />
+          </span>
+        }
+      />
+      <TooltipPopup side="top" className="max-w-xs break-words">
+        {detail}
+      </TooltipPopup>
+    </Tooltip>
+  );
 }
 
 export function ThreadManagedJobCard({
@@ -85,6 +147,7 @@ export function ThreadManagedJobCard({
             />
           </span>
           <span className="flex shrink-0 items-center gap-1">
+            {live && job.cerno?.pips ? <CernoSignalBars cerno={job.cerno} /> : null}
             {live && pct !== null ? (
               <span
                 data-testid="job-progress-pct"

@@ -98,8 +98,15 @@ export interface JobMetricSeries {
   readonly points: ReadonlyArray<JobMetricPoint>;
 }
 
+export type JobCernoTone = "neutral" | "info" | "success" | "warning" | "destructive";
+
 export interface JobCernoVerdict {
   readonly checkedAt: string;
+  readonly state?: string;
+  readonly confidence?: number;
+  readonly tone?: JobCernoTone;
+  readonly pips?: 1 | 2 | 3 | 4;
+  readonly label?: string;
   readonly outcome?: "pass" | "fail" | "unknown";
   readonly hangLoop?: boolean;
   readonly needsInput?: boolean;
@@ -143,6 +150,7 @@ export interface JobSummary {
   readonly cancellable: boolean;
   readonly summary?: string;
   readonly anomaly?: string;
+  readonly cerno?: JobCernoVerdict;
   readonly shipJob?: ShipQueueJob;
 }
 

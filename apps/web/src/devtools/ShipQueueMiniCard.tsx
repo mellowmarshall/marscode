@@ -2,7 +2,7 @@
  * Ultra-compact 2-line Ship Queue status card for the narrow Thread Details right rail.
  */
 import { useGT } from "gt-react";
-import { ExternalLinkIcon, XCircleIcon, XIcon } from "lucide-react";
+import { ExternalLinkIcon, ServerIcon, XCircleIcon, XIcon } from "lucide-react";
 
 import { Button } from "../components/ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
@@ -69,8 +69,15 @@ export function ShipQueueMiniCard({
             ? "text-success-foreground"
             : "text-muted-foreground";
   const live = isShipQueueJobLive(job);
+  const routeHost =
+    typeof job.route?.host === "string" && job.route.host.trim().length > 0
+      ? job.route.host.trim()
+      : null;
 
-  const tooltipDetail = current?.detail ?? current?.label ?? resolveShipJobDisplayState(job);
+  const tooltipDetail =
+    routeHost && current?.id === "ci"
+      ? `${current.detail ? `${current.detail} · ` : ""}${routeHost}`
+      : (current?.detail ?? current?.label ?? resolveShipJobDisplayState(job));
 
   return (
     <div className="space-y-1.5 rounded-md border border-border/70 bg-card/60 px-2 py-1.5">
@@ -130,6 +137,15 @@ export function ShipQueueMiniCard({
           ) : null}
         </div>
       </div>
+
+      {routeHost ? (
+        <div className="flex items-center gap-1 text-3xs text-muted-foreground">
+          <ServerIcon className="size-2.5 shrink-0" />
+          <span data-testid="ship-queue-host" className="truncate font-mono">
+            {routeHost}
+          </span>
+        </div>
+      ) : null}
 
       {actionError ? <div className="text-3xs text-destructive">{actionError}</div> : null}
 
