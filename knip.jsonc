@@ -184,5 +184,10 @@
       "entry": ["graphql.config.ts", "scripts/measure-pr-preview.ts"],
       "ignoreIssues": { "**/*.graphql.ts": ["exports", "types", "namespaceMembers"] },
     },
+    "packages/surface": {
+      "includeEntryExports": true,
+      // Copied verbatim into target repositories by `surface init`, never imported directly.
+      "ignore": ["templates/**"],
+    },
   },
 }

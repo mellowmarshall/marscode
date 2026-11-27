@@ -1,0 +1,164 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+     Running unittests src/lib.rs (/work/target/debug/deps/demo-1)
+
+running 3 tests
+test tests::slow ... ignored
+test tests::adds ... ok
+test tests::adds_zero ... FAILED
+
+failures:
+
+---- tests::adds_zero stdout ----
+
+thread 'tests::adds_zero' (1001) panicked at src/lib.rs:14:30:
+assertion `left == right` failed
+  left: 2
+ right: 5
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::adds_zero
+
+test result: FAILED. 1 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+     Running tests/integration.rs (/work/target/debug/deps/integration-1)
+
+running 1 test
+test integration_ok ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/many.rs (/work/target/debug/deps/many-1)
+
+running 12 tests
+test many_bad_01 ... FAILED
+test many_bad_02 ... FAILED
+test many_bad_03 ... FAILED
+test many_bad_05 ... FAILED
+test many_bad_04 ... FAILED
+test many_bad_06 ... FAILED
+test many_bad_07 ... FAILED
+test many_bad_08 ... FAILED
+test many_bad_09 ... FAILED
+test many_bad_10 ... FAILED
+test many_bad_11 ... FAILED
+test many_bad_12 ... FAILED
+
+failures:
+
+---- many_bad_01 stdout ----
+
+thread 'many_bad_01' (1001) panicked at tests/many.rs:1:28:
+assertion `left == right` failed: case 01
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- many_bad_02 stdout ----
+
+thread 'many_bad_02' (1001) panicked at tests/many.rs:2:28:
+assertion `left == right` failed: case 02
+  left: 2
+ right: 0
+
+---- many_bad_03 stdout ----
+
+thread 'many_bad_03' (1001) panicked at tests/many.rs:3:28:
+assertion `left == right` failed: case 03
+  left: 3
+ right: 0
+
+---- many_bad_05 stdout ----
+
+thread 'many_bad_05' (1001) panicked at tests/many.rs:5:28:
+assertion `left == right` failed: case 05
+  left: 5
+ right: 0
+
+---- many_bad_04 stdout ----
+
+thread 'many_bad_04' (1001) panicked at tests/many.rs:4:28:
+assertion `left == right` failed: case 04
+  left: 4
+ right: 0
+
+---- many_bad_06 stdout ----
+
+thread 'many_bad_06' (1001) panicked at tests/many.rs:6:28:
+assertion `left == right` failed: case 06
+  left: 6
+ right: 0
+
+---- many_bad_07 stdout ----
+
+thread 'many_bad_07' (1001) panicked at tests/many.rs:7:28:
+assertion `left == right` failed: case 07
+  left: 7
+ right: 0
+
+---- many_bad_08 stdout ----
+
+thread 'many_bad_08' (1001) panicked at tests/many.rs:8:28:
+assertion `left == right` failed: case 08
+  left: 8
+ right: 0
+
+---- many_bad_09 stdout ----
+
+thread 'many_bad_09' (1001) panicked at tests/many.rs:9:28:
+assertion `left == right` failed: case 09
+  left: 9
+ right: 0
+
+---- many_bad_10 stdout ----
+
+thread 'many_bad_10' (1001) panicked at tests/many.rs:10:28:
+assertion `left == right` failed: case 10
+  left: 10
+ right: 0
+
+---- many_bad_11 stdout ----
+
+thread 'many_bad_11' (1001) panicked at tests/many.rs:11:28:
+assertion `left == right` failed: case 11
+  left: 11
+ right: 0
+
+---- many_bad_12 stdout ----
+
+thread 'many_bad_12' (1001) panicked at tests/many.rs:12:28:
+assertion `left == right` failed: case 12
+  left: 12
+ right: 0
+
+
+failures:
+    many_bad_01
+    many_bad_02
+    many_bad_03
+    many_bad_04
+    many_bad_05
+    many_bad_06
+    many_bad_07
+    many_bad_08
+    many_bad_09
+    many_bad_10
+    many_bad_11
+    many_bad_12
+
+test result: FAILED. 0 passed; 12 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test many`
+   Doc-tests demo
+
+running 1 test
+test src/lib.rs - doc (line 5) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.12s; merged doctests compilation took 0.11s
+error: 2 targets failed:
+    `--lib`
+    `--test many`

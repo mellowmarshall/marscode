@@ -1,0 +1,59 @@
+
+--- gate ship-steps: FAIL (exit 1, 21.7s)
+ok   a body that names no issue is refused, and says so
+ok   Refs #N names an issue
+ok   a branch GitHub already merged is refused
+ok   main moved since the rebase is one more round (75)
+ok   with the reason
+ok   and no merge was tried
+scripts/gates/ship-steps.test.sh: line 150: 4242 Killed                  ( cd "$orph" && exec setsid bash -c 'trap "" TERM; while :; do sleep 1; done' )
+ok   a server left in a subdirectory of the worktree is killed
+ok   its kill is reported with pid and command
+ok   a process that ignores TERM is killed anyway
+ok   an agent CLI working in the worktree is left alone
+ok   and reported LEFT_RUNNING
+ok   a process outside the worktree is not touched
+ok   nothing outside the worktree is reported
+ok   the fixtures are running before the cleanup
+Terminated
+ok   the lane's watcher in the worktree is left running
+ok   so is the shell that launched it
+ok   and both are reported LEFT_RUNNING
+ok   a stray process in the same worktree is still killed
+ok   an agent's Bash tool shell is left running
+ok   the command it started is killed
+ok   a tail -F watcher in the worktree is left running
+ok   a multi-line command line is killed and reported on one line
+ok   every line names a numeric pid
+ok   a worktree with nothing running kills nothing
+FAIL submit returns a job and prints the one watch command
+grep: /tmp/suite/queue/jobs//log: No such file or directory
+FAIL the job's markers land in order
+FAIL the watcher saw the job end and returned
+grep: /tmp/suite/queue/jobs//log: No such file or directory
+ok   a job watched throughout never reports WATCHER_LOST
+head: cannot open '/tmp/suite/gated' for reading: No such file or directory
+fatal: Not a valid object name 
+FAIL the gate judged the rebased commit, which sits on main's tip
+grep: /tmp/suite/hooks: No such file or directory
+FAIL the push ran the tracked hook
+head: cannot open '/tmp/suite/gated' for reading: No such file or directory
+grep: /tmp/suite/gh/calls: No such file or directory
+FAIL the merge pinned the gated head
+fatal: path 'e2e.txt' does not exist in 'main'
+FAIL main carries the change
+grep: /tmp/suite/queue/jobs//log: No such file or directory
+FAIL the house stages ran before the gate
+ok   the remote branch is gone
+FAIL the worktree and the local branch are gone
+FAIL the orphan in the cleaned worktree was killed
+grep: /tmp/suite/queue/jobs//log: No such file or directory
+grep: /tmp/suite/queue/jobs//log: No such file or directory
+FAIL the job log names it before CLEANED
+grep: /tmp/suite/queue/jobs//log: No such file or directory
+FAIL a failing gate ends the job with reason=ci
+grep: /tmp/suite/queue/jobs//log: No such file or directory
+ok   a failed gate pushes nothing
+ok   a failed job keeps its worktree and branch
+ship-steps: 28 passed, 12 failed
+scripts/gates/ship-steps.test.sh: line 47: 4242 Killed                  ( cd "$e2e" && exec setsid sleep 600 )

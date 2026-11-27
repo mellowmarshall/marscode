@@ -1,0 +1,10 @@
+[0;34m[ci-local][0m typecheck and unit tests, not the app booting: scripts/mobile-gate.sh is by hand.
+
+[1;36m=== ml ===[0m
+[0;34m[ci-local][0m ranker pytest
+
+> demo@ ml:test /work/demo
+> uv run --project services/ranker --with pytest python -m pytest services/ranker/tests -q
+
+.....................................                                    [100%]
+37 passed in 0.05s

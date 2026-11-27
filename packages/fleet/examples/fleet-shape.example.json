@@ -1,0 +1,85 @@
+{
+  "why": [
+    "An example fleet in the one schema: one API on a compose stack, its database volume, and its edge."
+  ],
+  "apps": {
+    "api": {
+      "why": "Primary backend API service.",
+      "provider": "box",
+      "runsOn": "app-host",
+      "image": "registry.example.test/demo/api",
+      "roles": ["outbox"]
+    }
+  },
+  "roles": {
+    "outbox": {
+      "why": "Delivers queued push tickets.",
+      "reads": ["DATABASE_URL"],
+      "app": "api",
+      "sla": { "maxSuccessAgeSeconds": 900, "why": "a stuck outbox delays every notification" }
+    }
+  },
+  "env": {
+    "DATABASE_URL": {
+      "why": "Primary PostgreSQL access connection string.",
+      "apps": ["api"],
+      "secret": true,
+      "rotation": {
+        "vendor": "postgres",
+        "reason": "a leaked DSN reads every row",
+        "retirement": "rotate the role password and redeploy",
+        "vault": "team-vault"
+      }
+    },
+    "LOG_LEVEL": { "why": "How loud the API logs.", "apps": ["api"] }
+  },
+  "stores": {
+    "pgdata": {
+      "why": "The database files.",
+      "provider": "box",
+      "kind": "volume",
+      "service": "api",
+      "backup": "dump"
+    }
+  },
+  "permissions": {
+    "ops-console": {
+      "why": "Who reaches the operations console.",
+      "provider": "edge",
+      "grants": ["ops.example.test"]
+    }
+  },
+  "providers": {
+    "box": {
+      "kind": "compose",
+      "why": "The production compose stack.",
+      "host": "cloud",
+      "files": {}
+    },
+    "cloud": {
+      "kind": "hetzner",
+      "why": "The cloud account that runs the host.",
+      "servers": {
+        "app-host": { "why": "Primary production server host.", "privateIp": "192.0.2.10" }
+      }
+    },
+    "edge": {
+      "kind": "cloudflare",
+      "why": "The edge in front of the API.",
+      "hostnames": { "api.example.test": { "why": "The public API hostname.", "target": "api" } }
+    }
+  },
+  "backups": {
+    "dump": {
+      "why": "Nightly logical dumps of the database.",
+      "kind": "logical-dump",
+      "covers": "api"
+    }
+  },
+  "decisions": {
+    "hosting": {
+      "why": "The second region is not chosen.",
+      "question": "Which region hosts the replica?"
+    }
+  }
+}

@@ -1,0 +1,66 @@
+
+> demo-api@0.1.0 test /work/demo/apps/api
+> vitest run "tests/audit.test.ts" "tests/metrics.test.ts" "tests/order-repository.test.ts"
+
+
+ RUN  v4.1.10 /work/demo/apps/api
+
+ ❯ tests/order-repository.test.ts (27 tests | 19 failed) 245ms
+     × quietly drops non-cancel changes when a durable cancel exists 39ms
+     × cancels an order and clears its line items 5ms
+     × refuses self-referencing orders before any side effects 4ms
+     × accepts a matching pending quote and mirrors the accepted state 18ms
+     × accepts a pending supplier invite and notifies the sender 8ms
+     × emits a recipient ref for UUID-backed order notifications 8ms
+     × rate-limits outbound requests before creating an order 5ms
+     × uses the ordinary request budget after legacy limits are retired 5ms
+     × quietly requires an account for limited-tier checkout 4ms
+     × quietly requires an account for guest checkout 2ms
+     × quietly redirects declined checkout patterns toward the cart 4ms
+     × does not treat a saved cart as an order 3ms
+     × does not let a coupon bypass limited-tier checkout checks 5ms
+     × does not let a declined payment switch to another method 4ms
+     × refuses refund requests without a receipt before storing state 3ms
+     × allows cross-region orders when the ordinary checks pass 5ms
+     × retains the minimum-order boundary 4ms
+     × mirrors declined refunds back to the requester state 4ms
+     × refuses acceptance when the pending quote is missing 4ms
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 19 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/order-repository.test.ts > order repository > quietly drops non-cancel changes when a durable cancel exists
+TypeError: Cannot read properties of undefined (reading 'rowCount')
+ ❯ recordOrderAuditEvent src/features/orders/orderRepository.ts:459:16
+    457|     ["order_attempt", event.sourceEventId, eventType]
+    458|   );
+    459|   if (existing.rowCount) return;
+       |                ^
+    460|   await insertOutboxEvent(client, {
+    461|     aggregateType: "order_attempt",
+ ❯ recordSkippedAttempt src/features/orders/orderRepository.ts:427:3
+ ❯ src/features/orders/orderRepository.ts:104:9
+ ❯ withTransaction src/db/transaction.ts:89:20
+ ❯ applyOrderChange src/features/orders/orderRepository.ts:53:10
+ ❯ tests/order-repository.test.ts:47:20
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/19]⎯
+
+ FAIL  tests/order-repository.test.ts > order repository > cancels an order and clears its line items
+TypeError: Cannot read properties of undefined (reading 'rowCount')
+ ❯ recordOrderAuditEvent src/features/orders/orderRepository.ts:459:16
+    461|     aggregateType: "order_attempt",
+ ❯ recordSkippedAttempt src/features/orders/orderRepository.ts:427:3
+ ❯ src/features/orders/orderRepository.ts:271:7
+ ❯ withTransaction src/db/transaction.ts:89:20
+ ❯ applyOrderChange src/features/orders/orderRepository.ts:53:10
+ ❯ tests/order-repository.test.ts:1336:20
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[19/19]⎯
+
+
+ Test Files  1 failed | 9 passed (10)
+      Tests  19 failed | 95 passed (114)
+   Start at  04:31:27
+   Duration  6.30s (transform 10.16s, setup 0ms, import 17.01s, tests 4.20s, environment 1ms)
+
+ ELIFECYCLE  Test failed. See above for more details.

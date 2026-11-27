@@ -1,0 +1,42 @@
+   Compiling demo v0.1.0 (/work/demo)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (/work/target/debug/deps/demo-1)
+
+running 3 tests
+test tests::slow ... ignored
+test tests::adds ... ok
+test tests::adds_zero ... ok
+
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/integration.rs (/work/target/debug/deps/integration-1)
+
+running 3 tests
+test integration_ok ... ok
+test integration_bad ... FAILED
+test integration_panics ... FAILED
+
+failures:
+
+---- integration_bad stdout ----
+about to check
+
+thread 'integration_bad' (1001) panicked at tests/integration.rs:2:60:
+assertion `left == right` failed: one plus one
+  left: 2
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- integration_panics stdout ----
+
+thread 'integration_panics' (1001) panicked at tests/integration.rs:3:35:
+boom
+
+
+failures:
+    integration_bad
+    integration_panics
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test integration`

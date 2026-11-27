@@ -1,0 +1,30 @@
+   Compiling sp v0.1.0 (/work/sp/sp)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (/work/sp/target/debug/deps/sp-1)
+
+running 4 tests
+test tests::bad ... FAILED
+test tests::good ... ok
+test tests::nopanic - should panic ... FAILED
+test tests::panics_as_expected - should panic ... ok
+
+failures:
+
+---- tests::bad stdout ----
+
+thread 'tests::bad' (1001) panicked at src/lib.rs:3:24:
+assertion `left == right` failed: bad sum
+  left: 2
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::nopanic stdout ----
+note: test did not panic as expected at src/lib.rs:4:32
+
+failures:
+    tests::bad
+    tests::nopanic
+
+test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

@@ -181,6 +181,8 @@ export default defineConfig({
     ignorePatterns: [
       ".repos/**",
       "infra/task-cache/vendor/**",
+      // Generator templates `surface init` copies byte-for-byte into other repos.
+      "packages/surface/templates/**",
       // Macroscope requires one glob per line; Markdown formatting corrupts it.
       ".macroscope/ignore.md",
       ".alchemy",
@@ -217,6 +219,8 @@ export default defineConfig({
       ".repos",
       ".repos/**",
       "infra/task-cache/vendor/**",
+      // Generator templates `surface init` copies byte-for-byte into other repos.
+      "packages/surface/templates/**",
       "dist",
       "dist-electron",
       "node_modules",

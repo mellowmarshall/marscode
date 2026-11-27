@@ -1,0 +1,105 @@
+
+> demo-mobile@0.1.0 test:publish
+> node --test scripts/publish-bundle.test.mjs
+
+TAP version 13
+# Subtest: accepts only the fixed preview/production publish interface
+ok 1 - accepts only the fixed preview/production publish interface
+  ---
+  duration_ms: 1.903088
+  type: 'test'
+  ...
+# Subtest: gives committed build-profile values the same precedence as the build service
+ok 2 - gives committed build-profile values the same precedence as the build service
+  ---
+  duration_ms: 0.200619
+  type: 'test'
+  ...
+# Subtest: rejects remote environment variables that duplicate build-profile variables
+ok 3 - rejects remote environment variables that duplicate build-profile variables
+  ---
+  duration_ms: 0.293388
+  type: 'test'
+  ...
+# Subtest: uses remote values instead of unrecorded local build inputs
+ok 4 - uses remote values instead of unrecorded local build inputs
+  ---
+  duration_ms: 0.309688
+  type: 'test'
+  ...
+# Subtest: preserves child argument boundaries through the remote shell command
+ok 5 - preserves child argument boundaries through the remote shell command
+  ---
+  duration_ms: 23.180767
+  type: 'test'
+  ...
+# Subtest: publishes the one export instance that passed materialization and scans
+not ok 6 - publishes the one export instance that passed materialization and scans
+  ---
+  duration_ms: 0.991444
+  type: 'test'
+  location: '/work/demo/apps/mobile/scripts/publish-bundle.test.mjs:180:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected "actual" to be reference-equal to "expected":
+    + actual - expected
+    
+      {
+    +   exportCount: 2,
+    -   exportCount: 1,
+        path: '/export'
+      }
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    path: '/export'
+    exportCount: 1
+  actual:
+    path: '/export'
+    exportCount: 2
+  operator: 'strictEqual'
+  stack: |-
+    publishArtifacts (file:///work/demo/apps/mobile/scripts/publish-bundle.test.mjs:200:14)
+    executePublishPipeline (file:///work/demo/apps/mobile/scripts/publish-bundle.mjs:188:10)
+    TestContext.<anonymous> (file:///work/demo/apps/mobile/scripts/publish-bundle.test.mjs:184:18)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: requires an absolute output root outside the repository
+ok 7 - requires an absolute output root outside the repository
+  ---
+  duration_ms: 0.357418
+  type: 'test'
+  ...
+# Subtest: builds the scan view from only device-delivered metadata files
+ok 8 - builds the scan view from only device-delivered metadata files
+  ---
+  duration_ms: 3.168141
+  type: 'test'
+  ...
+# Subtest: rejects missing manifests, source maps, and escaping runtime paths
+ok 9 - rejects missing manifests, source maps, and escaping runtime paths
+  ---
+  duration_ms: 27.373431
+  type: 'test'
+  ...
+# Subtest: never calls publish after manifest or scan failure
+ok 10 - never calls publish after manifest or scan failure
+  ---
+  duration_ms: 0.463237
+  type: 'test'
+  ...
+1..10
+# tests 10
+# suites 0
+# pass 9
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 110.677236

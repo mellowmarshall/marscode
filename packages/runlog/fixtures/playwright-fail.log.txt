@@ -1,0 +1,41 @@
+
+Running 2 tests using 1 worker
+
+  ✓  1 e2e/tests/checkout.spec.ts:57:7 › checkout › adds, pays, survives a reload and confirms an order (5.5s)
+  ✘  2 e2e/tests/calendar-export.spec.ts:26:7 › calendar export › schedule, move, list and cancel an event (11.3s)
+
+
+  1) e2e/tests/calendar-export.spec.ts:26:7 › calendar export › schedule, move, list and cancel an event 
+
+    Error: expect(received).toContain(expected) // indexOf
+
+    Expected substring: "STATUS:CANCELLED"
+    Received string:    "{\"error\":\"Event not found\",\"code\":\"GENERIC.RESOURCE.NOT_FOUND\",\"message\":\"Event not found\",\"retryable\":false}"
+
+      90 |     await page.getByTestId(`upcoming-event-${roomId}`).getByRole('button', { name: 'Cancel event' }).click();
+      91 |     await expect(page.getByTestId(`upcoming-event-${roomId}`)).toHaveCount(0);
+    > 92 |     expect(await (await fetch(`${API_BASE}/v1/events/${roomId}/calendar.ics`)).text()).toContain('STATUS:CANCELLED');
+         |                                                                                            ^
+      93 |   });
+      94 | });
+      95 |
+        at /work/demo/e2e/tests/calendar-export.spec.ts:92:92
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/calendar-export-schedule-move-list-and-cancel-an-event/test-failed-2.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/calendar-export-schedule-move-list-and-cancel-an-event/test-failed-3.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #3: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/calendar-export-schedule-move-list-and-cancel-an-event/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/calendar-export-schedule-move-list-and-cancel-an-event/error-context.md
+
+  1 failed
+    e2e/tests/calendar-export.spec.ts:26:7 › calendar export › schedule, move, list and cancel an event 
+  1 passed (17.6s)
+[36m[e2e-lane][0m Playwright exited 1; judging the run against the quarantine
