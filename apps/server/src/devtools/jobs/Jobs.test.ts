@@ -27,6 +27,8 @@ import {
 } from "@t3tools/contracts";
 import { T3_CODE_ORCHESTRATION_INSTRUCTIONS } from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { runShipQueueCli } from "@t3tools/ship-queue/cli";
+import * as ShipQueueJobStore from "@t3tools/ship-queue/jobStore";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -1018,6 +1020,68 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
     );
     expect(adapted?.source).toBe("ship-queue");
     expect(adapted?.phaseLabel).toBe("Shipping");
+  });
+
+  it("adapts the headless ship-queue's own status --json records", async () => {
+    const root = mkTempDir("t3-sq-status-");
+    const clock = { now: () => "2026-01-01T00:00:00.000Z" };
+    const base = {
+      repo: "acme-fixture/sample-repo",
+      primary: "/work/sample-repo",
+      base_branch: "main",
+      remote: "origin",
+      head_sha: "0".repeat(40),
+    };
+    const queued = ShipQueueJobStore.createJob(
+      root,
+      {
+        ...base,
+        worktree: "/work/wt-a",
+        branch: "feat/1-a",
+        title: "Ship A",
+        thread_id: "thread-a",
+      },
+      "Closes #1\n",
+      clock,
+    );
+    ShipQueueJobStore.mark(root, queued.id, `QUEUED job=${queued.id} branch=feat/1-a`);
+    const landed = ShipQueueJobStore.createJob(
+      root,
+      { ...base, worktree: "/work/wt-b", branch: "feat/2-b", title: "Ship B" },
+      "Closes #2\n",
+      clock,
+    );
+    ShipQueueJobStore.updateJob(root, landed.id, { state: "running", pr: 7 });
+    ShipQueueJobStore.mark(root, landed.id, "PR=7");
+    const out: string[] = [];
+    expect(
+      await runShipQueueCli(["status", "--json"], {
+        deps: { root },
+        io: { stdout: (t) => out.push(t), env: {} },
+      }),
+    ).toBe(0);
+    const status = JSON.parse(out.join("")) as { jobs: Array<Record<string, unknown>> };
+    const jobsRoot = NodePath.join(root, "jobs");
+    const [a, b] = status.jobs.map((raw) => adaptShipQueueJob(raw, "fixture-host", 1, jobsRoot));
+
+    expect(a).toMatchObject({
+      id: `ship:${queued.id}`,
+      state: "queued",
+      title: "Ship A",
+      subtitle: "feat/1-a",
+      cancellable: true,
+      binding: {
+        threadId: "thread-a",
+        repo: "acme-fixture/sample-repo",
+        branch: "feat/1-a",
+        worktreePath: "/work/wt-a",
+        host: "fixture-host",
+      },
+      timing: { startedAt: "2026-01-01T00:00:00.000Z" },
+    });
+    expect(a?.shipJob).toMatchObject({ stage: "queued" });
+    expect(b).toMatchObject({ id: `ship:${landed.id}`, state: "running", phaseLabel: "Shipping" });
+    expect(b?.shipJob).toMatchObject({ stage: "github" });
   });
 
   it.effect(

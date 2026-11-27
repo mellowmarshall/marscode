@@ -93,6 +93,7 @@
     "@t3tools/secret-provider-definitions": "workspace:*",
     "@t3tools/secret-provider-onepassword": "workspace:*",
     "@t3tools/shared": "workspace:*",
+    "@t3tools/ship-queue": "workspace:*",
     "@t3tools/source-control-testing": "workspace:*",
     "@t3tools/ssh": "workspace:*",
     "@t3tools/tailscale": "workspace:*",

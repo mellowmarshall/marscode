@@ -42,9 +42,9 @@ import * as DevtoolsHttp from "./DevtoolsHttp.ts";
 import * as JobRegistry from "./jobs/JobRegistry.ts";
 import { stripJobSummaryCmdline } from "./jobs/managedJobHelpers.ts";
 import { adaptShipQueueJob } from "./jobs/ShipQueueBridge.ts";
+import { SHIP_QUEUE_STAGE_AFTER, SHIP_QUEUE_STAGE_MARKERS } from "@t3tools/ship-queue/markers";
+
 import {
-  DEVDECK_STAGE_AFTER,
-  DEVDECK_STAGE_MARKERS,
   parseDevdeckLogStageInfo,
   parseDevdeckStageFromLogText,
 } from "./jobs/shipQueueLogParser.ts";
@@ -66,25 +66,12 @@ afterEach(() => {
 });
 
 describe("Devtools server contract parity", () => {
-  it("matches DevDeck Go stageAfter markers 1:1 and keeps POST_MERGE + WATCHER_BACK in Deploying", () => {
-    const candidateGoPaths = [
-      "/home/dev/.t3/worktrees/devtools/10d85e80-d5cc5e1cf0080568/devdeck/internal/ship/jobs.go",
-      "/home/devprivate-repo/devdeck/internal/ship/jobs.go",
-    ];
-    const goPath = candidateGoPaths.find((p) => NodeFS.existsSync(p));
-    if (goPath) {
-      const goSource = NodeFS.readFileSync(goPath, "utf8");
-      const blockMatch = /var\s+stageAfter\s*=\s*map\[string\]string\{([\s\S]*?)\}/m.exec(goSource);
-      expect(blockMatch).not.toBeNull();
-      const entries = new Map<string, string>();
-      for (const m of blockMatch![1]!.matchAll(/"([^"]+)"\s*:\s*"([^"]+)"/g)) {
-        entries.set(m[1]!, m[2]!);
-      }
-      expect(entries.size).toBeGreaterThanOrEqual(10);
-      for (const [marker, stage] of entries) {
-        expect(DEVDECK_STAGE_AFTER[marker]).toBe(stage);
-        expect((DEVDECK_STAGE_MARKERS as ReadonlyArray<string>).includes(marker)).toBe(true);
-      }
+  it("matches @t3tools/ship-queue stageAfter markers 1:1 and keeps POST_MERGE + WATCHER_BACK in Deploying", () => {
+    const expectedEntries = Object.entries(SHIP_QUEUE_STAGE_AFTER);
+    expect(expectedEntries.length).toBeGreaterThanOrEqual(10);
+    for (const [marker, stage] of expectedEntries) {
+      expect((SHIP_QUEUE_STAGE_MARKERS as ReadonlyArray<string>).includes(marker)).toBe(true);
+      expect(parseDevdeckStageFromLogText(`${marker}1`)).toBe(stage);
     }
 
     // Real regression: POST_MERGE followed by WATCHER_BACK must stay "deploy" / Deploying.

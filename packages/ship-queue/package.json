@@ -1,0 +1,49 @@
+{
+  "name": "@t3tools/ship-queue",
+  "private": true,
+  "bin": {
+    "ship-queue": "./src/cli.ts"
+  },
+  "type": "module",
+  "exports": {
+    "./cli": {
+      "types": "./src/cli.ts",
+      "import": "./src/cli.ts"
+    },
+    "./jobStore": {
+      "types": "./src/jobStore.ts",
+      "import": "./src/jobStore.ts"
+    },
+    "./markers": {
+      "types": "./src/markers.ts",
+      "import": "./src/markers.ts"
+    },
+    "./submit": {
+      "types": "./src/submit.ts",
+      "import": "./src/submit.ts"
+    },
+    "./types": {
+      "types": "./src/types.ts",
+      "import": "./src/types.ts"
+    },
+    "./watcher": {
+      "types": "./src/watcher.ts",
+      "import": "./src/watcher.ts"
+    },
+    "./worker": {
+      "types": "./src/worker.ts",
+      "import": "./src/worker.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "effect-tsgo tsrs --noEmit",
+    "test": "vp test run --config ../../vite.config.ts --dir ."
+  },
+  "dependencies": {
+    "@t3tools/guard-protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

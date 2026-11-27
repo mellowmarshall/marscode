@@ -2,45 +2,15 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import { SHIP_QUEUE_STAGE_AFTER, SHIP_QUEUE_STAGE_MARKERS } from "@t3tools/ship-queue/markers";
+
 const SAFE_JOB_ID_RE = /^[0-9A-Za-z._-]{1,64}$/;
 const STAGE_LOG_CHUNK_BYTES = 256 * 1024;
 const MAX_INCREMENTAL_SCAN_BYTES = 32 * 1024 * 1024;
 
-// Exact column-0 stage markers and stage map from devtools/devdeck/internal/ship/jobs.go.
-// Non-stage lines like WATCHER_LOST, WATCHER_BACK, and INTENT_AUDIT are deliberately ignored
-// so a watcher blip during a deploy never clobbers POST_MERGE -> "deploy".
-export const DEVDECK_STAGE_MARKERS = [
-  "QUEUED job=",
-  "WAITING_WATCHER",
-  "STARTED job=",
-  "REBASED",
-  "PUSH_EXIT=",
-  "PR=",
-  "MERGE_EXIT=",
-  "LEFT_DIRTY",
-  "LEFT_AHEAD",
-  "CLEANED",
-  "POST_MERGE job=",
-  "SYNC_EXIT=",
-  "FAILED reason=",
-  "DONE job=",
-] as const;
-
-export const DEVDECK_STAGE_AFTER: Readonly<Record<string, string>> = {
-  "QUEUED job=": "queued",
-  WAITING_WATCHER: "watcher",
-  "STARTED job=": "rebase",
-  REBASED: "ci",
-  "PUSH_EXIT=": "pr",
-  "PR=": "github",
-  "MERGE_EXIT=": "cleanup",
-  LEFT_DIRTY: "cleanup",
-  LEFT_AHEAD: "cleanup",
-  CLEANED: "post-merge",
-  "POST_MERGE job=": "deploy",
-  "SYNC_EXIT=": "deployed",
-};
-
+// The stage vocabulary is the queue's own (`@t3tools/ship-queue/markers`). Non-stage lines like
+// WATCHER_LOST, WATCHER_BACK, and QUIET are deliberately ignored so a watcher blip during a deploy
+// never clobbers POST_MERGE -> "deploy".
 interface DevdeckLogStageInfo {
   readonly stage: string;
   readonly hasPostMerge: boolean;
@@ -63,7 +33,7 @@ function scanMarkerLine(
 ): void {
   if (!rawLine || rawLine[0] === " " || rawLine[0] === "\t") return;
   if (rawLine.startsWith("POST_MERGE job=")) state.hasPostMerge = true;
-  for (const prefix of DEVDECK_STAGE_MARKERS) {
+  for (const prefix of SHIP_QUEUE_STAGE_MARKERS) {
     if (rawLine.startsWith(prefix)) {
       state.lastMarker = prefix;
       return;
@@ -77,7 +47,7 @@ export function parseDevdeckLogStageInfo(logText: string): DevdeckLogStageInfo {
     scanMarkerLine(rawLine, state);
   }
   return {
-    stage: state.lastMarker ? (DEVDECK_STAGE_AFTER[state.lastMarker] ?? "") : "",
+    stage: state.lastMarker ? (SHIP_QUEUE_STAGE_AFTER[state.lastMarker] ?? "") : "",
     hasPostMerge: state.hasPostMerge,
   };
 }
@@ -125,7 +95,7 @@ export function readShipJobLogInfo(jobsRootDir: string, jobId: string): DevdeckL
       NodeFS.closeSync(fd);
     }
     const info: DevdeckLogStageInfo = {
-      stage: state.lastMarker ? (DEVDECK_STAGE_AFTER[state.lastMarker] ?? "") : "",
+      stage: state.lastMarker ? (SHIP_QUEUE_STAGE_AFTER[state.lastMarker] ?? "") : "",
       hasPostMerge: state.hasPostMerge,
     };
     if (logStageCache.size > 256) logStageCache.clear();
