@@ -6,7 +6,8 @@
 #   ship-steps.sh body BODYFILE   refuse a body with no Closes #N, and a
 #                                 branch whose PR already merged
 #   ship-steps.sh install         refresh workspace deps with Vite+ hooks off
-#   ship-steps.sh ci              scan the tree for §16 hygiene, then run
+#   ship-steps.sh ci              scan the tree for §16 hygiene, check README
+#                                 media is current, then run
 #                                 marscode's fast adaptive changed-file CI
 #   ship-steps.sh merge PR        squash-merge the gated head: 0 merged,
 #                                 75 the base moved, 76 transient
@@ -50,6 +51,8 @@ ci() {
   local base_ref="${SHIP_QUEUE_BASE_REF:-origin/main}"
   # PLAYBOOK §16 over the whole tree; CI hosts hold no private denylist, so generic rules only.
   node packages/hygiene/src/bin.ts tree --public-only || return $?
+  # README images must match the components they show; hashes only, no browser.
+  node scripts/readme-media.ts --check || return $?
   # Skip workspace install and check:changed when only ship-queue declaration/step files changed.
   local non_ship
   non_ship=$(git diff --name-only "$base_ref...HEAD" -- . ':!.tree-guard.conf' ':!scripts/ship/ship-steps.sh') || {

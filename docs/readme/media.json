@@ -1,0 +1,77 @@
+{
+  "fleet-console.webp": {
+    "sources": [
+      "apps/web/src/devtools/FleetMachinesView.tsx",
+      "apps/web/src/devtools/DeckHeaderStrip.tsx",
+      "apps/web/src/devtools/FleetJobsAndProcsPanel.tsx",
+      "apps/web/src/devtools/FleetThreadsPanel.tsx",
+      "apps/web/src/devtools/FleetLocalhostsPanel.tsx",
+      "apps/web/src/devtools/fleetDeck.css",
+      "apps/web/test/readme/devtools.media.tsx",
+      "apps/web/test/readme/readmeMediaFixtures.ts",
+      "apps/web/src/index.css",
+      "apps/web/src/components/ui/*.tsx"
+    ],
+    "hash": "be8ebd059057f2f1"
+  },
+  "ship-queue.webp": {
+    "sources": [
+      "apps/web/src/devtools/ShipQueue*.tsx",
+      "apps/web/test/readme/devtools.media.tsx",
+      "apps/web/test/readme/readmeMediaFixtures.ts",
+      "apps/web/src/index.css",
+      "apps/web/src/components/ui/*.tsx"
+    ],
+    "hash": "a3e83d1ee8dd6391"
+  },
+  "ship-queue.gif": {
+    "sources": [
+      "apps/web/src/devtools/ShipQueue*.tsx",
+      "apps/web/test/readme/devtools.media.tsx",
+      "apps/web/test/readme/readmeMediaFixtures.ts",
+      "apps/web/src/index.css",
+      "apps/web/src/components/ui/*.tsx"
+    ],
+    "hash": "a3e83d1ee8dd6391"
+  },
+  "reaper.webp": {
+    "sources": [
+      "apps/web/src/devtools/FleetReaperTab.tsx",
+      "apps/web/src/devtools/ReaperRulesEditor.tsx",
+      "apps/web/src/devtools/ReaperStatusCards.tsx",
+      "apps/web/test/readme/devtools.media.tsx",
+      "apps/web/src/index.css",
+      "apps/web/src/components/ui/*.tsx"
+    ],
+    "hash": "77464056f3969b0e"
+  },
+  "reviews.webp": {
+    "sources": [
+      "apps/web/src/devtools/UsageReviewsPanel.tsx",
+      "apps/web/test/readme/devtools.media.tsx",
+      "apps/web/src/index.css",
+      "apps/web/src/components/ui/*.tsx",
+      "apps/web/src/devtools/UsageReviews*.tsx"
+    ],
+    "hash": "354e5ca2942a92ae"
+  },
+  "security.webp": {
+    "sources": [
+      "apps/web/src/devtools/SecuritySettingsPanel.tsx",
+      "apps/web/test/readme/devtools.media.tsx",
+      "apps/web/test/readme/readmeMediaFixtures.ts",
+      "apps/web/src/index.css",
+      "apps/web/src/components/ui/*.tsx"
+    ],
+    "hash": "1fb46955a3478b61"
+  },
+  "cite.gif": {
+    "sources": [
+      "apps/web/src/components/chat/AssistantSelectionToolbar.tsx",
+      "apps/web/test/readme/cite.media.tsx",
+      "apps/web/src/index.css",
+      "apps/web/src/components/ui/*.tsx"
+    ],
+    "hash": "851ee72083985b1b"
+  }
+}

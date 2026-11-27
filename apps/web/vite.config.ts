@@ -185,6 +185,39 @@ const renderScenariosProject = {
   },
 } satisfies TestProjectInlineConfiguration;
 
+// README media (scripts/readme-media.ts) renders real components with neutral fixtures.
+// The script passes the browser build and output folder; normal test runs never load it.
+const readmeMediaDir = process.env.T3CODE_README_MEDIA_DIR;
+const readmeMediaProject = {
+  ...browserTestProject,
+  test: {
+    ...browserTestProject.test,
+    name: "readme-media",
+    include: ["test/readme/*.media.tsx"],
+    testTimeout: 60_000,
+    browser: {
+      ...browserTestProject.test.browser,
+      provider: playwright({
+        launchOptions: process.env.T3CODE_README_MEDIA_BROWSER
+          ? { executablePath: process.env.T3CODE_README_MEDIA_BROWSER }
+          : {},
+        contextOptions: { deviceScaleFactor: 2, timezoneId: "UTC" },
+      }),
+      instances: [{ browser: "chromium", viewport: { width: 1200, height: 1600 } }],
+      commands: {
+        ...browserTestProject.test.browser.commands,
+        captureMedia: async (context, name: string, selector: string) => {
+          if (!readmeMediaDir) throw new Error("T3CODE_README_MEDIA_DIR is not set");
+          const file = `${readmeMediaDir}/${name}.png`;
+          await NodeFSP.mkdir(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+          const frame = await context.frame();
+          await frame.locator(selector).screenshot({ path: file, animations: "disabled" });
+        },
+      },
+    },
+  },
+} satisfies TestProjectInlineConfiguration;
+
 function resolveDevProxyTarget(
   backendPort: string | undefined,
   wsUrl: string | undefined,
@@ -445,6 +478,7 @@ export default defineConfig(({ command }) => {
         defineProject(unitTestProject),
         defineProject(browserTestProject),
         defineProject(renderScenariosProject),
+        ...(readmeMediaDir ? [defineProject(readmeMediaProject)] : []),
       ],
     },
   };
