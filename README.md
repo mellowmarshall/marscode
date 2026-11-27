@@ -1,108 +1,71 @@
-<p align="center">
-  <a href="https://t3.codes">
-    <img src="./assets/prod/t3-black-web-icon-192x192.png" width="80" height="80" alt="T3 Code logo" />
-  </a>
-</p>
+# MarsCode
 
-<h1 align="center">T3 Code</h1>
+MarsCode is a fork of [T3 Code](https://github.com/pingdotgg/t3code), the open-source GUI for coding agents. Install steps, providers, remote access, and every base feature are documented upstream: start with the [T3 Code README](https://github.com/pingdotgg/t3code#readme) and the [docs](./docs/README.md). This page covers only what MarsCode adds: tools for running many agents across several machines, and the gates that let their work merge safely.
 
-<p align="center">The open-source control plane for coding agents.</p>
+## What's different
 
-<p align="center">
-  <a href="https://t3.codes/download"><strong>Download</strong></a> ·
-  <a href="https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824">iOS</a> ·
-  <a href="https://play.google.com/store/apps/details?id=com.t3tools.t3code">Android</a> ·
-  <a href="https://app.t3.codes">Web</a> ·
-  <a href="./docs/README.md">Docs</a> ·
-  <a href="https://discord.gg/jn4EGJjrvv">Discord</a>
-</p>
+### Fleet console
 
-<p align="center">
-  <a href="https://t3.codes">
-    <img src="./.github/readme/hero.webp" width="100%" alt="T3 Code on desktop with a finished Claude thread, next to the phone app asking to approve a command from Codex" />
-  </a>
-</p>
+DevTools shows every host in the fleet with live CPU, memory, GPU, and disk load. For the selected host, it lists the agent threads, background jobs, and hot processes, so you can stop a job or kill a runaway process from one place. Remote hosts report their processes and jobs too; you close remote processes from their own host.
 
-T3 Code runs the coding agents on your machine and gives them one fast interface. Start a thread at your desk, then approve the next step from your phone.
+![Fleet console with three hosts, their load gauges, and the jobs and processes on host-a](./docs/readme/fleet-console.webp)
 
-It works with Claude Code, Codex, Cursor, OpenCode, Grok Build, Antigravity, Kiro, Pi, Muse Code, fx, and any [ACP](./docs/user/providers-acp.md) agent. If an agent is set up on your computer, T3 Code can control it.
+### Ship queue
 
-## What you get
+Agents do not merge pull requests themselves. They submit a clean worktree to the ship queue (`packages/ship-queue`, CLI `ship-queue submit` / `watch`). The queue runs CI on a free CI host, pushes, opens the PR, merges it when the base has not moved, and then runs the repo's post-merge sync. The Jobs and Ship Queue panel shows each job move through those steps.
 
-- **Your subscriptions.** T3 Code does not resell tokens. It drives the agents you are already signed in to.
-- **Every agent in one place.** Change models in the middle of a thread. Let Claude hand a task to Codex.
-- **Desktop, web, and phone.** One server, and every client shows the same threads. There are apps for iOS and Android.
-- **Remote ready.** Run agents on any machine. Connect over your local network, Tailscale, or [T3 Connect](./docs/user/remote-access.md).
-- **Git built in.** Each thread can work in its own worktree. Review the diff, then commit, push, and open a pull request with one button.
-- **Fast.** Performance is a feature here. We measure it, and we treat a dropped frame as a bug.
-- **Open.** MIT licensed. If you don't like something, fork it.
+![A ship job moving from queued through CI, push, and PR to merged](./docs/readme/ship-queue.gif)
 
-## Install
+![Ship Queue panel with one active job and two recent jobs](./docs/readme/ship-queue.webp)
 
-### Desktop app
+### Reaper and session-archive tiering
 
-[Download T3 Code](https://t3.codes/download) for macOS, Windows, or Linux. You can also use a package manager:
+The Reaper cleans stale temp files, Cargo build output, and merged worktrees, and it applies the cleanup rules you approve per host. Paths that hold history are protected. Session archives move to a slower storage tier only after the copy is byte-compared and synced to disk.
 
-| Platform       | Command                                                              |
-| -------------- | -------------------------------------------------------------------- |
-| macOS          | `brew install --cask t3-code`                                        |
-| Windows        | `winget install T3Tools.T3Code` or `scoop install extras/t3code`     |
-| Arch Linux     | `yay -S t3code-bin`                                                  |
-| Nix            | `nix profile add github:NixOS/nixpkgs/nixos-unstable#t3code`         |
-| Debian, Ubuntu | `.deb` from [Releases](https://github.com/pingdotgg/t3code/releases) |
+![Reaper tab with host mounts, sweep counts, and one approved cleanup rule](./docs/readme/reaper.webp)
 
-### Command line
+### Reviews
 
-This installs the `t3` command. Run `t3` to start the server and open the web app.
+The Reviews panel counts code reviews by model and effort across all connected hosts: pass rate, flagged reviews, and findings by severity.
 
-```bash
-curl -fsSL https://t3.codes/install.sh | sh
-```
+![Reviews panel grouped by model and effort](./docs/readme/reviews.webp)
 
-On Windows, in PowerShell:
+### Host guards and the Security page
 
-```powershell
-irm https://t3.codes/install.ps1 | iex
-```
+Host guards (`packages/host-guards`) wrap `git`, `gh`, and install commands. They stop agents from merging outside the queue, installing into the wrong place, and changing protected files without approval. A guarded change asks first: you approve one bundle, bound to the exact protected diff, and the approval ends when the PR merges or the diff changes. Settings > Security lists the live approvals and 24-hour secret access, lets you revoke them, and keeps an audit log.
 
-To try it once without an install, run `npx t3@latest`.
+![Security page with a protected-diff approval, a 24-hour secret grant, and the audit log](./docs/readme/security.webp)
 
-### Phone
+### Agent-ready playbook
 
-Get the app from the [App Store](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) or [Google Play](https://play.google.com/store/apps/details?id=com.t3tools.t3code). Then follow [remote access](./docs/user/remote-access.md) to connect it to your computer.
+`packages/playbook` holds the [playbook](./packages/playbook/PLAYBOOK.md): rules that a repo declares as contracts in `playbook.json` and proves with evidence from its own checks. `playbook check` validates the evidence. `playbook challenge` runs an LLM reviewer against the playbook before a merge.
 
-### Sign in to an agent
+### Public-repo hygiene
 
-T3 Code needs one agent that is installed and signed in. For example, install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`, or install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`.
+`packages/hygiene` keeps private details out of public repositories. It scans the tree, staged changes, and commit messages through git hooks and the ship gate. A guard checks text that agents post to GitHub through `gh` or MCP tools. Agent attribution on commits and PRs follows the repository's visibility.
 
-[Provider setup](./docs/user/install.md#providers) has the steps for each agent. [Install T3 Code](./docs/user/install.md) covers nightly builds, AppImage, WSL, and NixOS.
+### Cite button
 
-## "Wait, what are you selling me?"
+Select text in an agent's reply and a **Cite** button appears. It quotes the selection into the composer. MarsCode gives the button high contrast and a short pop-in, so it is easy to see.
 
-Nothing. We built T3 Code because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
+![Selecting text in a reply shows the Cite button](./docs/readme/cite.gif)
 
-We wanted something performant, remote-ready, and truly open. If we ever go the wrong direction, we want you to have everything you need to fork and build the tool that you want.
+### Smaller additions
 
-## Documentation
+- **Device leases.** A thread takes an exclusive lease on an Android emulator or iOS simulator. Idle leases expire and are swept, so agents do not fight over one device.
+- **Secret monitor.** `packages/secret-monitor` watches the desktop Secret Service bus and links each secret read to the T3 thread that made it.
+- **Usage.** Usage history includes archived sessions and a GLM provider.
+- **CLIs.** `runlog` runs a test command into a log file and prints a summary. `fleet` and `surface` answer fast questions about declared infrastructure and about routes and their callers.
 
-- [Install and first run](./docs/user/install.md)
-- [Remote access from a phone or another machine](./docs/user/remote-access.md)
-- [Permission modes](./docs/user/permission-modes.md)
-- [Source control](./docs/user/source-control.md)
-- [Connect outside agents over MCP](./docs/user/outside-agents.md)
-- [FAQ](./docs/user/faq.md)
+## Keeping this README current
 
-[All docs](./docs/README.md) has the full list.
+The images come from the real web components with neutral fixtures (`apps/web/test/readme`), never from a live app. `docs/readme/media.json` maps each image to the source files it shows and stores their hash.
 
-## Contributing
+- `vp run readme:media` renders all images again and updates the hashes. It needs `ffmpeg` and an installed Playwright Chromium headless shell; it does not download one.
+- `vp run readme:media --check` fails when a mapped source changed after its image was made. The ship gate runs this check.
 
-We have limited review capacity. Small, focused fixes are the most likely to be merged. Features need an approved discussion first.
-
-- Read [CONTRIBUTING.md](./CONTRIBUTING.md) before you report a bug or open a pull request.
-- Put feature requests in [Ideas](https://github.com/pingdotgg/t3code/discussions/categories/ideas).
-- Build from source with the [development runbook](./docs/operations/00_development.md#first-checkout). The [architecture overview](./docs/internals/01_architecture.md) explains how it works.
-- Get help in [Discord](https://discord.gg/jn4EGJjrvv).
+When you add a feature, add its block here, and add an image only when a screenshot explains it better than a sentence. Look at every new image before you commit it: this repository is public.
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](./LICENSE). MarsCode keeps the upstream license.

@@ -1,0 +1,62 @@
+{
+  "fleet-console.webp": {
+    "sources": [
+      "apps/web/src/devtools/FleetMachinesView.tsx",
+      "apps/web/src/devtools/DeckHeaderStrip.tsx",
+      "apps/web/src/devtools/FleetJobsAndProcsPanel.tsx",
+      "apps/web/src/devtools/FleetThreadsPanel.tsx",
+      "apps/web/src/devtools/FleetLocalhostsPanel.tsx",
+      "apps/web/src/devtools/fleetDeck.css",
+      "apps/web/test/readme/devtools.media.tsx",
+      "apps/web/test/readme/readmeMediaFixtures.ts"
+    ],
+    "hash": "6b25dfbda27550f6"
+  },
+  "ship-queue.webp": {
+    "sources": [
+      "apps/web/src/devtools/ShipQueue*.tsx",
+      "apps/web/test/readme/devtools.media.tsx",
+      "apps/web/test/readme/readmeMediaFixtures.ts"
+    ],
+    "hash": "0d7a6712f908ba36"
+  },
+  "ship-queue.gif": {
+    "sources": [
+      "apps/web/src/devtools/ShipQueue*.tsx",
+      "apps/web/test/readme/devtools.media.tsx",
+      "apps/web/test/readme/readmeMediaFixtures.ts"
+    ],
+    "hash": "0d7a6712f908ba36"
+  },
+  "reaper.webp": {
+    "sources": [
+      "apps/web/src/devtools/FleetReaperTab.tsx",
+      "apps/web/src/devtools/ReaperRulesEditor.tsx",
+      "apps/web/src/devtools/ReaperStatusCards.tsx",
+      "apps/web/test/readme/devtools.media.tsx"
+    ],
+    "hash": "a436e0eb5f544a9e"
+  },
+  "reviews.webp": {
+    "sources": [
+      "apps/web/src/devtools/UsageReviewsPanel.tsx",
+      "apps/web/test/readme/devtools.media.tsx"
+    ],
+    "hash": "af9f7363ba7b7f9f"
+  },
+  "security.webp": {
+    "sources": [
+      "apps/web/src/devtools/SecuritySettingsPanel.tsx",
+      "apps/web/test/readme/devtools.media.tsx",
+      "apps/web/test/readme/readmeMediaFixtures.ts"
+    ],
+    "hash": "4ac48acf5d9f8541"
+  },
+  "cite.gif": {
+    "sources": [
+      "apps/web/src/components/chat/AssistantSelectionToolbar.tsx",
+      "apps/web/test/readme/cite.media.tsx"
+    ],
+    "hash": "20a82cfb9638ad1c"
+  }
+}
