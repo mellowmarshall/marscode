@@ -9,6 +9,8 @@
 #   ship-steps.sh ci              run marscode's fast adaptive changed-file CI
 #   ship-steps.sh merge PR        squash-merge the gated head: 0 merged,
 #                                 75 the base moved, 76 transient
+#   ship-steps.sh post-merge      build and atomically install MarsCode CLIs
+#                                 from a detached temp/data worktree
 set -u
 
 ensure_vp_path() {
@@ -88,12 +90,56 @@ merge() { # PR
   return "$rc"
 }
 
+post_merge() {
+  local primary target_ref wt_base work_root build_wt primary_real wt_base_real
+  primary="${SHIP_QUEUE_PRIMARY:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+  target_ref="${SHIP_QUEUE_BASE_SHA:-${SHIP_QUEUE_BASE_REF:-HEAD}}"
+
+  wt_base=""
+  for candidate in "${SHIP_QUEUE_WORKTREE_ROOT:-}" "${SHIP_QUEUE_DATA_ROOT:-}" "${TMPDIR:-/tmp}"; do
+    [ -n "$candidate" ] || continue
+    if [ -d "$candidate" ] && [ -w "$candidate" ]; then
+      wt_base="$candidate"
+      break
+    fi
+  done
+  if [ -z "$wt_base" ]; then
+    wt_base="${TMPDIR:-/tmp}"
+  fi
+
+  primary_real="$(cd "$primary" && pwd -P)"
+  wt_base_real="$(cd "$wt_base" && pwd -P)"
+  case "$wt_base_real" in
+    "$primary_real"|"$primary_real"/*)
+      wt_base="${TMPDIR:-/tmp}"
+      ;;
+  esac
+
+  work_root="$(mktemp -d "${wt_base}/.marscode-post-merge.XXXXXX")" || {
+    echo "marscode ship-steps: cannot create temporary build worktree directory under $wt_base" >&2
+    return 1
+  }
+  build_wt="${work_root}/repo"
+
+  (
+    set -euo pipefail
+    trap 'git -C "$primary" worktree remove --force "$build_wt" >/dev/null 2>&1 || true; rm -rf "$work_root"; git -C "$primary" worktree prune >/dev/null 2>&1 || true' EXIT
+
+    ensure_vp_path
+    git -C "$primary" worktree add --detach -q "$build_wt" "$target_ref"
+    cd "$build_wt"
+    VP_GIT_HOOKS=0 vp install --frozen-lockfile --ignore-scripts
+    bash "$build_wt/scripts/install-marscode-tools.sh" "$@"
+  )
+}
+
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   case "${1:-}" in
     body) body "${2:-}" ;;
     install) install_deps ;;
     ci) ci ;;
     merge) merge "${2:-}" ;;
+    post-merge) shift; post_merge "$@" ;;
     *) sed -n '2,/^[^#]/{/^#/p;}' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
   esac
 fi

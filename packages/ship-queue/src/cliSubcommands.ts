@@ -16,6 +16,12 @@ import {
   readCachedProbesByHost,
 } from "./toolDrift.ts";
 import { reconcileToolDrift } from "./toolDriftReconcile.ts";
+import type { ShipQueueDeps } from "./types.ts";
+import {
+  pruneUnreferencedWorkerVersions,
+  readCurrentWorkerVersion,
+  stageWorkerVersion,
+} from "./workerVersion.ts";
 
 export interface SubcommandIo {
   readonly stdout: (text: string) => void;
@@ -345,4 +351,86 @@ export function runPinsSubcommand(args: ReadonlyArray<string>, io: SubcommandIo)
     io.stderr(`ship-queue pins: ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
   }
+}
+
+export function runVersionSubcommand(
+  root: string,
+  args: ReadonlyArray<string>,
+  io: SubcommandIo,
+  deps: Pick<ShipQueueDeps, "clock" | "isProcessAlive" | "self">,
+): number {
+  const [rawAction, ...rest] = args;
+  const action = rawAction ?? "current";
+  const usage =
+    "ship-queue version <current [--json] | stage VERSION --source-dir DIR [--entry REL_PATH] [--json] | prune [--json]>\n";
+
+  if (action === "--help" || action === "-h") {
+    io.stdout(usage);
+    return 0;
+  }
+
+  const json = rest.includes("--json");
+
+  if (action === "current") {
+    const current = readCurrentWorkerVersion(root);
+    if (json) {
+      io.stdout(`${JSON.stringify({ queue_root: root, current }, null, 2)}\n`);
+    } else if (current) {
+      io.stdout(`${current.version} ${current.entryPath}\n`);
+    } else {
+      io.stdout("none\n");
+    }
+    return 0;
+  }
+
+  if (action === "stage") {
+    const version = rest.find((a) => !a.startsWith("--")) ?? "";
+    const srcIdx = rest.indexOf("--source-dir");
+    const entryIdx = rest.indexOf("--entry");
+    const sourceDir = srcIdx >= 0 ? (rest[srcIdx + 1] ?? "") : "";
+    const entryRelPath = entryIdx >= 0 ? (rest[entryIdx + 1] ?? "") : "bin.mjs";
+    if (!version || !sourceDir || !entryRelPath) {
+      io.stderr(usage);
+      return 64;
+    }
+    try {
+      const staged = stageWorkerVersion({
+        root,
+        version,
+        sourceDir: NodePath.resolve(io.cwd, sourceDir),
+        entryRelPath,
+        clock: deps.clock,
+        self: deps.self,
+        isAlive: deps.isProcessAlive,
+      });
+      if (json) {
+        io.stdout(`${JSON.stringify(staged, null, 2)}\n`);
+      } else {
+        io.stdout(`staged version=${staged.version} entry=${staged.entryPath}\n`);
+      }
+      return 0;
+    } catch (err) {
+      io.stderr(`ship-queue version stage: ${err instanceof Error ? err.message : String(err)}\n`);
+      return 1;
+    }
+  }
+
+  if (action === "prune") {
+    const res = pruneUnreferencedWorkerVersions({
+      root,
+      isAlive: deps.isProcessAlive,
+      self: deps.self,
+    });
+    if (json) {
+      io.stdout(`${JSON.stringify(res, null, 2)}\n`);
+    } else {
+      io.stdout(
+        `pruned=${res.pruned.length} kept=${res.kept.length}${res.skippedLocked ? " (skipped: locked)" : ""}\n`,
+      );
+    }
+    return 0;
+  }
+
+  io.stderr(`ship-queue version: unknown subcommand '${action}'\n${usage}`);
+  return 64;
 }

@@ -14,7 +14,19 @@ import {
 } from "./toolchainEnv.ts";
 import type { ProcessResult, ProcessRunner } from "./types.ts";
 
-export type StepMode = "plain" | "stage" | "ci";
+export type StepMode = "plain" | "stage" | "ci" | "post-merge";
+
+/** Ambient execution-hook variables scrubbed from post-merge step environments. */
+const POST_MERGE_SCRUB_VARS: ReadonlyArray<string> = [
+  "BASH_ENV",
+  "ENV",
+  "NODE_OPTIONS",
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+];
 
 /** Builtin-only remote secret reader (no single quotes; runs inside remote bash -c). */
 const REMOTE_SECRET_READER =
@@ -34,6 +46,8 @@ export interface StepJobContext {
   readonly queueRoot: string;
   readonly stepTree: string;
   readonly dataRoot: string;
+  readonly pr?: number | undefined;
+  readonly worktreeRoot?: string | undefined;
 }
 
 export interface LocalStepInput {
@@ -46,6 +60,7 @@ export interface LocalStepInput {
   readonly homeDir?: string | undefined;
   readonly secrets?: Readonly<Record<string, string>> | undefined;
   readonly withholdSecrets?: boolean | undefined;
+  readonly timeoutMs?: number | undefined;
   readonly run: ProcessRunner;
 }
 
@@ -125,6 +140,7 @@ export function buildLocalStepEnv(input: {
   env.SHIP_QUEUE_BASE_TREE = input.ctx.stepTree;
   env.SHIP_QUEUE_WORKTREE = input.ctx.worktree;
   env.SHIP_QUEUE_BRANCH = input.ctx.branch;
+  env.SHIP_QUEUE_ROOT = input.ctx.queueRoot;
   env.SHIP_QUEUE_STATE = NodePath.join(input.ctx.queueRoot, "repos", input.ctx.repo);
   env.SHIP_QUEUE_REASON_FILE = NodePath.join(
     input.ctx.queueRoot,
@@ -136,15 +152,22 @@ export function buildLocalStepEnv(input: {
   if (input.ctx.ghRepo) env.SHIP_QUEUE_GH_REPO = input.ctx.ghRepo;
   if (input.ctx.ontoSha) env.SHIP_QUEUE_ONTO = input.ctx.ontoSha;
   if (input.ctx.tipSha) env.SHIP_QUEUE_TIP = input.ctx.tipSha;
+  if (input.ctx.pr !== undefined) env.SHIP_QUEUE_PR = String(input.ctx.pr);
+  if (input.ctx.worktreeRoot) env.SHIP_QUEUE_WORKTREE_ROOT = input.ctx.worktreeRoot;
 
-  if (input.mode === "ci") {
-    env.SHIP_QUEUE_CI = "1";
+  if (input.mode === "ci" || input.mode === "post-merge") {
     for (const key of CI_SCRUB_SECRET_VARS) delete env[key];
     for (const key of Object.keys(env)) {
       if (key.startsWith("DOPPLER_TOKEN_") || key.startsWith("DOPPLER_CONFIGS_")) {
         delete env[key];
       }
     }
+  }
+  if (input.mode === "post-merge") {
+    for (const key of POST_MERGE_SCRUB_VARS) delete env[key];
+  }
+  if (input.mode === "ci") {
+    env.SHIP_QUEUE_CI = "1";
     if (!input.withholdSecrets && input.secrets) {
       for (const [key, value] of Object.entries(input.secrets)) {
         env[key] = value;
@@ -177,6 +200,8 @@ export async function runLocalStep(input: LocalStepInput): Promise<ProcessResult
     args,
     cwd: input.cwd ?? input.ctx.worktree,
     env,
+    replaceEnv: true,
+    timeoutMs: input.timeoutMs,
   });
 }
 

@@ -31,6 +31,7 @@ export interface JobRecord {
   readonly push_exit?: number | undefined;
   readonly pr?: number | undefined;
   readonly merge_exit?: number | undefined;
+  readonly sync_exit?: number | undefined;
   readonly reason?: string | undefined;
   readonly ended_at?: string | undefined;
   /** The detached worker that last advanced the job, so a restarted client can tell it is still running. */
@@ -52,6 +53,10 @@ export interface ProcessInput {
   readonly args: ReadonlyArray<string>;
   readonly cwd: string;
   readonly env?: Readonly<Record<string, string>> | undefined;
+  /** When true, runs with `env` verbatim instead of merging `process.env`. */
+  readonly replaceEnv?: boolean | undefined;
+  /** Optional wall-clock limit in milliseconds; kills the child and returns exitCode 124 on expiry. */
+  readonly timeoutMs?: number | undefined;
   readonly stdin?: string | undefined;
 }
 
@@ -147,6 +152,8 @@ export interface ShipQueueDeps {
   readonly isProcessAlive: (identity: ProcessIdentity) => boolean;
   readonly self: ProcessIdentity;
   readonly watcherWaitMs: number;
+  /** Optional bounded timeout for `ship_post_merge` steps (defaults to 10 minutes). */
+  readonly postMergeTimeoutMs?: number | undefined;
   /** Runtime version identity of this worker, enabling version-pinned execution without global drain locks. */
   readonly workerVersion?: WorkerRuntimeVersion | undefined;
   /** Post-merge subscribers (`subscribeMerges`); a throwing subscriber is logged, never fatal. */

@@ -141,7 +141,8 @@
   },
   "scripts": {
     "typecheck": "effect-tsgo tsrs --noEmit",
-    "test": "vp test run --config ../../vite.config.ts --dir ."
+    "test": "vp test run --config ../../vite.config.ts --dir .",
+    "build:bundle": "vp pack"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",

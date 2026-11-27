@@ -16,6 +16,7 @@ import {
   updateJob,
 } from "./jobStore.ts";
 import { markerValue } from "./markers.ts";
+import { runPostMergeSync } from "./postMergeSync.ts";
 import { mergePhase, pullRequestPhase, pushPhase } from "./prFlow.ts";
 import { sameProcess } from "./processIdentity.ts";
 import { releaseRepoLock, repoLockHolder, tryAcquireRepoLock } from "./processLocks.ts";
@@ -113,6 +114,7 @@ async function finishMergedJob(
     failJob(deps.root, job.id, `remote_branch_left pr=${pr} (merged)`, deps.clock);
     return "ended";
   }
+  await runPostMergeSync(deps, requireJob(deps.root, job.id), pr);
   await runMergedHooks(deps, requireJob(deps.root, job.id), pr);
   endJob(
     deps.root,
