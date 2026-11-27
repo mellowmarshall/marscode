@@ -1,0 +1,27 @@
+{
+  "orgs": ["example-org"],
+  "exemptRepos": [],
+  "sourceRoot": "~/Dev",
+  "dataRoot": "~/Dev-data",
+  "queueRoot": "~/Dev-data/.ship-queue",
+  "stateDir": "~/.local/state/host-guards",
+  "realGit": "/usr/bin/git",
+  "realGh": "/usr/bin/gh",
+  "hostName": "",
+  "overridePubkey": "",
+  "protectedApps": [
+    {
+      "name": "example-api",
+      "provider": "fly",
+      "configPaths": ["apps/api/fly.toml"],
+      "deployDrills": ["scripts/deploy-api.sh"],
+      "secretDrills": ["scripts/sync-secrets.sh"]
+    }
+  ],
+  "cloudCliPolicy": {
+    "blockDirectFlyDeploy": true,
+    "blockDirectFlySecrets": true,
+    "blockDirectDopplerWrites": true,
+    "protectedDopplerProjects": ["example-api"]
+  }
+}

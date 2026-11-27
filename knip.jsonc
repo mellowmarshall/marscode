@@ -189,5 +189,11 @@
       // Copied verbatim into target repositories by `surface init`, never imported directly.
       "ignore": ["templates/**"],
     },
+    "packages/host-guards": {
+      "includeEntryExports": true,
+      "entry": ["src/bin.ts!"],
+      // Shell shims and installer scripts are deployed to ~/.local/bin and ~/.local/guards.
+      "ignore": ["shims/**", "scripts/**"],
+    },
   },
 }

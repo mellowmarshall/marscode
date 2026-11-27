@@ -1,0 +1,416 @@
+// @effect-diagnostics nodeBuiltinImport:off - GitHub CLI merge guard: blocks direct merges, repo sync, shell aliases, and manual merge drills.
+import * as NodeChildProcess from "node:child_process";
+import * as NodePath from "node:path";
+
+import { decideGhApiCall } from "./ghApiGuard.ts";
+import { safeRealpath, type HostGuardsConfig } from "./hostConfig.ts";
+import { defaultProcFs, type ProcFsReader } from "./procFs.ts";
+import { isQueueDaemonInAncestry } from "./t3ServerTrust.ts";
+import { ALLOW_VERDICT, type GuardVerdict } from "./pushGuard.ts";
+import { formatMergeRefusal, inspectRepo, isSlugInScope } from "./repoScope.ts";
+
+const GH_GLOBAL_VALUE_FLAGS = new Set([
+  "-R",
+  "--repo",
+  "--hostname",
+  "--subject",
+  "--author-email",
+  "-A",
+  "--match-head-commit",
+  "-X",
+  "--method",
+  "-f",
+  "--raw-field",
+  "-F",
+  "--field",
+  "--input",
+  "-H",
+  "--header",
+  "-q",
+  "--jq",
+  "-t",
+  "--template",
+  "-p",
+  "--preview",
+  "--cache",
+]);
+
+const GH_COMMANDS = new Set([
+  "agent-task",
+  "alias",
+  "api",
+  "attestation",
+  "auth",
+  "browse",
+  "cache",
+  "codespace",
+  "completion",
+  "config",
+  "copilot",
+  "extension",
+  "gist",
+  "gpg-key",
+  "help",
+  "issue",
+  "label",
+  "org",
+  "pr",
+  "preview",
+  "project",
+  "release",
+  "repo",
+  "ruleset",
+  "run",
+  "search",
+  "secret",
+  "ssh-key",
+  "status",
+  "variable",
+  "workflow",
+  "agent-session",
+  "version",
+  "--version",
+  "--help",
+  "-h",
+]);
+
+const MERGE_LONG_VALUES = new Set([
+  "--subject",
+  "--body",
+  "--body-file",
+  "--author-email",
+  "--match-head-commit",
+]);
+
+const PR_URL_RE = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/\d+$/i;
+
+function parsePrMergeSelector(args: ReadonlyArray<string>): {
+  readonly repoArgs: ReadonlyArray<string>;
+  readonly selector: ReadonlyArray<string>;
+} | null {
+  let repoArgs: string[] = [];
+  let selector: string[] = [];
+  let words = 0;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i]!;
+    if (a === "--repo") {
+      if (i + 1 >= args.length) return null;
+      repoArgs = ["--repo", args[i + 1]!];
+      i += 1;
+      continue;
+    }
+    if (a.startsWith("--repo=")) {
+      repoArgs = ["--repo", a.slice("--repo=".length)];
+      continue;
+    }
+    if (MERGE_LONG_VALUES.has(a)) {
+      i += 1;
+      if (i >= args.length) return null;
+      continue;
+    }
+    if (a === "--") {
+      const rest = args.slice(i + 1);
+      if (rest.length > 1 || (rest.length > 0 && selector.length > 0)) return null;
+      return { repoArgs, selector: [...selector, ...rest] };
+    }
+    if (a.startsWith("--")) continue;
+    if (a.startsWith("-") && a.length > 1) {
+      let short = a.slice(1);
+      while (short.length > 0) {
+        const flag = short[0]!;
+        short = short.slice(1);
+        if ("RtbFA".includes(flag)) {
+          let value: string;
+          if (short.length > 0) {
+            value = short.startsWith("=") ? short.slice(1) : short;
+          } else {
+            i += 1;
+            if (i >= args.length) return null;
+            value = args[i]!;
+          }
+          if (flag === "R") repoArgs = ["--repo", value];
+          break;
+        }
+        if ("dmrs".includes(flag)) {
+          if (short.startsWith("=")) break;
+          continue;
+        }
+        return null;
+      }
+      continue;
+    }
+    words += 1;
+    if (words > 2) {
+      if (selector.length > 0) return null;
+      selector = [a];
+    }
+  }
+  return { repoArgs, selector };
+}
+
+function resolvePrMergeTarget(
+  args: ReadonlyArray<string>,
+  cwd: string,
+  config: HostGuardsConfig,
+): { readonly owner: string; readonly name: string } | null {
+  const parsed = parsePrMergeSelector(args);
+  if (!parsed) return null;
+
+  const firstSel = parsed.selector[0] ?? "";
+  const directUrl = PR_URL_RE.exec(firstSel.trim());
+  if (directUrl?.[1] && directUrl[2]) {
+    return { owner: directUrl[1].toLowerCase(), name: directUrl[2].toLowerCase() };
+  }
+
+  const explicitRepo = parsed.repoArgs[1]?.trim() ?? "";
+  if (explicitRepo && /^[^/\s]+\/[^/\s]+$/.test(explicitRepo)) {
+    const [owner, name] = explicitRepo.split("/");
+    return { owner: owner!.toLowerCase(), name: name!.toLowerCase().replace(/\.git$/, "") };
+  }
+
+  const res = NodeChildProcess.spawnSync(
+    config.realGh,
+    ["pr", "view", ...parsed.repoArgs, "--json", "url", "--jq", ".url", "--", ...parsed.selector],
+    { cwd, encoding: "utf8", timeout: 30_000 },
+  );
+  if (res.status !== 0) return null;
+  const match = PR_URL_RE.exec((res.stdout ?? "").trim());
+  if (!match?.[1] || !match[2]) return null;
+  return { owner: match[1].toLowerCase(), name: match[2].toLowerCase() };
+}
+
+function extractCommandTokens(
+  args: ReadonlyArray<string>,
+): Array<{ readonly index: number; readonly word: string }> {
+  const tokens: Array<{ readonly index: number; readonly word: string }> = [];
+  let skip = false;
+  for (let i = 0; i < args.length; i += 1) {
+    if (skip) {
+      skip = false;
+      continue;
+    }
+    const word = args[i]!;
+    if (GH_GLOBAL_VALUE_FLAGS.has(word)) {
+      skip = true;
+      continue;
+    }
+    if (word.startsWith("-")) continue;
+    tokens.push({ index: i, word: word.toLowerCase() });
+  }
+  return tokens;
+}
+
+function expandGhAlias(
+  args: ReadonlyArray<string>,
+  cwd: string,
+  config: HostGuardsConfig,
+):
+  | { readonly shell: true; readonly body: string }
+  | { readonly shell: false; readonly expanded: ReadonlyArray<string> }
+  | null {
+  const tokens = extractCommandTokens(args);
+  if (tokens.length === 0 || GH_COMMANDS.has(tokens[0]!.word)) return null;
+  const res = NodeChildProcess.spawnSync(config.realGh, ["alias", "list"], {
+    cwd,
+    encoding: "utf8",
+    timeout: 15_000,
+  });
+  if (res.status !== 0) return null;
+  const firstWord = tokens[0]!.word;
+  for (const line of (res.stdout ?? "").split(/\r?\n/)) {
+    const colon = line.indexOf(":");
+    if (colon === -1) continue;
+    const aliasName = line.slice(0, colon).trim().toLowerCase();
+    if (aliasName !== firstWord) continue;
+    const rawExpansion = line
+      .slice(colon + 1)
+      .trim()
+      .replace(/^'+|'+$/g, "");
+    if (rawExpansion.startsWith("!")) {
+      return { shell: true, body: rawExpansion };
+    }
+    const parts = rawExpansion.split(/\s+/).filter(Boolean);
+    const idx = tokens[0]!.index;
+    return {
+      shell: false,
+      expanded: [...args.slice(0, idx), ...parts, ...args.slice(idx + 1)],
+    };
+  }
+  return null;
+}
+
+const MAX_GH_ALIAS_DEPTH = 8;
+const REPO_SYNC_VALUE_FLAGS = new Set([
+  "-b",
+  "--branch",
+  "-s",
+  "--source",
+  "-R",
+  "--repo",
+  "--hostname",
+]);
+
+function resolveRepoSyncTarget(
+  args: ReadonlyArray<string>,
+  syncTokenIndex: number,
+  cwd: string,
+  config: HostGuardsConfig,
+): string | null {
+  let repoFlag = "";
+  const positionals: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i]!;
+    if (i <= syncTokenIndex && (a.toLowerCase() === "repo" || a.toLowerCase() === "sync")) {
+      continue;
+    }
+    if (a === "--") {
+      positionals.push(...args.slice(i + 1));
+      break;
+    }
+    const eq = a.indexOf("=");
+    const flag = eq === -1 ? a : a.slice(0, eq);
+    if (REPO_SYNC_VALUE_FLAGS.has(flag)) {
+      const val = eq === -1 ? (args[i + 1] ?? "") : a.slice(eq + 1);
+      if (eq === -1) i += 1;
+      if (flag === "-R" || flag === "--repo") repoFlag = val.trim();
+      continue;
+    }
+    if (!a.startsWith("--") && a.length > 2 && ["-b", "-s", "-R"].includes(a.slice(0, 2))) {
+      if (a.startsWith("-R")) repoFlag = a.slice(2).trim();
+      continue;
+    }
+    if (a.startsWith("-")) continue;
+    positionals.push(a);
+  }
+  if (positionals[0]) return positionals[0].trim();
+  if (repoFlag) return repoFlag;
+  const here = inspectRepo(cwd, config);
+  return here && here.slug !== "?" ? here.slug : null;
+}
+
+export function decideGh(
+  args: ReadonlyArray<string>,
+  cwd: string,
+  config: HostGuardsConfig,
+  options?: {
+    readonly depth?: number | undefined;
+    readonly seenAliases?: ReadonlySet<string> | undefined;
+    readonly procFs?: ProcFsReader | undefined;
+  },
+): GuardVerdict {
+  const depth = options?.depth ?? 0;
+  const seenAliases = options?.seenAliases ?? new Set<string>();
+  const procFs = options?.procFs ?? defaultProcFs;
+
+  const alias = expandGhAlias(args, cwd, config);
+  if (alias !== null) {
+    const aliasName = extractCommandTokens(args)[0]?.word ?? "alias";
+    if (alias.shell) {
+      const here = inspectRepo(cwd, config);
+      const said = [alias.body, ...args].join(" ").replace(/[\\'"]/g, "");
+      if ((here && here.inScope) || /\b(merge|api|sync|issue|pr)\b/.test(said)) {
+        return {
+          verdict: "deny",
+          reason: formatMergeRefusal(
+            `the gh shell alias \`${aliasName}\` (it runs gh outside the guard)`,
+            here,
+            config,
+          ),
+        };
+      }
+      return ALLOW_VERDICT;
+    }
+    if (seenAliases.has(aliasName) || depth >= MAX_GH_ALIAS_DEPTH) {
+      return {
+        verdict: "deny",
+        reason: formatMergeRefusal(
+          `gh alias \`${aliasName}\`: alias expansion ${seenAliases.has(aliasName) ? "detected a cycle" : `exceeded max depth (${MAX_GH_ALIAS_DEPTH})`}`,
+          inspectRepo(cwd, config),
+          config,
+        ),
+      };
+    }
+    const nextSeen = new Set(seenAliases);
+    nextSeen.add(aliasName);
+    return decideGh(alias.expanded, cwd, config, {
+      depth: depth + 1,
+      seenAliases: nextSeen,
+      procFs,
+    });
+  }
+
+  const tokens = extractCommandTokens(args);
+  const words = tokens.map((t) => t.word);
+  const queued = isQueueDaemonInAncestry(config.queueRoot, undefined, procFs);
+
+  if (words[0] === "pr" && words[1] === "merge") {
+    if (queued) return ALLOW_VERDICT;
+    const target = resolvePrMergeTarget(args, cwd, config);
+    const here = inspectRepo(cwd, config);
+    if (target === null) {
+      return {
+        verdict: "deny",
+        reason: formatMergeRefusal(
+          "gh pr merge: its PR could not be resolved, so it is refused",
+          here,
+          config,
+        ),
+      };
+    }
+    if (!isSlugInScope(target.owner, config, target.name)) return ALLOW_VERDICT;
+    const same = here && here.slug === `${target.owner}/${target.name}` ? here : null;
+    return {
+      verdict: "deny",
+      reason: formatMergeRefusal(`gh pr merge on ${target.owner}/${target.name}`, same, config),
+    };
+  }
+
+  if (words[0] === "api") {
+    const idx = tokens[0]!.index;
+    const normalizedArgs = ["api", ...args.slice(0, idx), ...args.slice(idx + 1)];
+    return decideGhApiCall(normalizedArgs, cwd, config, queued);
+  }
+
+  if (words[0] === "repo" && words[1] === "sync") {
+    if (queued) return ALLOW_VERDICT;
+    const syncIdx = tokens[1]!.index;
+    const targetSlug = resolveRepoSyncTarget(args, syncIdx, cwd, config);
+    if (targetSlug && isSlugInScope(targetSlug, config)) {
+      return {
+        verdict: "deny",
+        reason: formatMergeRefusal(
+          `gh repo sync ${targetSlug} (it moves a remote branch)`,
+          null,
+          config,
+        ),
+      };
+    }
+  }
+
+  return ALLOW_VERDICT;
+}
+
+export function isManualMergeDrill(
+  words: ReadonlyArray<string>,
+  cwd: string,
+  config: HostGuardsConfig,
+): boolean {
+  if (words.length === 0) return false;
+  const repo = inspectRepo(cwd, config);
+  if (!repo || !repo.inScope) return false;
+  const declared = repo.declaredValues("merge_drill");
+  const drills = declared.length > 0 ? declared : ["scripts/merge-pr.sh"];
+  const topReal = safeRealpath(repo.top);
+
+  for (const word of words) {
+    if (!word || word.startsWith("-")) continue;
+    const candidate = safeRealpath(NodePath.resolve(cwd, word));
+    if (!candidate.startsWith(`${topReal}/`)) continue;
+    const rel = NodePath.relative(topReal, candidate).replace(/\\/g, "/");
+    if (drills.some((d) => rel === d.replace(/^\.\//, ""))) {
+      return true;
+    }
+  }
+  return false;
+}

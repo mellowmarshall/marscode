@@ -1,0 +1,91 @@
+{
+  "name": "@t3tools/host-guards",
+  "private": true,
+  "bin": {
+    "marscode-host-guard": "./dist/bin.mjs"
+  },
+  "type": "module",
+  "exports": {
+    "./argv-guard": {
+      "types": "./src/argvGuard.ts",
+      "import": "./src/argvGuard.ts"
+    },
+    "./cli": {
+      "types": "./src/cli.ts",
+      "import": "./src/cli.ts"
+    },
+    "./cloud-cli-guard": {
+      "types": "./src/cloudCliGuard.ts",
+      "import": "./src/cloudCliGuard.ts"
+    },
+    "./git-guard": {
+      "types": "./src/gitGuard.ts",
+      "import": "./src/gitGuard.ts"
+    },
+    "./hook": {
+      "types": "./src/hook.ts",
+      "import": "./src/hook.ts"
+    },
+    "./host-config": {
+      "types": "./src/hostConfig.ts",
+      "import": "./src/hostConfig.ts"
+    },
+    "./install-guard": {
+      "types": "./src/installGuard.ts",
+      "import": "./src/installGuard.ts"
+    },
+    "./merge-guard": {
+      "types": "./src/mergeGuard.ts",
+      "import": "./src/mergeGuard.ts"
+    },
+    "./override": {
+      "types": "./src/override.ts",
+      "import": "./src/override.ts"
+    },
+    "./ports-guard": {
+      "types": "./src/portsGuard.ts",
+      "import": "./src/portsGuard.ts"
+    },
+    "./proc-identity": {
+      "types": "./src/procIdentity.ts",
+      "import": "./src/procIdentity.ts"
+    },
+    "./push-guard": {
+      "types": "./src/pushGuard.ts",
+      "import": "./src/pushGuard.ts"
+    },
+    "./release-guard": {
+      "types": "./src/releaseGuard.ts",
+      "import": "./src/releaseGuard.ts"
+    },
+    "./repo-scope": {
+      "types": "./src/repoScope.ts",
+      "import": "./src/repoScope.ts"
+    },
+    "./shell-scan": {
+      "types": "./src/shellScan.ts",
+      "import": "./src/shellScan.ts"
+    },
+    "./shim-depth": {
+      "types": "./src/shimDepth.ts",
+      "import": "./src/shimDepth.ts"
+    },
+    "./tree-guard": {
+      "types": "./src/treeGuard.ts",
+      "import": "./src/treeGuard.ts"
+    }
+  },
+  "scripts": {
+    "build": "vp pack",
+    "typecheck": "effect-tsgo tsrs --noEmit",
+    "test": "vp test run --config ../../vite.config.ts --dir ."
+  },
+  "dependencies": {
+    "@t3tools/guard-protocol": "workspace:*",
+    "@t3tools/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
