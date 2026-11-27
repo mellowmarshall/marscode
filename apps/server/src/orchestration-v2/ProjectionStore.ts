@@ -2,6 +2,7 @@ import type { ProjectThreadAwarenessV2Input } from "@t3tools/shared/agentAwarene
 import { applyOrchestrationV2ThreadVisit, pendingGuestMessageCount } from "@t3tools/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
 import * as ReviewStats from "../devtools/ReviewStats.ts";
+import * as ReviewStatsThreads from "../devtools/ReviewStatsThreads.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
 import * as Stream from "effect/Stream";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
@@ -2829,7 +2830,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               if (
                 event.payload.status === "completed" &&
                 event.payload.childThreadId &&
-                ReviewStats.isDelegatedReviewSubagent(event.payload.prompt) &&
+                ReviewStatsThreads.isDelegatedReviewSubagent(event.payload.prompt) &&
                 typeof event.payload.result === "string" &&
                 event.payload.result.trim().length > 0 &&
                 ReviewStats.shouldAutoRecordDelegatedReview()

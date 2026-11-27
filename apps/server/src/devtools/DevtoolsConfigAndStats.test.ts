@@ -12,7 +12,6 @@ import {
 
 import {
   DEFAULT_DEVTOOLS_HOST_CONFIG,
-  classifyModel,
   readDevtoolsHostConfig,
   resolveReviewRolePlan,
   writeDevtoolsHostConfig,
@@ -30,16 +29,18 @@ import {
   invalidateFleetConfigCache,
   warmFleetConfigCache,
 } from "./DevtoolsFleetConfigCache.ts";
+import { classifyModel } from "@t3tools/playbook/modelClassify";
+import { aggregateReviewStats } from "@t3tools/playbook/statsAggregate";
+import { parseAdversarialReviewCounts } from "@t3tools/playbook/statsParse";
+import { appendReviewStatRecord } from "@t3tools/playbook/statsStore";
+
+import { loadReviewRecords } from "./ReviewStats.ts";
 import {
-  aggregateReviewStats,
-  appendReviewStatRecord,
   buildRecordFromDelegatedReview,
   buildSubmitterLookupFromRows,
   deriveRepoNameFromWorktree,
   isDelegatedReviewSubagent,
-  loadReviewRecords,
-  parseAdversarialReviewCounts,
-} from "./ReviewStats.ts";
+} from "./ReviewStatsThreads.ts";
 
 const tempDirs: string[] = [];
 
@@ -465,7 +466,7 @@ describe("ReviewStats aggregation (reviewer + submitter sides)", () => {
       },
     };
 
-    const built = buildRecordFromDelegatedReview(delegatedRow, lookup);
+    const built = buildRecordFromDelegatedReview(delegatedRow, lookup, "2026-11-01T00:00:00.000Z");
     expect(built).not.toBeNull();
     expect(built?.threadId).toBe("parent-thread-1");
     expect(built?.reviewThreadId).toBe("thread:delegated-task:rev-abc");

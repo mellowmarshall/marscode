@@ -33,13 +33,13 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as KnownWorkspaces from "../workspace/KnownWorkspaces.ts";
-import * as CliRunners from "./CliRunners.ts";
 import * as DevtoolsHttp from "./DevtoolsHttp.ts";
 import { isAllowedFleetPath } from "./fleet/FleetRoutePolicy.ts";
 import { NativeFleetService } from "./fleet/NativeFleetService.ts";
 import * as JobRegistry from "./jobs/JobRegistry.ts";
 import { GuardGrantBroker, redactArgvCommand, type GuardBrokerEvent } from "./GuardGrantBroker.ts";
 import { makeTrustedProviderRegistry, readProcStartTime } from "./TrustedProviderRegistry.ts";
+import { validatePlaybookRequest } from "./DevtoolsPlaybookRoutes.ts";
 
 const cleanupDirs: Array<string> = [];
 
@@ -1025,18 +1025,10 @@ describe("FleetRoutePolicy & CliRunners validation", () => {
     expect(isAllowedFleetPath("GET", "/api/events?toString=1")).toBe(false);
     expect(isAllowedFleetPath("GET", "/api/events?constructor=1")).toBe(false);
 
-    expect(CliRunners.validatePlaybookRequest({ mode: "check", contracts: ["fleet"] }).ok).toBe(
-      true,
-    );
-    expect(CliRunners.validatePlaybookRequest({ mode: "check", contracts: ["--ship"] }).ok).toBe(
-      false,
-    );
-    expect(CliRunners.validatePlaybookRequest({ mode: "doctor", contracts: ["fleet"] }).ok).toBe(
-      false,
-    );
-    expect(CliRunners.validatePlaybookRequest({ mode: "bogus", contracts: undefined }).ok).toBe(
-      false,
-    );
+    expect(validatePlaybookRequest({ mode: "check", contracts: ["fleet"] }).ok).toBe(true);
+    expect(validatePlaybookRequest({ mode: "check", contracts: ["--ship"] }).ok).toBe(false);
+    expect(validatePlaybookRequest({ mode: "doctor", contracts: ["fleet"] }).ok).toBe(false);
+    expect(validatePlaybookRequest({ mode: "bogus", contracts: undefined }).ok).toBe(false);
   });
 });
 
@@ -1742,6 +1734,130 @@ describe("DevtoolsHttp routes", () => {
         const endChunk = yield* Effect.promise(() => reader.read());
         expect(endChunk.done).toBe(true);
       }),
+  );
+
+  it.effect("runs /playbook/run in-process and gates the challenge and review-thread routes", () =>
+    Effect.gen(function* () {
+      const repoDir = NodePath.join(mkTempDir("t3-pb-run-"), "sample-repo");
+      NodeFS.mkdirSync(NodePath.join(repoDir, "src"), { recursive: true });
+      NodeFS.writeFileSync(
+        NodePath.join(repoDir, "playbook.json"),
+        JSON.stringify({
+          contracts: {
+            size: { command: `echo '{"src/a.ts": 2}'` },
+            fleet: { file: "fleet.json", reads: "echo '{}'" },
+            tools: { steps: [] },
+            generations: { command: null },
+            optimization: { none: "nothing to budget: no route, job or action" },
+          },
+        }),
+      );
+      NodeFS.writeFileSync(NodePath.join(repoDir, "src", "a.ts"), "export const a = 1;\n");
+      for (const args of [
+        ["init", "-q", "-b", "trunk"],
+        ["remote", "add", "origin", "https://github.com/acme-fixture/sample-repo.git"],
+        ["add", "-A"],
+        [
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.com",
+          "commit",
+          "-q",
+          "-m",
+          "base",
+        ],
+      ]) {
+        const res = NodeChildProcess.spawnSync("git", ["-C", repoDir, ...args], {
+          encoding: "utf8",
+        });
+        expect(res.status).toBe(0);
+      }
+      const broker = new GuardGrantBroker({
+        exceptionsPaths: [NodePath.join(repoDir, "none.json")],
+      });
+      const registry = JobRegistry.makeJobRegistry({ enableShipBridge: false });
+      yield* Effect.addFinalizer(() => Effect.promise(() => registry.dispose()));
+      const handler = DevtoolsHttp.makeHandler(broker, registry);
+
+      const run = yield* runHandler(handler, {
+        method: "POST",
+        url: "/api/devtools/playbook/run",
+        body: { repoDir, mode: "check", contracts: ["size"] },
+        allowedWorkspaceDir: repoDir,
+      });
+      const report = run.json as {
+        exitCode: number;
+        data: { repo: string; results: Array<{ check: string; status: string }> };
+      };
+      expect(report.data.repo).toBe("sample-repo");
+      expect(report.data.results.map((r) => `${r.check}:${r.status}`)).toEqual([
+        "declaration:PASS",
+        "ratchet:UNPROVEN",
+        "size:PASS",
+      ]);
+      expect(report.exitCode).toBe(3);
+
+      const doctor = yield* runHandler(handler, {
+        method: "POST",
+        url: "/api/devtools/playbook/run",
+        body: { repoDir, mode: "doctor" },
+        allowedWorkspaceDir: repoDir,
+      });
+      expect(doctor.json).toMatchObject({ ok: true, exitCode: 0 });
+
+      const badContract = yield* runHandler(handler, {
+        method: "POST",
+        url: "/api/devtools/playbook/run",
+        body: { repoDir, mode: "check", contracts: ["--ship"] },
+        allowedWorkspaceDir: repoDir,
+      });
+      expect(badContract.status).toBe(400);
+
+      const challenge = yield* runHandler(handler, {
+        method: "POST",
+        url: "/api/devtools/playbook/challenge",
+        body: { repoDir },
+        allowedWorkspaceDir: repoDir,
+      });
+      expect(challenge.status).toBe(503);
+
+      const unregistered = yield* runHandler(handler, {
+        method: "POST",
+        url: "/api/devtools/playbook/challenge",
+        body: { repoDir: "/etc" },
+        allowedWorkspaceDir: repoDir,
+      });
+      expect(unregistered.status).toBe(403);
+
+      const verify = yield* runHandler(handler, {
+        method: "GET",
+        url: "/api/devtools/review-threads/verify?threadId=thread-review-1",
+      });
+      expect(verify.status).toBe(503);
+      const verifyReadOnly = yield* runHandler(handler, {
+        method: "GET",
+        url: "/api/devtools/review-threads/verify?threadId=thread-review-1",
+        scopes: [AuthOrchestrationReadScope],
+      });
+      expect(verifyReadOnly.status).toBe(403);
+
+      // Peer-link and MCP sessions never run repo commands or read review text.
+      for (const [method, url, body] of [
+        ["POST", "/api/devtools/playbook/run", { repoDir, mode: "check" }],
+        ["POST", "/api/devtools/playbook/challenge", { repoDir }],
+        ["GET", "/api/devtools/review-threads/verify?threadId=thread-review-1", undefined],
+      ] as const) {
+        const peer = yield* runHandler(handler, {
+          method,
+          url,
+          ...(body ? { body } : {}),
+          subject: "peer-link:full-access",
+          allowedWorkspaceDir: repoDir,
+        });
+        expect(peer.status, url).toBe(403);
+      }
+    }),
   );
 
   it.effect("serves GET /playbook/declaration and normalized /guards/exceptions waivers", () =>

@@ -15,8 +15,6 @@ const TOOL_CACHE_TTL_MS = 30_000;
 const JOB_ID_RE = /^[0-9]{1,16}$/;
 const REPO_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,100}$/;
 const DEP_REPORT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,100}:[A-Za-z0-9][A-Za-z0-9_.-]{0,100}$/;
-const CONTRACT_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-const MAX_CONTRACTS = 24;
 const ACTIVE_DEP_ATTEMPT_STATES = new Set([
   "preparing",
   "ready",
@@ -996,89 +994,6 @@ export function createShipQueueEventStream(signal: AbortSignal): ReadableStream<
     },
     { highWaterMark: 2 },
   );
-}
-
-// Playbook runner (single-flight deduplicated per repo + mode + contracts)
-const inFlightPlaybook = new Map<string, Promise<ExecJsonResult>>();
-
-export function validatePlaybookRequest(input: {
-  readonly mode: unknown;
-  readonly contracts: unknown;
-}):
-  | {
-      readonly ok: true;
-      readonly mode: "check" | "doctor";
-      readonly contracts: ReadonlyArray<string>;
-    }
-  | { readonly ok: false; readonly error: string } {
-  if (input.mode !== "check" && input.mode !== "doctor") {
-    return { ok: false, error: "mode must be 'check' or 'doctor'" };
-  }
-  if (input.contracts === undefined) {
-    return { ok: true, mode: input.mode, contracts: [] };
-  }
-  if (!Array.isArray(input.contracts)) {
-    return { ok: false, error: "contracts must be an array of contract names" };
-  }
-  if (input.contracts.length > MAX_CONTRACTS) {
-    return { ok: false, error: `contracts exceeds maximum of ${MAX_CONTRACTS}` };
-  }
-  if (input.mode === "doctor" && input.contracts.length > 0) {
-    return { ok: false, error: "contracts cannot be specified with mode 'doctor'" };
-  }
-  const clean: string[] = [];
-  for (const item of input.contracts) {
-    if (typeof item !== "string" || !CONTRACT_NAME_RE.test(item)) {
-      return { ok: false, error: `Invalid contract name: ${String(item)}` };
-    }
-    clean.push(item);
-  }
-  return { ok: true, mode: input.mode, contracts: clean };
-}
-
-export async function runPlaybook(input: {
-  readonly repoDir: string;
-  readonly mode: "check" | "doctor";
-  readonly contracts?: ReadonlyArray<string> | undefined;
-  readonly signal?: AbortSignal | undefined;
-}): Promise<ExecJsonResult> {
-  const dir = input.repoDir.trim();
-  if (!dir || !NodePath.isAbsolute(dir)) {
-    return { ok: false, exitCode: 2, data: null, error: "repoDir must be an absolute path" };
-  }
-  const validated = validatePlaybookRequest({
-    mode: input.mode,
-    contracts: input.contracts,
-  });
-  if (!validated.ok) {
-    return { ok: false, exitCode: 2, data: null, error: validated.error };
-  }
-
-  let resolvedDir: string;
-  try {
-    resolvedDir = NodeFS.realpathSync(dir);
-    if (!NodeFS.statSync(resolvedDir).isDirectory()) {
-      return { ok: false, exitCode: 2, data: null, error: "Invalid repository directory" };
-    }
-  } catch {
-    return { ok: false, exitCode: 2, data: null, error: "Invalid repository directory" };
-  }
-
-  const args: string[] = [validated.mode, "--json", ...validated.contracts];
-  const key = `${resolvedDir}\0${args.join("\0")}`;
-  const existing = inFlightPlaybook.get(key);
-  if (existing) return await existing;
-
-  const run = execJsonTool("playbook", args, {
-    cwd: resolvedDir,
-    timeoutMs: 120_000,
-    allowNonZeroJson: true,
-    signal: input.signal,
-  }).finally(() => {
-    inFlightPlaybook.delete(key);
-  });
-  inFlightPlaybook.set(key, run);
-  return await run;
 }
 
 export function getReaperStatus(): Promise<ExecJsonResult> {

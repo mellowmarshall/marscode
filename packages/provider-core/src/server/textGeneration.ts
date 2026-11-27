@@ -7,6 +7,7 @@ import type {
   TextGenerationError,
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
+import type * as Schema from "effect/Schema";
 
 import type { TextGenerationPolicy } from "./textGenerationPolicy.ts";
 import type { ThreadTitleForkSource } from "./textGenerationPrompts.ts";
@@ -114,6 +115,16 @@ export interface TranscriptionPostProcessingResult {
   transcription: string;
 }
 
+/** A read-only review of the checkout at CWD (the real worktree), answered in the caller's OUTPUTSCHEMA. */
+export interface PlaybookChallengeGenerationInput<A> {
+  cwd: string;
+  prompt: string;
+  outputSchema: Schema.Codec<A, unknown>;
+  timeoutMs?: number | undefined;
+  modelSelection: ModelSelection;
+  projectId?: ProjectId | null | undefined;
+}
+
 export interface ProviderTextGeneration {
   readonly generateTranscriptionPostProcessing: (
     input: TranscriptionPostProcessingInput,
@@ -138,4 +149,8 @@ export interface ProviderTextGeneration {
   readonly generateReviewGuide: (
     input: ReviewGuideGenerationInput,
   ) => Effect.Effect<ReviewGuideGenerationResult, TextGenerationError>;
+
+  readonly generatePlaybookChallenge: <A>(
+    input: PlaybookChallengeGenerationInput<A>,
+  ) => Effect.Effect<A, TextGenerationError>;
 }

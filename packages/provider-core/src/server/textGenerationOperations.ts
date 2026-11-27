@@ -39,7 +39,10 @@ const INVESTIGATION_TIMEOUT_MS = 15 * 60_000;
 export const investigationUnsupported = (operation: Operation, provider: string) =>
   new TextGenerationError({
     operation,
-    detail: `${provider} cannot investigate a checkout read-only. Choose another review guide model, or source control writer model when none is set.`,
+    detail:
+      operation === "generatePlaybookChallenge"
+        ? `${provider} cannot investigate a checkout read-only. Choose another playbook challenge model.`
+        : `${provider} cannot investigate a checkout read-only. Choose another review guide model, or source control writer model when none is set.`,
   });
 
 export type Runner = <S extends Schema.Top>(
@@ -194,12 +197,23 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     });
   });
 
+  const generatePlaybookChallenge: ProviderTextGeneration["generatePlaybookChallenge"] = (input) =>
+    run({
+      operation: "generatePlaybookChallenge",
+      cwd: input.cwd,
+      prompt: input.prompt,
+      outputSchema: input.outputSchema,
+      modelSelection: input.modelSelection,
+      investigate: { timeoutMs: input.timeoutMs ?? INVESTIGATION_TIMEOUT_MS },
+    }).pipe(Effect.withSpan(`${name}.generatePlaybookChallenge`));
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateReviewGuide,
+    generatePlaybookChallenge,
     generateTranscriptionPostProcessing,
   } satisfies ProviderTextGeneration;
 }

@@ -1,0 +1,87 @@
+{
+  "name": "@t3tools/playbook",
+  "private": true,
+  "bin": {
+    "playbook": "./src/bin.ts"
+  },
+  "type": "module",
+  "exports": {
+    "./amend": {
+      "types": "./src/amend.ts",
+      "import": "./src/amend.ts"
+    },
+    "./baseline": {
+      "types": "./src/baseline.ts",
+      "import": "./src/baseline.ts"
+    },
+    "./bypass": {
+      "types": "./src/bypass.ts",
+      "import": "./src/bypass.ts"
+    },
+    "./challenger": {
+      "types": "./src/challenger.ts",
+      "import": "./src/challenger.ts"
+    },
+    "./challengeReply": {
+      "types": "./src/challengeReply.ts",
+      "import": "./src/challengeReply.ts"
+    },
+    "./checks": {
+      "types": "./src/checks.ts",
+      "import": "./src/checks.ts"
+    },
+    "./cli": {
+      "types": "./src/cli.ts",
+      "import": "./src/cli.ts"
+    },
+    "./declaration": {
+      "types": "./src/declaration.ts",
+      "import": "./src/declaration.ts"
+    },
+    "./declarationSummary": {
+      "types": "./src/declarationSummary.ts",
+      "import": "./src/declarationSummary.ts"
+    },
+    "./git": {
+      "types": "./src/git.ts",
+      "import": "./src/git.ts"
+    },
+    "./modelClassify": {
+      "types": "./src/modelClassify.ts",
+      "import": "./src/modelClassify.ts"
+    },
+    "./ratchet": {
+      "types": "./src/ratchet.ts",
+      "import": "./src/ratchet.ts"
+    },
+    "./statsAggregate": {
+      "types": "./src/statsAggregate.ts",
+      "import": "./src/statsAggregate.ts"
+    },
+    "./statsParse": {
+      "types": "./src/statsParse.ts",
+      "import": "./src/statsParse.ts"
+    },
+    "./statsStore": {
+      "types": "./src/statsStore.ts",
+      "import": "./src/statsStore.ts"
+    },
+    "./statsTypes": {
+      "types": "./src/statsTypes.ts",
+      "import": "./src/statsTypes.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "effect-tsgo tsrs --noEmit",
+    "test": "vp test run --config ../../vite.config.ts --dir .",
+    "build:bundle": "vp pack"
+  },
+  "dependencies": {
+    "@t3tools/guard-protocol": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

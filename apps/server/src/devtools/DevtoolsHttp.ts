@@ -16,7 +16,10 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { aggregateReviewStats } from "@t3tools/playbook/statsAggregate";
+import type { ReviewStatsGroupBy, ReviewStatsSide } from "@t3tools/playbook/statsTypes";
 import * as ByteSize from "effect/ByteSize";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -47,7 +50,6 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as StorageCleanup from "../storageCleanup.ts";
 import { requestUrl } from "../requestUrl.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
-import * as KnownWorkspaces from "../workspace/KnownWorkspaces.ts";
 import * as CernoStats from "./CernoStats.ts";
 import * as CliRunners from "./CliRunners.ts";
 import * as DevtoolsConfig from "./DevtoolsConfig.ts";
@@ -62,10 +64,11 @@ import { makeNativeFleetFromContext } from "./fleet/NativeFleetWiring.ts";
 import { isAllowedFleetPath } from "./fleet/FleetRoutePolicy.ts";
 import { GuardGrantBroker, type GuardBrokerEvent } from "./GuardGrantBroker.ts";
 import * as JobRegistry from "./jobs/JobRegistry.ts";
-import { normalizeExceptions, readPlaybookDeclaration } from "./PlaybookDeclaration.ts";
+import { handlePlaybookRoute } from "./DevtoolsPlaybookRoutes.ts";
 import * as ReaperPolicy from "./ReaperPolicy.ts";
 import * as ReaperScan from "./ReaperScan.ts";
 import * as ReviewStats from "./ReviewStats.ts";
+import * as ReviewStatsThreads from "./ReviewStatsThreads.ts";
 import * as StorageManifest from "./StorageManifest.ts";
 import * as TrustedProviderRegistry from "./TrustedProviderRegistry.ts";
 
@@ -156,6 +159,8 @@ function requiredScopesForJsonRoute(
   if (
     method === "POST" &&
     (/^\/jobs\/[^/?#]+\/cancel$/.test(subPath) ||
+      subPath === "/playbook/run" ||
+      subPath === "/playbook/challenge" ||
       /^\/devdeck\/sessions\/[^/?#]+\/close$/.test(subPath) ||
       /^\/devdeck\/servers\/[^/?#]+(?:\/[^/?#]+)?\/stop$/.test(subPath) ||
       /^\/devdeck\/hosts\/[^/?#]+\/(?:provision|ci)$/.test(subPath))
@@ -183,6 +188,7 @@ function requiredScopesForJsonRoute(
     (subPath === "/config" ||
       subPath === "/config/fleet" ||
       subPath === "/review-stats" ||
+      subPath === "/review-threads/verify" ||
       subPath === "/stats/cerno" ||
       subPath === "/reaper/policy")
   ) {
@@ -669,25 +675,13 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
     return guardResponse;
   }
 
-  if (method === "GET" && subPath === "/playbook/declaration") {
-    const pathSvc = yield* Path.Path;
-    const repoDir = (url.value.searchParams.get("repoDir") ?? "").trim();
-    if (!repoDir || !pathSvc.isAbsolute(repoDir)) {
-      return jsonResponse({ error: "repoDir query param must be an absolute path" }, 400);
-    }
-    const knownWorkspaces = yield* Effect.serviceOption(KnownWorkspaces.KnownWorkspaces);
-    if (Option.isNone(knownWorkspaces)) {
-      return jsonResponse({ error: "Workspace validation unavailable" }, 503);
-    }
-    const allowed = yield* knownWorkspaces.value.assertContains(repoDir).pipe(
-      Effect.as(true),
-      Effect.orElseSucceed(() => false),
-    );
-    if (!allowed) {
-      return jsonResponse({ error: "Repository directory is not a registered T3 workspace" }, 403);
-    }
-    const waivers = normalizeExceptions(broker.readExceptions());
-    return jsonResponse(readPlaybookDeclaration(repoDir, waivers));
+  const playbookResponse = yield* handlePlaybookRoute(method, subPath, url.value, broker, {
+    jsonResponse,
+    readJsonBody,
+    session,
+  });
+  if (playbookResponse !== null) {
+    return playbookResponse;
   }
 
   if (subPath.startsWith("/devdeck/")) {
@@ -805,44 +799,6 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
   if (method === "POST" && cancelMatch?.[1]) {
     const res = yield* Effect.promise((signal) =>
       CliRunners.cancelShipQueueJob(cancelMatch[1]!, signal),
-    );
-    return jsonResponse(res, res.ok ? 200 : 400);
-  }
-
-  if (method === "POST" && subPath === "/playbook/run") {
-    const parsed = yield* readJsonBody;
-    if (!parsed.ok) return jsonResponse({ error: parsed.error }, parsed.status);
-    const pathSvc = yield* Path.Path;
-    const repoDir = typeof parsed.value.repoDir === "string" ? parsed.value.repoDir.trim() : "";
-    if (!repoDir || !pathSvc.isAbsolute(repoDir)) {
-      return jsonResponse({ error: "repoDir must be an absolute path" }, 400);
-    }
-    const validated = CliRunners.validatePlaybookRequest({
-      mode: parsed.value.mode,
-      contracts: parsed.value.contracts,
-    });
-    if (!validated.ok) {
-      return jsonResponse({ error: validated.error }, 400);
-    }
-    const knownWorkspaces = yield* Effect.serviceOption(KnownWorkspaces.KnownWorkspaces);
-    // Fail closed if workspace allowlist verification is unavailable.
-    if (Option.isNone(knownWorkspaces)) {
-      return jsonResponse({ error: "Workspace validation unavailable" }, 503);
-    }
-    const allowed = yield* knownWorkspaces.value.assertContains(repoDir).pipe(
-      Effect.as(true),
-      Effect.orElseSucceed(() => false),
-    );
-    if (!allowed) {
-      return jsonResponse({ error: "Repository directory is not a registered T3 workspace" }, 403);
-    }
-    const res = yield* Effect.promise((signal) =>
-      CliRunners.runPlaybook({
-        repoDir,
-        mode: validated.mode,
-        contracts: validated.contracts,
-        signal,
-      }),
     );
     return jsonResponse(res, res.ok ? 200 : 400);
   }
@@ -1048,10 +1004,10 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
   if (method === "GET" && subPath === "/review-stats") {
     const sp = url.value.searchParams;
     const rawSide = sp.get("side") ?? "reviewer";
-    const side: ReviewStats.ReviewStatsSide =
+    const side: ReviewStatsSide =
       rawSide === "submitter" || rawSide === "pair" ? rawSide : "reviewer";
     const rawBy = sp.get("by") ?? "model";
-    const validBy = new Set<ReviewStats.ReviewStatsGroupBy>([
+    const validBy = new Set<ReviewStatsGroupBy>([
       "model",
       "family",
       "lab",
@@ -1061,8 +1017,8 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
       "effort",
       "day",
     ]);
-    const by: ReviewStats.ReviewStatsGroupBy = validBy.has(rawBy as ReviewStats.ReviewStatsGroupBy)
-      ? (rawBy as ReviewStats.ReviewStatsGroupBy)
+    const by: ReviewStatsGroupBy = validBy.has(rawBy as ReviewStatsGroupBy)
+      ? (rawBy as ReviewStatsGroupBy)
       : "model";
     const rawSource = sp.get("source") ?? "all";
     const source: "all" | "playbook_challenge" | "ship_queue_review" =
@@ -1078,8 +1034,8 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
     const forceRefresh = sp.get("refresh") === "1" || sp.has("_r");
 
     const sqlOpt = yield* Effect.serviceOption(SqlClient.SqlClient);
-    let lookup: ReviewStats.ThreadSubmitterLookup | undefined;
-    let delegatedReviews: ReadonlyArray<ReviewStats.DelegatedReviewSubagentRow> | undefined;
+    let lookup: ReviewStatsThreads.ThreadSubmitterLookup | undefined;
+    let delegatedReviews: ReadonlyArray<ReviewStatsThreads.DelegatedReviewSubagentRow> | undefined;
     if (Option.isSome(sqlOpt)) {
       const cachedLookup = ReviewStats.getCachedSubmitterLookup(forceRefresh);
       if (cachedLookup) {
@@ -1115,7 +1071,7 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
           WHERE deleted_at IS NULL
           ORDER BY updated_at ASC
         `.pipe(Effect.orElseSucceed(() => []));
-        lookup = ReviewStats.buildSubmitterLookupFromRows(rows);
+        lookup = ReviewStatsThreads.buildSubmitterLookupFromRows(rows);
         ReviewStats.setCachedSubmitterLookup(lookup);
       }
 
@@ -1123,7 +1079,7 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
       if (cachedDelegated) {
         delegatedReviews = cachedDelegated;
       } else {
-        const subRows = yield* sqlOpt.value<ReviewStats.RawSubagentProjectionRow>`
+        const subRows = yield* sqlOpt.value<ReviewStatsThreads.RawSubagentProjectionRow>`
           SELECT
             subagent_id,
             thread_id,
@@ -1143,7 +1099,7 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
           ORDER BY COALESCE(completed_at, updated_at) DESC
           LIMIT 2000
         `.pipe(Effect.orElseSucceed(() => []));
-        const mapped = ReviewStats.mapRawDelegatedReviewRows(subRows);
+        const mapped = ReviewStatsThreads.mapRawDelegatedReviewRows(subRows);
         delegatedReviews = mapped;
         ReviewStats.setCachedDelegatedReviews(mapped);
       }
@@ -1157,7 +1113,7 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
       { forceRefresh, delegatedReviews },
     );
     return jsonResponse(
-      ReviewStats.aggregateReviewStats(records, {
+      aggregateReviewStats(records, {
         side,
         by,
         source,
@@ -1167,6 +1123,7 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
         host,
         localHostName,
         days,
+        nowMs: DateTime.toEpochMillis(yield* DateTime.now),
         includeBypasses,
       }),
     );

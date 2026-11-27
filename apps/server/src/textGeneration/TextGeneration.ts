@@ -47,6 +47,7 @@ type TextGenerationOp =
   | "generateBranchName"
   | "generateThreadTitle"
   | "generateReviewGuide"
+  | "generatePlaybookChallenge"
   | "generateTranscriptionPostProcessing";
 
 const resolveInstance = (
@@ -67,8 +68,12 @@ const resolveInstance = (
     ),
   );
 
-// Review guides investigate the checkout read-only; the other drivers reject that request.
+// Review guides and playbook challenges investigate the checkout read-only; the other drivers reject that request.
 const INVESTIGATING_DRIVERS = new Set(["codex", "claudeAgent"]);
+const INVESTIGATING_OPERATIONS: ReadonlySet<TextGenerationOp> = new Set([
+  "generateReviewGuide",
+  "generatePlaybookChallenge",
+]);
 
 /** @public */
 export const make = Effect.gen(function* () {
@@ -87,10 +92,10 @@ export const make = Effect.gen(function* () {
     ) => Effect.Effect<A, TextGenerationError>,
   ) {
     const textGenerator = yield* textGenerators.runner(selection.instanceId);
-    // A review guide reaches a text generator only through a fallback; it needs an agent instead.
+    // An investigation reaches a text generator only through a fallback; it needs an agent instead.
     const textGeneratorId = selection.instanceId;
-    const textGeneratorCannotRun =
-      textGenerator !== undefined && operation === "generateReviewGuide";
+    const investigates = INVESTIGATING_OPERATIONS.has(operation);
+    const textGeneratorCannotRun = textGenerator !== undefined && investigates;
     if (textGenerator !== undefined && !textGeneratorCannotRun) {
       return yield* invoke(
         TextGenerationOperations.fromRunner("TextGenerator", textGenerator),
@@ -143,7 +148,7 @@ export const make = Effect.gen(function* () {
               isProviderTextGenerationCapable(provider) &&
               provider.models.find((candidate) => candidate.slug === model)
                 ?.supportsTextGeneration !== false &&
-              (operation !== "generateReviewGuide" || INVESTIGATING_DRIVERS.has(driver)) &&
+              (!investigates || INVESTIGATING_DRIVERS.has(driver)) &&
               !exhaustedUsageWindow(provider, now, model)
             );
           },
@@ -156,7 +161,9 @@ export const make = Effect.gen(function* () {
       return yield* new TextGenerationError({
         operation,
         detail:
-          "Review guides need a coding agent that can read the checkout. None is ready. Pick Codex or Claude as the review guide model in Settings → Source control & issues.",
+          operation === "generatePlaybookChallenge"
+            ? "Playbook challenges need a coding agent that can read the checkout. None is ready. Pick Codex or Claude as the playbook challenge model."
+            : "Review guides need a coding agent that can read the checkout. None is ready. Pick Codex or Claude as the review guide model in Settings → Source control & issues.",
       });
     }
     if (selectedDisabled && selection.instanceId === selected.instanceId) {
@@ -206,6 +213,17 @@ export const make = Effect.gen(function* () {
         (service, modelSelection) => service.generateReviewGuide({ ...input, modelSelection }),
       );
     }),
+    generatePlaybookChallenge: Effect.fn("TextGeneration.generatePlaybookChallenge")(
+      function (input) {
+        return generate(
+          "generatePlaybookChallenge",
+          input.modelSelection,
+          input.projectId,
+          (service, modelSelection) =>
+            service.generatePlaybookChallenge({ ...input, modelSelection }),
+        );
+      },
+    ),
     generateTranscriptionPostProcessing: Effect.fn(
       "TextGeneration.generateTranscriptionPostProcessing",
     )(function (input) {

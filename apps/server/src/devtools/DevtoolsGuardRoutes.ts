@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import type { HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import type { GuardGrantBroker } from "./GuardGrantBroker.ts";
-import { normalizeExceptions } from "./PlaybookDeclaration.ts";
+import { normalizeExceptions } from "@t3tools/playbook/bypass";
 
 export interface GuardRouteHelpers {
   readonly jsonResponse: (body: unknown, status?: number) => HttpServerResponse.HttpServerResponse;

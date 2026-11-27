@@ -769,6 +769,7 @@ it.effect.each(PREFLIGHT_PRIMARY_STATES)("text generation preflight: %s", (prima
           generatePrContent: () => Effect.die("unused"),
           generateBranchName: () => Effect.die("unused"),
           generateReviewGuide: () => Effect.die("unused"),
+          generatePlaybookChallenge: () => Effect.die("unused"),
           generateTranscriptionPostProcessing: () => Effect.die("unused"),
           generateThreadTitle: (input) =>
             Effect.sync(() => {
@@ -886,6 +887,7 @@ it.effect(
               calls.push(input.modelSelection);
               return {} as TextGeneration.ReviewGuideGenerationResult;
             }),
+          generatePlaybookChallenge: () => Effect.die("unused"),
         }),
       } satisfies ProviderInstance;
       const serviceWith = (instances: ReadonlyArray<ProviderInstance>) =>

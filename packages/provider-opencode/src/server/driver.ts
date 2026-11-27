@@ -230,6 +230,11 @@ function selectOpenCodeRuntimeTextGeneration(
         v1: v1.generateReviewGuide(input),
         v2: v2.generateReviewGuide(input),
       }),
+    generatePlaybookChallenge: (input) =>
+      byOpenCodeRuntime(resolve, {
+        v1: v1.generatePlaybookChallenge(input),
+        v2: v2.generatePlaybookChallenge(input),
+      }),
     generateTranscriptionPostProcessing: (input) =>
       byOpenCodeRuntime(resolve, {
         v1: v1.generateTranscriptionPostProcessing(input),
