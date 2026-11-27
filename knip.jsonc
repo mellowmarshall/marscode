@@ -41,6 +41,7 @@
         "prove-scenario.ts",
         "scenarios/*.ts",
         "setup-worktree.ts",
+        "ship/marscode-sync.ts",
         "sign-macos.ts",
         "prepare-server-compile-cache.cjs",
         "smoke-desktop-app.ts",

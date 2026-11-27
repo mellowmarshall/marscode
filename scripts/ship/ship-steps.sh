@@ -9,8 +9,8 @@
 #   ship-steps.sh ci              run marscode's fast adaptive changed-file CI
 #   ship-steps.sh merge PR        squash-merge the gated head: 0 merged,
 #                                 75 the base moved, 76 transient
-#   ship-steps.sh post-merge      build and atomically install MarsCode CLIs
-#                                 from a detached temp/data worktree
+#   ship-steps.sh post-merge      sync touched MarsCode CLIs, guards, and
+#                                 MarsCode-main.AppImage via marscode-sync.ts
 set -u
 
 ensure_vp_path() {
@@ -91,71 +91,9 @@ merge() { # PR
 }
 
 post_merge() {
-  local primary target_ref wt_base work_root build_wt primary_real wt_base_real base_ref stripped_ref remote_name base_branch fetched_sha
-  primary="${SHIP_QUEUE_PRIMARY:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-  base_ref="${SHIP_QUEUE_BASE_REF:-origin/main}"
-  if [[ "$base_ref" == refs/remotes/*/* ]]; then
-    stripped_ref="${base_ref#refs/remotes/}"
-    remote_name="${stripped_ref%%/*}"
-    base_branch="${stripped_ref#*/}"
-  elif [[ "$base_ref" == refs/heads/* ]]; then
-    remote_name="origin"
-    base_branch="${base_ref#refs/heads/}"
-  elif [[ "$base_ref" == */* ]]; then
-    remote_name="${base_ref%%/*}"
-    base_branch="${base_ref#*/}"
-  else
-    remote_name="origin"
-    base_branch="$base_ref"
-  fi
-  target_ref="${SHIP_QUEUE_BASE_SHA:-${base_ref}}"
-  if git -C "$primary" fetch --quiet "$remote_name" "$base_branch"; then
-    fetched_sha="$(git -C "$primary" rev-parse --verify "${remote_name}/${base_branch}^{commit}" 2>/dev/null || true)"
-    if [ -n "$fetched_sha" ]; then
-      if [ -z "${SHIP_QUEUE_BASE_SHA:-}" ] || git -C "$primary" merge-base --is-ancestor "$SHIP_QUEUE_BASE_SHA" "$fetched_sha" 2>/dev/null; then
-        target_ref="$fetched_sha"
-      fi
-    fi
-  else
-    echo "marscode ship-steps: warning: git fetch $remote_name $base_branch failed; building $target_ref" >&2
-  fi
-
-  wt_base=""
-  for candidate in "${SHIP_QUEUE_WORKTREE_ROOT:-}" "${SHIP_QUEUE_DATA_ROOT:-}" "${TMPDIR:-/tmp}"; do
-    [ -n "$candidate" ] || continue
-    if [ -d "$candidate" ] && [ -w "$candidate" ]; then
-      wt_base="$candidate"
-      break
-    fi
-  done
-  if [ -z "$wt_base" ]; then
-    wt_base="${TMPDIR:-/tmp}"
-  fi
-
-  primary_real="$(cd "$primary" && pwd -P)"
-  wt_base_real="$(cd "$wt_base" && pwd -P)"
-  case "$wt_base_real" in
-    "$primary_real"|"$primary_real"/*)
-      wt_base="${TMPDIR:-/tmp}"
-      ;;
-  esac
-
-  work_root="$(mktemp -d "${wt_base}/.marscode-post-merge.XXXXXX")" || {
-    echo "marscode ship-steps: cannot create temporary build worktree directory under $wt_base" >&2
-    return 1
-  }
-  build_wt="${work_root}/repo"
-
-  (
-    set -euo pipefail
-    trap 'git -C "$primary" worktree remove --force "$build_wt" >/dev/null 2>&1 || true; rm -rf "$work_root"; git -C "$primary" worktree prune >/dev/null 2>&1 || true' EXIT
-
-    ensure_vp_path
-    git -C "$primary" worktree add --detach -q "$build_wt" "$target_ref"
-    cd "$build_wt"
-    VP_GIT_HOOKS=0 vp install --frozen-lockfile --ignore-scripts
-    bash "$build_wt/scripts/install-marscode-tools.sh" "$@"
-  )
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  exec node "$script_dir/marscode-sync.ts" "$@"
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then

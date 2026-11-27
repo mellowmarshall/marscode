@@ -48,6 +48,7 @@ export interface StepJobContext {
   readonly dataRoot: string;
   readonly pr?: number | undefined;
   readonly worktreeRoot?: string | undefined;
+  readonly jobsBehind?: number | undefined;
 }
 
 export interface LocalStepInput {
@@ -170,6 +171,9 @@ export function buildLocalStepEnv(input: {
   if (input.ctx.tipSha) env.SHIP_QUEUE_TIP = input.ctx.tipSha;
   if (input.ctx.pr !== undefined) env.SHIP_QUEUE_PR = String(input.ctx.pr);
   if (input.ctx.worktreeRoot) env.SHIP_QUEUE_WORKTREE_ROOT = input.ctx.worktreeRoot;
+  if (input.ctx.jobsBehind !== undefined) {
+    env.SHIP_QUEUE_JOBS_BEHIND = String(input.ctx.jobsBehind);
+  }
 
   if (input.mode === "ci" || input.mode === "post-merge") {
     for (const key of CI_SCRUB_SECRET_VARS) delete env[key];

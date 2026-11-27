@@ -5,13 +5,27 @@ import * as NodePath from "node:path";
 import { parseShipDeclaration } from "./declaration.ts";
 import { extractBaseStepTree } from "./declarationValidation.ts";
 import { currentBranch, git, gitOut, revParse, worktreeChanges } from "./gitQueries.ts";
-import { appendLog, jobDir, mark, readLog, updateJob } from "./jobStore.ts";
+import { appendLog, jobDir, listJobIds, mark, readJob, readLog, updateJob } from "./jobStore.ts";
 import { parseSafeStepCommand, runLocalStep } from "./stepRunner.ts";
 import type { JobRecord, ProcessRunner, ShipQueueDeps } from "./types.ts";
 
 const FETCH_ATTEMPTS = 3;
-const DEFAULT_POST_MERGE_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_POST_MERGE_TIMEOUT_MS = 15 * 60_000;
 const SYNC_EXIT_RE = /^SYNC_EXIT=(-?\d+)\s*$/m;
+
+function countJobsBehind(root: string, currentJob: JobRecord): number {
+  let count = 0;
+  for (const id of listJobIds(root, { open: true })) {
+    if (id === currentJob.id) continue;
+    const other = readJob(root, id);
+    if (!other || other.repo !== currentJob.repo) continue;
+    if (other.state !== "queued" && other.state !== "running") {
+      continue;
+    }
+    count += 1;
+  }
+  return count;
+}
 
 function recordSyncExit(root: string, jobId: string, exitCode: number): void {
   updateJob(root, jobId, { sync_exit: exitCode });
@@ -169,6 +183,7 @@ export async function runPostMergeSync(
         dataRoot: process.env.SHIP_QUEUE_DATA_ROOT?.trim() ?? "",
         pr,
         worktreeRoot: decl.worktreeRoot || undefined,
+        jobsBehind: countJobsBehind(deps.root, job),
       },
       cmdline,
       cwd: job.primary,

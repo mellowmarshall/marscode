@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - Real behavioral tests for ship_post_merge execution, SYNC_EXIT markers, crash-recovery idempotency, path validation, version CLI, and install-marscode-tools dry-run.
+// @effect-diagnostics nodeBuiltinImport:off - Real behavioral tests for ship_post_merge execution, SYNC_EXIT markers, crash-recovery idempotency, path validation, version CLI, and marscode-sync dry-run.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { runShipQueueCli } from "./cli.ts";
 import { guardProtocolGuard } from "./houseGate.ts";
-import { mark, readJob, readLog, registerWatcher, updateJob } from "./jobStore.ts";
+import { createJob, mark, readJob, readLog, registerWatcher, updateJob } from "./jobStore.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
 import { currentProcessIdentity, isProcessAlive } from "./processIdentity.ts";
 import { submitJob } from "./submit.ts";
@@ -194,6 +194,7 @@ describe("ship_post_merge execution and SYNC_EXIT markers", () => {
           `  printf 'PR=%s\\n' "\${SHIP_QUEUE_PR:-}"`,
           `  printf 'ROOT=%s\\n' "\${SHIP_QUEUE_ROOT:-}"`,
           `  printf 'PRIMARY=%s\\n' "\${SHIP_QUEUE_PRIMARY:-}"`,
+          `  printf 'JOBS_BEHIND=%s\\n' "\${SHIP_QUEUE_JOBS_BEHIND:-}"`,
           `  printf 'CF=%s\\n' "\${CLOUDFLARE_API_TOKEN:-}"`,
           `  printf 'NODE_OPTIONS=%s\\n' "\${NODE_OPTIONS:-}"`,
           `  printf 'PWD=%s\\n' "$(pwd)"`,
@@ -236,10 +237,60 @@ describe("ship_post_merge execution and SYNC_EXIT markers", () => {
     expect(recorded).toContain("PR=1\n");
     expect(recorded).toContain(`ROOT=${fixture.root}\n`);
     expect(recorded).toContain(`PRIMARY=${fixture.primary}\n`);
+    expect(recorded).toContain("JOBS_BEHIND=0\n");
     expect(recorded).toContain("CF=\n");
     expect(recorded).toContain("NODE_OPTIONS=\n");
     expect(recorded).toContain("FEATURE_PRESENT=yes\n");
     expect(readLog(fixture.root, id)).toContain("post-merge hook synced");
+  });
+
+  it("exports SHIP_QUEUE_JOBS_BEHIND counting only other active jobs for the same repo", async () => {
+    const outFile = NodePath.join(
+      NodeFS.realpathSync(NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "sq-pm-behind-"))),
+      "behind.txt",
+    );
+    cleanups.push(() => NodeFS.rmSync(NodePath.dirname(outFile), { recursive: true, force: true }));
+
+    const fixture = makePostMergeFixture({
+      confText: "ship_repo=sync-repo\nship_post_merge=scripts/post-merge.sh\n",
+      extraBaseFiles: {
+        "scripts/post-merge.sh": [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          `printf '%s' "\${SHIP_QUEUE_JOBS_BEHIND:-}" > ${JSON.stringify(outFile)}`,
+        ].join("\n"),
+      },
+    });
+
+    const wt1 = fixture.makeWorktree("feat/burst-1", { "one.txt": "1\n" });
+    const wt2 = fixture.makeWorktree("feat/burst-2", { "two.txt": "2\n" });
+    const id1 = await fixture.submitOk(wt1, "feat/burst-1");
+    await fixture.submitOk(wt2, "feat/burst-2");
+    // Unrelated repo job must not count toward sync-repo's burst count.
+    createJob(
+      fixture.root,
+      {
+        repo: "other-repo",
+        primary: fixture.primary,
+        worktree: wt2,
+        branch: "feat/other",
+        title: "other repo job",
+        remote: "origin",
+        base_branch: "main",
+        head_sha: "0000000000000000000000000000000000000000",
+      },
+      "body",
+      fixture.deps.clock,
+    );
+
+    const unwatch = registerWatcher(fixture.root, id1, SELF);
+    try {
+      expect(await runJob(fixture.deps, id1)).toBe("ended");
+    } finally {
+      unwatch();
+    }
+
+    expect(NodeFS.readFileSync(outFile, "utf8")).toBe("1");
   });
 
   it("logs non-zero SYNC_EXIT without marking an already-merged PR as unmerged", async () => {
@@ -394,7 +445,7 @@ describe("ship_post_merge execution and SYNC_EXIT markers", () => {
   });
 });
 
-describe("ship-queue version subcommand and install-marscode-tools.sh", () => {
+describe("ship-queue version subcommand and marscode-sync.ts", () => {
   it("stages, inspects, and prunes worker versions via ship-queue version CLI", async () => {
     const tmp = NodeFS.realpathSync(
       NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "sq-ver-cli-")),
@@ -445,9 +496,9 @@ describe("ship-queue version subcommand and install-marscode-tools.sh", () => {
     expect(pruneJson.kept).toEqual(["v2.0.0"]);
   });
 
-  it("supports scripts/install-marscode-tools.sh --dry-run without mutating target directories", () => {
+  it("supports scripts/ship/marscode-sync.ts --dry-run without mutating target directories", () => {
     const repoRoot = NodePath.resolve(import.meta.dirname, "../../..");
-    const installer = NodePath.join(repoRoot, "scripts", "install-marscode-tools.sh");
+    const syncScript = NodePath.join(repoRoot, "scripts", "ship", "marscode-sync.ts");
     const tmp = NodeFS.realpathSync(
       NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "sq-install-dry-")),
     );
@@ -455,28 +506,44 @@ describe("ship-queue version subcommand and install-marscode-tools.sh", () => {
     const binDir = NodePath.join(tmp, "bin");
     const libDir = NodePath.join(tmp, "lib");
     const queueRoot = NodePath.join(tmp, "sq");
+    const dataRoot = NodePath.join(tmp, "data");
+    NodeFS.mkdirSync(dataRoot, { recursive: true });
 
     const res = NodeChildProcess.spawnSync(
-      "bash",
-      [installer, "--dry-run", "--bin-dir", binDir, "--lib-dir", libDir, "--queue-root", queueRoot],
+      process.execPath,
+      [
+        syncScript,
+        "--dry-run",
+        "--primary",
+        repoRoot,
+        "--data-root",
+        dataRoot,
+        "--bin-dir",
+        binDir,
+        "--lib-dir",
+        libDir,
+        "--queue-root",
+        queueRoot,
+      ],
       { cwd: repoRoot, encoding: "utf8" },
     );
     expect(res.status).toBe(0);
     for (const expected of [
-      "packages/ship-queue/dist/bin.mjs",
-      "packages/playbook/dist/bin.mjs",
-      "packages/runlog/dist/bin.mjs",
-      "packages/fleet/dist/bin.mjs",
-      "packages/surface/dist/bin.mjs",
-      "marscode-guard",
-      "marscode-host-guard",
-      "worker version",
+      "ship-queue (packages/ship-queue)",
+      "playbook (packages/playbook)",
+      "runlog (packages/runlog)",
+      "fleet (packages/fleet)",
+      "surface (packages/surface)",
+      "marscode-guard (packages/guard-protocol)",
+      "marscode-host-guard (packages/host-guards)",
+      "desktop-appimage",
     ]) {
       expect(res.stdout).toContain(expected);
     }
     expect(NodeFS.existsSync(binDir)).toBe(false);
     expect(NodeFS.existsSync(libDir)).toBe(false);
     expect(NodeFS.existsSync(queueRoot)).toBe(false);
+    expect(NodeFS.existsSync(NodePath.join(dataRoot, "sync-worktree"))).toBe(false);
   });
 
   it("catches spawn errors before extraction and keeps an already-merged PR DONE with SYNC_EXIT=1", async () => {
