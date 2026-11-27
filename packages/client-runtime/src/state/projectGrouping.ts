@@ -9,6 +9,7 @@ import {
 import type { ClientSettings } from "@t3tools/contracts/settings";
 
 import type { EnvironmentProject } from "./models.ts";
+import { qualifyCollidingGroupLabels } from "./projectGroupLabel.ts";
 import { normalizeProjectPathForComparison } from "./projects.ts";
 import { mFallback, msg } from "gt-i18n";
 import type { MFunctionType } from "gt-i18n/types";
@@ -237,13 +238,21 @@ export function deriveProjectGroupLabel(input: {
   readonly members: ReadonlyArray<
     Pick<EnvironmentProject, "title" | "hasCustomTitle" | "repositoryIdentity">
   >;
+  /** Keep the `owner/` path, for a repository whose name another group also shows. */
+  readonly qualified?: boolean;
 }): string {
+  const displayNameOptions = { qualified: input.qualified ?? false };
   const sharedTitles = uniqueNonEmptyValues(input.members.map((member) => member.title));
-  const sharedDisplayNames = uniqueNonEmptyValues(
-    input.members.map((member) =>
-      member.repositoryIdentity ? repositoryGroupingDisplayNameOf(member.repositoryIdentity) : null,
-    ),
-  );
+  const displayNames = (qualified: boolean) =>
+    uniqueNonEmptyValues(
+      input.members.map((m) =>
+        m.repositoryIdentity
+          ? repositoryGroupingDisplayNameOf(m.repositoryIdentity, { qualified })
+          : null,
+      ),
+    );
+  const sharedDisplayNames = displayNames(displayNameOptions.qualified);
+  const unqualifiedDisplayNames = displayNameOptions.qualified ? displayNames(false) : [];
   const sharedRepositoryNames = uniqueNonEmptyValues(
     input.members.map((member) => member.repositoryIdentity?.name),
   );
@@ -252,7 +261,9 @@ export function deriveProjectGroupLabel(input: {
     sharedTitles.length === 1 &&
     sharedTitle !== undefined &&
     (input.members.some((member) => member.hasCustomTitle === true) ||
-      (!sharedDisplayNames.includes(sharedTitle) && !sharedRepositoryNames.includes(sharedTitle)))
+      (!sharedDisplayNames.includes(sharedTitle) &&
+        !unqualifiedDisplayNames.includes(sharedTitle) &&
+        !sharedRepositoryNames.includes(sharedTitle)))
   ) {
     return sharedTitle;
   }
@@ -272,7 +283,7 @@ export function deriveProjectGroupLabel(input: {
     input.groupKey === repositoryGroupingKeyOf(representativeIdentity)
   ) {
     return (
-      repositoryGroupingDisplayNameOf(representativeIdentity) ??
+      repositoryGroupingDisplayNameOf(representativeIdentity, displayNameOptions) ??
       representativeIdentity.name ??
       input.representative.title
     );
@@ -411,7 +422,7 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(
   }
 
   const preferredEnvironmentId = input.preferredEnvironmentId ?? null;
-  return Array.from(groupedMembers, ([key, members]) => {
+  const groups = Array.from(groupedMembers, ([key, members]) => {
     const projects = members.map((member) => member.project);
     const representative =
       (preferredEnvironmentId
@@ -438,6 +449,14 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(
       archived: !members.some(({ project }) => isPickableProjectMember(project)),
     };
   });
+  return qualifyCollidingGroupLabels(groups, input.groupScratchProjects ?? false, (group) =>
+    deriveProjectGroupLabel({
+      groupKey: group.key,
+      representative: group.representative,
+      members: group.members.map((member) => member.project),
+      qualified: true,
+    }),
+  );
 }
 
 export function sortProjectsByGroupOrder<

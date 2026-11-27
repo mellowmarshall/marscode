@@ -335,7 +335,121 @@ describe("buildProjectGroups", () => {
       "github.com/julius/t3code-fork",
     ]);
     expect(groups[1]?.members.map((member) => member.project.id)).toEqual(["fork", "fork-2"]);
-    expect(groups[1]?.label).toBe("julius/t3code-fork");
+    expect(groups[1]?.label).toBe("t3code-fork");
+  });
+
+  it("labels a repository group by its name without the owner path", () => {
+    const identity = { ...repositoryIdentity, displayName: "t3tools/t3code" };
+    const groups = buildProjectGroups({
+      projects: [
+        makeProject("clone-a", "/work/clone-a", { repositoryIdentity: identity }),
+        makeProject("clone-b", "/work/clone-b", { repositoryIdentity: identity }),
+      ],
+      settings: settings("repository"),
+    });
+    expect(groups.map((group) => group.label)).toEqual(["t3code"]);
+  });
+
+  it("keeps the owner path when two repositories share a name", () => {
+    const upstream = { ...repositoryIdentity, displayName: "t3tools/t3code" };
+    const fork = {
+      ...repositoryIdentity,
+      origin: { canonicalKey: "github.com/julius/t3code", displayName: "julius/T3Code" },
+    };
+    const other = {
+      ...repositoryIdentity,
+      canonicalKey: "github.com/t3tools/docs",
+      displayName: "t3tools/docs",
+    };
+    const groups = buildProjectGroups({
+      projects: [
+        makeProject("up-a", "/work/up-a", { repositoryIdentity: upstream }),
+        makeProject("up-b", "/work/up-b", { repositoryIdentity: upstream }),
+        makeProject("fork-a", "/work/fork-a", { repositoryIdentity: fork }),
+        makeProject("fork-b", "/work/fork-b", { repositoryIdentity: fork }),
+        makeProject("docs-a", "/work/docs-a", { repositoryIdentity: other }),
+        makeProject("docs-b", "/work/docs-b", { repositoryIdentity: other }),
+      ],
+      settings: settings("repository"),
+    });
+    expect(groups.map((group) => group.label)).toEqual(["t3tools/t3code", "julius/T3Code", "docs"]);
+  });
+
+  it("qualifies a repository group whose name matches a single project's title", () => {
+    const fork = {
+      ...repositoryIdentity,
+      origin: { canonicalKey: "github.com/julius/t3code", displayName: "julius/t3code" },
+    };
+    const groups = buildProjectGroups({
+      projects: [
+        makeProject("t3code", "/work/t3code"),
+        makeProject("fork-a", "/work/fork-a", { repositoryIdentity: fork }),
+        makeProject("fork-b", "/work/fork-b", { repositoryIdentity: fork }),
+      ],
+      settings: settings("repository"),
+    });
+    expect(groups.map((group) => group.label)).toEqual(["t3code", "julius/t3code"]);
+  });
+
+  it("keeps a shared custom title when another group shows the same name", () => {
+    const upstream = { ...repositoryIdentity, displayName: "t3tools/t3code" };
+    const fork = {
+      ...repositoryIdentity,
+      origin: { canonicalKey: "github.com/julius/t3code", displayName: "julius/t3code" },
+    };
+    const groups = buildProjectGroups({
+      projects: [
+        makeProject("up-a", "/work/up-a", { repositoryIdentity: upstream }),
+        makeProject("up-b", "/work/up-b", { repositoryIdentity: upstream }),
+        ...["fork-a", "fork-b"].map((id) =>
+          makeProject(id, `/work/${id}`, {
+            title: "t3code",
+            hasCustomTitle: true,
+            repositoryIdentity: fork,
+          }),
+        ),
+      ],
+      settings: settings("repository"),
+    });
+    expect(groups.map((group) => group.label)).toEqual(["t3tools/t3code", "t3code"]);
+  });
+
+  it("disambiguates forks and identities without name when folder titles match the stripped repo name", () => {
+    const forkA = {
+      ...repositoryIdentity,
+      origin: { canonicalKey: "github.com/julius/t3code-fork", displayName: "julius/t3code-fork" },
+    };
+    const forkB = {
+      ...repositoryIdentity,
+      origin: { canonicalKey: "github.com/bob/t3code-fork", displayName: "bob/t3code-fork" },
+    };
+    const forkGroups = buildProjectGroups({
+      projects: [
+        makeProject("fa-1", "/work/fa-1", { title: "t3code-fork", repositoryIdentity: forkA }),
+        makeProject("fa-2", "/work/fa-2", { title: "t3code-fork", repositoryIdentity: forkA }),
+        makeProject("fb-1", "/work/fb-1", { title: "t3code-fork", repositoryIdentity: forkB }),
+        makeProject("fb-2", "/work/fb-2", { title: "t3code-fork", repositoryIdentity: forkB }),
+      ],
+      settings: settings("repository"),
+    });
+    expect(forkGroups.map((group) => group.label)).toEqual([
+      "julius/t3code-fork",
+      "bob/t3code-fork",
+    ]);
+
+    const { name: _omitName, ...noNameBase } = repositoryIdentity;
+    const repoA = { ...noNameBase, canonicalKey: "github.com/a/t3code", displayName: "a/t3code" };
+    const repoB = { ...noNameBase, canonicalKey: "github.com/b/t3code", displayName: "b/t3code" };
+    const noNameGroups = buildProjectGroups({
+      projects: [
+        makeProject("na-1", "/work/na-1", { title: "t3code", repositoryIdentity: repoA }),
+        makeProject("na-2", "/work/na-2", { title: "t3code", repositoryIdentity: repoA }),
+        makeProject("nb-1", "/work/nb-1", { title: "t3code", repositoryIdentity: repoB }),
+        makeProject("nb-2", "/work/nb-2", { title: "t3code", repositoryIdentity: repoB }),
+      ],
+      settings: settings("repository"),
+    });
+    expect(noNameGroups.map((group) => group.label)).toEqual(["a/t3code", "b/t3code"]);
   });
 
   // regression: #15049 a rename to the repository name snapped back to the display path

@@ -275,10 +275,19 @@ export function repositoryGroupingKeyOf(identity: RepositoryIdentity): string {
   return identity.origin?.canonicalKey ?? identity.canonicalKey;
 }
 
-export function repositoryGroupingDisplayNameOf(identity: RepositoryIdentity): string | undefined {
-  return identity.origin
+/**
+ * The name a repository group shows: the repository name without its `owner/` path.
+ * Pass `qualified` for the full path, to tell apart repositories that share a name.
+ */
+export function repositoryGroupingDisplayNameOf(
+  identity: RepositoryIdentity,
+  options: { readonly qualified?: boolean } = {},
+): string | undefined {
+  const path = identity.origin
     ? (identity.origin.displayName ?? identity.origin.canonicalKey)
     : identity.displayName;
+  if (path === undefined || options.qualified === true) return path;
+  return path.split("/").findLast((segment) => segment.trim().length > 0) ?? path;
 }
 
 export const ScopedProjectRef = Schema.Struct({
