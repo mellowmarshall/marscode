@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The CI hosts' JDK and ktlint, for the toolchain in ci-hosts.json (private-repo):
+# The CI hosts' JDK and ktlint, for the toolchain in ci-hosts.json:
 # the lifetasks native apps lint Kotlin with ktlint, which runs on a JDK, and no
 # CI host had either. User-level, no sudo, and never a system package.
 #

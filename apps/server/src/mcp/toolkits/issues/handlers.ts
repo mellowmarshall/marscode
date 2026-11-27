@@ -15,7 +15,8 @@ import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadIssueService from "../../../orchestration-v2/ThreadIssueService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
-import { stampMcpGitHubProse } from "../githubAttribution.ts";
+import { sourceControlDefinitions } from "../../../sourceControl/sourceControlDefinitions.ts";
+import * as McpGitHubProse from "../githubProse.ts";
 import {
   IssueLinkFailedError,
   IssueProjectNotFoundError,
@@ -60,6 +61,19 @@ const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const issues = yield* IssueService.IssueService;
   const threadIssues = yield* ThreadIssueService.ThreadIssueService;
+  const prose = yield* McpGitHubProse.McpGitHubProse;
+
+  /** The repository an issue lives in; a standalone tracker (Linear) is not a repository. */
+  const repositoryOf = (ref: {
+    readonly tracker: string;
+    readonly host: string;
+    readonly scope: string;
+  }) => {
+    const definition = sourceControlDefinitions.find(ref.tracker);
+    return definition === undefined
+      ? null
+      : { provider: definition.kind, host: ref.host, repository: ref.scope };
+  };
 
   /** The caller's own thread, read when a tool defaults to it. */
   const callerThread = Effect.fn("IssuesToolkit.callerThread")(function* () {
@@ -235,7 +249,11 @@ const make = Effect.gen(function* () {
     create_issue: McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
         const scope = yield* requireProjectScope(input.projectId, { scope: input.scope });
-        const body = yield* stampMcpGitHubProse(input.body ?? "");
+        const body = yield* prose.prepare({
+          target: repositoryOf(scope),
+          title: input.title,
+          body: input.body ?? "",
+        });
         const created = yield* issues.create({
           ...scope,
           title: input.title,
@@ -254,7 +272,7 @@ const make = Effect.gen(function* () {
     comment_on_issue: McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
         const target = yield* resolveTarget(input);
-        const body = yield* stampMcpGitHubProse(input.body);
+        const body = yield* prose.prepare({ target: repositoryOf(target), body: input.body });
         yield* issues.comment({ ...refOf(target), body });
         return identityOf(target);
       }),

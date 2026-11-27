@@ -66,6 +66,10 @@ if (args[0] === "alias" && args[1] === "list") {
   process.stdout.write("ic:\\tissue create\\npc:\\tpr comment\\n");
   process.exit(0);
 }
+if (args[0] === "api" && args.includes(".visibility")) {
+  process.stdout.write((process.env.FAKE_GH_VISIBILITY ?? "private") + "\\n");
+  process.exit(0);
+}
 const record = { args, files: {} };
 for (let i = 0; i < args.length; i += 1) {
   const a = args[i];

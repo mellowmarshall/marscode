@@ -32,7 +32,7 @@ const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
 const MAX_REVIEW_MOUNTS = 16;
 const MIN_AGE_DAYS = 1;
 
-function defaultReaperPolicyPath(homeDir: string = NodeOS.homedir()): string {
+export function defaultReaperPolicyPath(homeDir: string = NodeOS.homedir()): string {
   return NodePath.join(homeDir, ".config", "reaper", "policy.toml");
 }
 
@@ -72,7 +72,7 @@ function pathsOverlap(a: string, b: string): boolean {
   return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 }
 
-function stripTomlCommentOutsideQuotes(line: string): string {
+export function stripTomlCommentOutsideQuotes(line: string): string {
   let quote: '"' | "'" | null = null;
   let escaped = false;
   for (let i = 0; i < line.length; i += 1) {
@@ -100,7 +100,7 @@ function stripTomlCommentOutsideQuotes(line: string): string {
   return line.trim();
 }
 
-function unquoteTomlString(raw: string): string {
+export function unquoteTomlString(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) {
     return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");

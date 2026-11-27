@@ -78,7 +78,14 @@ export interface MergeOutcome {
 }
 
 /** The forge the queue opens and merges pull requests on (GitHub via `gh` in the headless CLI). */
+export type RepoVisibility = "public" | "private" | "internal" | "unknown";
+
 export interface ShipForge {
+  /** The repo's visibility; absent or `unknown` is treated as public (fail closed). */
+  readonly repoVisibility?: (input: {
+    readonly cwd: string;
+    readonly repo: string;
+  }) => Promise<RepoVisibility>;
   readonly findOpenPullRequest: (input: {
     readonly cwd: string;
     readonly repo: string;
@@ -142,6 +149,22 @@ export type SecretScanner = (input: {
   readonly baseSha: string;
 }) => Promise<ReadonlyArray<SecretFinding> | null>;
 
+export type HygieneVerdict =
+  | { readonly kind: "skip"; readonly log: string }
+  | { readonly kind: "pass"; readonly log: string }
+  | { readonly kind: "fail"; readonly reason: string; readonly log: string };
+
+/** PLAYBOOK §16 house hygiene stage over the job's tree, commits, and PR text. */
+export type HygieneGate = (input: {
+  readonly jobId: string;
+  readonly queueRoot: string;
+  readonly worktree: string;
+  readonly repo: string;
+  readonly baseSha: string;
+  readonly title: string;
+  readonly bodyFile: string;
+}) => Promise<HygieneVerdict>;
+
 /** Advisory post-check playbook declaration challenge writing its report to `outFile`. */
 export type DeclarationChallenger = (input: {
   readonly jobId: string;
@@ -165,6 +188,7 @@ export interface ShipQueueDeps {
   readonly forge: ShipForge;
   readonly guard: ShipGuard;
   readonly secretScan: SecretScanner;
+  readonly hygieneScan: HygieneGate;
   readonly declarationChallenge?: DeclarationChallenger | undefined;
   readonly clock: Clock;
   readonly isProcessAlive: (identity: ProcessIdentity) => boolean;

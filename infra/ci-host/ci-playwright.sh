@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The CI hosts' Playwright and its browsers, for the toolchain in ci-hosts.json
-# (private-repo): always npm's latest stable release, never a pinned one. An old
+# The CI hosts' Playwright and its browsers, for the toolchain in ci-hosts.json:
+# always npm's latest stable release, never a pinned one. An old
 # Playwright keeps an old browser build, and an old browser carries the CVEs
 # fixed after it.
 #

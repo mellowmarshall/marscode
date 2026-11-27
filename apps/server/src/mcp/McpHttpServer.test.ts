@@ -50,6 +50,7 @@ import * as DeviceService from "../device/DeviceService.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as RepositoryVisibility from "../sourceControl/RepositoryVisibility.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerHttp from "../http.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -114,6 +115,7 @@ const layerPullRequestsTest = McpHttpServer.layerPullRequestsToolkit.pipe(
       Layer.mock(ProjectService.ProjectService)({}),
       Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
       Layer.mock(PullRequestService.PullRequestService)({}),
+      Layer.mock(RepositoryVisibility.RepositoryVisibility)({}),
       Layer.mock(GitManager.GitManager)({}),
       Layer.mock(Orchestrator.OrchestratorV2)({}),
       Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
@@ -1895,6 +1897,7 @@ it.effect(
               Layer.mock(PullRequestService.PullRequestService)({
                 servesProject: (projectId) => Effect.succeed(projectId !== "project-noForgeToken"),
               }),
+              Layer.mock(RepositoryVisibility.RepositoryVisibility)({}),
               Layer.mock(GitManager.GitManager)({}),
               Layer.mock(Orchestrator.OrchestratorV2)({}),
               Layer.mock(ProjectionStore.ProjectionStoreV2)({

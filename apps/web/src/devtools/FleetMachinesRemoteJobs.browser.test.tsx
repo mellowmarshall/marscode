@@ -37,7 +37,7 @@ import { FleetMachinesView } from "./FleetMachinesView";
 import type { JobSummary } from "./jobs/jobTypes";
 
 const LOCAL_ENV = EnvironmentId.make("env-local");
-const REMOTE_ENV = EnvironmentId.make("env-msi");
+const REMOTE_ENV = EnvironmentId.make("env-host-c");
 
 function job(title: string, host: string, threadId: string): JobSummary {
   return {
@@ -55,25 +55,25 @@ function job(title: string, host: string, threadId: string): JobSummary {
 }
 
 const hosts = mergeFleetHosts({
-  localHost: { name: "dev-host-x", cpu_pct: 12 },
+  localHost: { name: "host-a", cpu_pct: 12 },
   localServers: [],
   localSessions: [],
   localAlerts: [],
   localWorktrees: null,
-  nodes: { host-x: { status: "online", host: { name: "host-x", cpu_pct: 40 } } },
+  nodes: { "host-c": { status: "online", host: { name: "host-c", cpu_pct: 40 } } },
   hostsReport: null,
   shipPanel: null,
 });
 const localHost = hosts.find((h) => h.isLocal)!;
-const msiHost = hosts.find((h) => h.id === "host-x")!;
+const hostC = hosts.find((h) => h.id === "host-c")!;
 
 // The same job id exists in both environments.
 const merged = mergeRemoteEnvironmentJobs({
   activeEnvironmentId: LOCAL_ENV,
-  localJobs: [job("Local same-id job", "dev-host-x", "thread-local")],
+  localJobs: [job("Local same-id job", "host-a", "thread-local")],
   remoteEnvironmentId: REMOTE_ENV,
   remoteJobs: [job("Remote same-id job", "", "thread-remote")],
-  remoteHost: msiHost,
+  remoteHost: hostC,
 });
 const remoteKey = merged.jobs.find((j) => j.title === "Remote same-id job")!.id;
 
@@ -96,7 +96,7 @@ function view(selectedHost: typeof localHost, selectedJobId: string | null) {
 describe("FleetMachinesView remote environment jobs", () => {
   it("shows same-id local and remote jobs on their own hosts and cancels each in its own environment", async () => {
     fetchCalls.length = 0;
-    await using screen = await render(view(msiHost, null));
+    await using screen = await render(view(hostC, null));
     await expect.element(page.getByText("Remote same-id job")).toBeVisible();
     expect(document.body.textContent).not.toContain("Local same-id job");
 
@@ -119,7 +119,7 @@ describe("FleetMachinesView remote environment jobs", () => {
 
   it("inspects a remote job and opens its thread in the remote environment", async () => {
     fetchCalls.length = 0;
-    await using screen = await render(view(msiHost, remoteKey));
+    await using screen = await render(view(hostC, remoteKey));
     const drawer = page.getByTestId("job-inspector-drawer");
     await expect.element(drawer).toBeVisible();
     await expect

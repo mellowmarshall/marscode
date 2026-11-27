@@ -1,5 +1,5 @@
 /**
- * The routes the repo's framework registered (private-repo). A source scan reads how routes are
+ * The routes the repo's framework registered. A source scan reads how routes are
  * written; a route written in a form the scan does not know leaves the list with no failure. The
  * registration is the place every route passes to exist at all, so a repo may declare a command
  * that prints what its framework registered:

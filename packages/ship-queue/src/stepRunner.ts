@@ -6,6 +6,7 @@ import { shellSingleQuote } from "@t3tools/ssh/command";
 
 import type { ShipDeclaration } from "./declaration.ts";
 import { CI_SCRUB_SECRET_VARS, formatSecretStdinPayload } from "./dopplerBroker.ts";
+import { jobEvidenceDir } from "./jobStore.ts";
 import { sshRemoteCommandRunner, type RemoteCommandRunner } from "./sshExec.ts";
 import {
   buildToolchainEnv,
@@ -158,13 +159,7 @@ export function buildLocalStepEnv(input: {
     "work",
     "reason",
   );
-  env.PLAYBOOK_EVIDENCE_DIR = NodePath.join(
-    input.ctx.queueRoot,
-    "jobs",
-    input.ctx.jobId,
-    "work",
-    "playbook-evidence",
-  );
+  env.PLAYBOOK_EVIDENCE_DIR = jobEvidenceDir(input.ctx.queueRoot, input.ctx.jobId);
   env.PLAYBOOK_EVIDENCE_JOB = input.ctx.jobId;
   if (input.ctx.ghRepo) env.SHIP_QUEUE_GH_REPO = input.ctx.ghRepo;
   if (input.ctx.ontoSha) env.SHIP_QUEUE_ONTO = input.ctx.ontoSha;

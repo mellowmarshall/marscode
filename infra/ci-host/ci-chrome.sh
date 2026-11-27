@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The CI hosts' Google Chrome and their hardware-GPU probe, for the toolchain
-# in ci-hosts.json (private-repo). A repo's browser gate runs in Google
+# in ci-hosts.json. A repo's browser gate runs in Google
 # Chrome (Playwright's channel "chrome", for its codecs) and needs a real GPU;
 # the CI users of the worker hosts have no root, so Chrome is installed at
 # user level, as the queue's other tools are.
@@ -19,7 +19,7 @@
 #       path gives a software renderer (llvmpipe, SwiftShader) or none. It
 #       records the host's path (see THE HOST'S GPU PATH). A record that
 #       says hardware=1, under 6 h old, of the same Chrome build is the
-#       answer, and nothing starts (private-repo: on a loaded WSL host Chrome
+#       answer, and nothing starts (on a loaded WSL host Chrome
 #       took 35 s to render the probe's page, past the probe's limits).
 #   ci-chrome.sh measure-gpu
 #       the same, but always measures.
@@ -27,7 +27,7 @@
 #       the WebGL renderer string CHROME gets by the host's recorded path
 #       (the first path below when none is recorded), on stdout
 #
-# THE HOST'S GPU PATH (private-repo). How a browser reaches the hardware GPU
+# THE HOST'S GPU PATH. How a browser reaches the hardware GPU
 # depends on the host, not on the repo: a native Linux host has a Vulkan
 # driver for its GPU; WSL has none (its Vulkan is llvmpipe, software) and
 # reaches the GPU through Mesa's d3d12 driver and /dev/dxg, as OpenGL ES over
@@ -81,7 +81,7 @@
 #
 # THE CI'S OWN CHROME, ON EVERY LINUX HOST. A host that also has Chrome as a
 # system package (the queue host: its desktop user's own browser, kept
-# current by the system's updater) gets the user-level copy too (private-repo):
+# current by the system's updater) gets the user-level copy too:
 # the CI's browser is then the same on every host and does not follow a
 # desktop's. The system package is not changed, removed or shadowed: the
 # google-chrome and google-chrome-stable commands are in ship-queue-ci/bin,
@@ -95,7 +95,7 @@
 # commands the CI gets refuse to start unless the last --user-data-dir=DIR
 # (before any --) is an absolute directory that exists or can be made, and is
 # not the desktop profile, by whatever path names it: the directory is
-# resolved (dot components, links) before it is compared (private-repo).
+# resolved (dot components, links) before it is compared.
 # Version and help answer without one. Playwright
 # always gives a browser a temporary profile directory, and so does the probe
 # here. A step that starts /opt/google/chrome/chrome by its own path, on a
@@ -249,7 +249,7 @@ current_stable() { # FINGERPRINT WORK
     die "the signed package list names no usable google-chrome-stable (version '$cur_ver', file '$cur_file'); nothing installed"
 }
 
-# The repository's name for the host's processor: amd64, or arm64 (private-repo).
+# The repository's name for the host's processor: amd64, or arm64.
 cur_ver="" cur_file="" cur_sum="" deb_arch=amd64
 install_chrome() { # signed-by=FINGERPRINT
   local fpr plat name lacks
@@ -360,7 +360,7 @@ build=""
 gpu_write() { # NAME ARGUMENTS ENVIRONMENT RENDERER HARDWARE(1|0)
   local f text; f=$(gpu_record)
   text=$(printf 'path=%s\nargs=%s\nenv=%s\nrenderer=%s\nhardware=%s\nbuild=%s\n' "$@" "$build")
-  # The same text: its time is renewed, as a fresh measurement (private-repo).
+  # The same text: its time is renewed, as a fresh measurement.
   if [ "$(cat "$f" 2>/dev/null)" = "$text" ]; then touch "$f"; return 0; fi
   mkdir -p "${f%/*}" && printf '%s\n' "$text" > "$f.next.$$" && mv -f "$f.next.$$" "$f"
 }
@@ -382,7 +382,7 @@ gpu_probe() { # [measure]
       && [ "$(gpu_recorded hardware)" = 1 ] && [ "$(gpu_recorded build)" = "$build" ]; then
       echo hardware; return 0
     fi
-    # The path tried first, with most of the budget (on a loaded WSL host Chrome took 35 s to render the page: private-repo):
+    # The path tried first, with most of the budget (on a loaded WSL host Chrome took 35 s to render the page):
     # the one that last worked; with none, on WSL (/dev/dxg: no Vulkan driver for its GPU) d3d12; else the recorded one.
     if [ "$(gpu_recorded hardware)" != 1 ] && [ -e "$GPU_WSL_DEVICE" ]; then rec_path=d3d12; fi
     for p in "${GPU_PATHS[@]}"; do [ "${p%%|*}" != "$rec_path" ] || paths=("$p"); done
@@ -397,7 +397,7 @@ gpu_probe() { # [measure]
       [ "$r" = timeout ] || answered=1
       [ "$p" != "${paths[0]}" ] || first_r=$r
     done
-    # No path answered in its time (a loaded host: private-repo): nothing was measured, which is not a software
+    # No path answered in its time (a loaded host): nothing was measured, which is not a software
     # renderer, nor a browser that ended with no renderer. A record that says hardware=1 for this build, measured
     # within RECORD_STAND_S, stays the answer, unchanged (its age is not renewed).
     if [ "$answered" = 0 ] && [ -n "$build" ] && [ "$age" -ge 0 ] && [ "$age" -lt "$RECORD_STAND_S" ] \

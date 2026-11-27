@@ -32,6 +32,7 @@ import * as RepositoryIdentityResolver from "../../../project/RepositoryIdentity
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
+import * as GitHubProseTestkit from "../githubProse.testkit.ts";
 import * as IssuesHandlers from "./handlers.ts";
 import { IssuesToolkit } from "./tools.ts";
 
@@ -148,6 +149,7 @@ const projectLayer = Layer.mock(ProjectService.ProjectService)({
 const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
   issues: ReadonlyArray<ThreadIssueLink> = [],
   issueLayer?: Layer.Layer<IssueService.IssueService>,
+  github?: GitHubProseTestkit.GitHubBoundary,
 ) {
   const links = yield* Ref.make<ReadonlyArray<ThreadIssueService.LinkThreadIssueInput>>([]);
   const layerDependencies = Layer.mergeAll(
@@ -184,6 +186,7 @@ const makeHarness = Effect.fn("makeIssuesToolkitHarness")(function* (
       unlink: () => Effect.succeed({ wasLinked: true }),
     }),
     McpToolAccessTestkit.liveThreadsLayer,
+    GitHubProseTestkit.layer(github),
   );
   const toolkit = yield* IssuesToolkit.pipe(
     Effect.provide(
@@ -521,6 +524,99 @@ describe("issue toolkit handlers", () => {
         });
         expect(closed.key).toBe("42");
         expect(stateChanges).toEqual([{ key: "42", state: "closed" }]);
+      }),
+  );
+
+  it.effect(
+    "scans issue text bound for a public repository and posts it only when clean, without a titled stamp",
+    () =>
+      Effect.gen(function* () {
+        const posted: Array<string> = [];
+        const reads: Array<string> = [];
+        const denylist = yield* GitHubProseTestkit.tempDenylist(
+          "@class host-names\nwidget-box-[0-9]+\n",
+        );
+        const issueLayer = Layer.mock(IssueService.IssueService)({
+          projectScope: (projectId) =>
+            Effect.succeed({
+              projectId,
+              tracker: GITHUB,
+              host: "github.com",
+              scope: "t3tools/t3code",
+            }),
+          resolveUrl: (url) =>
+            Effect.succeed({
+              projectId: PROJECT_ID,
+              tracker: GITHUB,
+              host: "github.com",
+              scope: "t3tools/t3code",
+              key: url.split("/").at(-1)!,
+              writable: true,
+            }),
+          create: (input) =>
+            Effect.sync(() => void posted.push(`${input.title}|${input.body}`)).pipe(
+              Effect.as({
+                key: "42",
+                url: "https://github.com/T3Tools/T3Code/issues/42",
+                displayKey: "#42",
+              }),
+            ),
+          comment: (input) => Effect.sync(() => void posted.push(input.body)),
+        });
+        const harness = yield* makeHarness([], issueLayer, {
+          visibility: { "t3tools/t3code": "public" },
+          reads,
+          env: { HOME: "/home/dev", MARSCODE_HYGIENE_DENYLIST: denylist },
+        });
+
+        const rejected = yield* harness
+          .call("create_issue", {
+            title: "Worktree /data/Dev/widget-lab",
+            body: "Seen on widget-box-9.",
+          })
+          .pipe(Effect.flip);
+        expect(rejected).toMatchObject({
+          _tag: "GitHubTextRejectedError",
+          findings: [
+            "data-layout title:1 (public:data-dev-root)",
+            "host-names body:1 (private:host-names)",
+          ],
+        });
+        expect(rejected.message).toContain(
+          "Rewrite the text with neutral placeholders (PLAYBOOK §16).",
+        );
+        expect(rejected.message).not.toMatch(/widget/);
+        const comment = yield* harness
+          .call("comment_on_issue", { key: "42", body: "On widget-box-9" })
+          .pipe(Effect.flip);
+        expect(comment).toMatchObject({ _tag: "GitHubTextRejectedError" });
+        expect(posted).toEqual([]);
+
+        // Clean text posts; the ids here are not UUIDs, so the public stamp drops them entirely.
+        yield* harness.call("comment_on_issue", { key: "42", body: "Investigating now." });
+        expect(posted).toEqual(["Investigating now."]);
+        expect(reads).toEqual(["t3tools/t3code"]);
+      }),
+  );
+
+  it.effect(
+    "refuses public issue text without the denylist and treats an unreadable visibility as public",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness([], undefined, {
+          fallback: null,
+          env: {
+            HOME: "/home/dev",
+            MARSCODE_HYGIENE_DENYLIST: "/home/dev/.config/missing.denylist",
+          },
+        });
+        const error = yield* harness
+          .call("comment_on_issue", { key: "7", body: "A neutral note." })
+          .pipe(Effect.flip);
+        expect(error).toMatchObject({ _tag: "GitHubTextRejectedError", findings: [] });
+        expect(error.message).toContain("visibility unknown, treated as public");
+        expect(error.message).toContain("~/.config/missing.denylist is missing");
+        expect(error.message).not.toContain("/home/dev");
       }),
   );
 });

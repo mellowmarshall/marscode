@@ -64,9 +64,9 @@ const HEALTHY_AUDIT = {
     { repo: "mellowmarshall/marscode", number: 11, state: "unverified", detail: "no PR" },
     { repo: "mellowmarshall/marscode", number: 12, state: "unverified", detail: "no PR" },
     { repo: "mellowmarshall/marscode", number: 9, state: "verified", detail: "PR #30" },
-    { repo: "private-repo", number: 4, state: "unverified", stale: true, detail: "" },
+    { repo: "example-org/example-repo", number: 4, state: "unverified", stale: true, detail: "" },
     {
-      repo: "private-repo",
+      repo: "example-org/example-repo",
       number: 5,
       state: "unverified",
       detail: "Evidence check pending",
@@ -126,7 +126,7 @@ describe("readGitHubAuditAlerts", () => {
     expect(items.map((i) => [i.name, i.state])).toEqual([
       ["Audit coverage", "ok"],
       ["Installed gh shim", "ok"],
-      ["private-repo", "silent"],
+      ["example-org/example-repo", "silent"],
       ["mellowmarshall/marscode", "firing"],
     ]);
     expect(items[3]?.detail).toBe("2 closed issues without landing evidence (e.g. #11)");

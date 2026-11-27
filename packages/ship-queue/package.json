@@ -147,6 +147,7 @@
   "dependencies": {
     "@effect/platform-node": "catalog:",
     "@t3tools/guard-protocol": "workspace:*",
+    "@t3tools/hygiene": "workspace:*",
     "@t3tools/ssh": "workspace:*",
     "effect": "catalog:"
   },

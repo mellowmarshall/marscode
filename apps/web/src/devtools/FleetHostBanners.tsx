@@ -113,7 +113,7 @@ export function FleetOfflineJobsFallback({
                     {job.phaseLabel}
                   </Badge>
                   <Badge size="sm" variant="secondary">
-                    {job.binding.host.replace(/^dev-/, "")}
+                    {job.binding.host}
                   </Badge>
                   <span className="truncate font-medium text-foreground">{job.title}</span>
                 </div>

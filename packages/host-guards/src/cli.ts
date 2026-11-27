@@ -26,6 +26,8 @@ import { checkShimDepth } from "./shimDepth.ts";
 import { decideTreeGuard, type TreeGuardKind } from "./treeGuard.ts";
 
 const HOST_GUARDS_VERSION = "1.0.0";
+/** Probed by the hygiene receipt (`text-guard` layer, PLAYBOOK §16.8). */
+const CAPABILITIES = ["git-guard", "gh-guard", "gh-attribution", "text-guard"] as const;
 
 export interface CliIo {
   readonly cwd: string;
@@ -228,6 +230,7 @@ function usageText(): string {
     "  owner-check <action> [--cwd DIR] [--] [cmd...]",
     "  hint [--cwd DIR]",
     "  self-check [--json]",
+    "  capabilities",
     "  version",
   ].join("\n");
 }
@@ -240,6 +243,10 @@ export async function runHostGuardCli(argv: ReadonlyArray<string>, io: CliIo): P
   }
   if (sub === "version" || sub === "--version" || sub === "-v") {
     io.out(HOST_GUARDS_VERSION);
+    return 0;
+  }
+  if (sub === "capabilities") {
+    io.out(CAPABILITIES.join("\n"));
     return 0;
   }
 

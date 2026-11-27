@@ -46,10 +46,10 @@ function writeSnapshot(
     elapsed_sec: 3600,
     mode: "watch-monitor",
     engine: "cernibundus_c11_avx2_int8",
-    cwd: "/home/dev/Dev/private-repo",
+    cwd: "/home/dev/Dev/project-e",
     command:
-      "ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 dev-host-x set -euo pipefail echo build",
-    log_path: "/tmp/ue59_setup_build.log",
+      "ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20 host-b set -euo pipefail echo build",
+    log_path: "/tmp/setup_build.log",
     state: "RUNNING",
     confidence: 1.0,
     margin: 19.2,
@@ -81,7 +81,7 @@ afterEach(() => {
 describe("CernoProcessBridge", () => {
   it("surfaces a live cerno watch snapshot bound to its T3 thread, host, log tail, and verdict", async () => {
     const snapDir = mkTempDir("t3-cerno-snap-");
-    const logPath = NodePath.join(snapDir, "ue59_setup_build.log");
+    const logPath = NodePath.join(snapDir, "setup_build.log");
     NodeFS.writeFileSync(
       logPath,
       "Following active UE 5.9 setup\n[3427/3798] Compile EclipseRaidEditor\n",
@@ -92,7 +92,7 @@ describe("CernoProcessBridge", () => {
     const bridge = new CernoProcessBridge({
       snapshotDirs: [snapDir],
       platform: "linux",
-      localHostname: "dev-host-x",
+      localHostname: "host-a",
       ciHostsPath: null,
       expectedUid: null,
       nowMs: () => FIXED_NOW_MS,
@@ -112,8 +112,8 @@ describe("CernoProcessBridge", () => {
       expect(job.source).toBe("background");
       expect(job.state).toBe("running");
       expect(job.binding.threadId).toBe("thread-ue59");
-      expect(job.binding.host).toBe("dev-host-x");
-      expect(job.title).toBe("dev-host-x: ue59_setup_build");
+      expect(job.binding.host).toBe("host-b");
+      expect(job.title).toBe("host-b: setup_build");
       expect(job.cancellable).toBe(true);
       expect(job.recentTail).toContain("[3427/3798] Compile EclipseRaidEditor");
 
@@ -320,7 +320,7 @@ describe("CernoProcessBridge", () => {
       Effect.gen(function* () {
         const snapDir = mkTempDir("t3-cerno-takeover-");
         const workDir = mkTempDir("t3-cerno-work-");
-        const logPath = NodePath.join(workDir, "ue59_setup_build.log");
+        const logPath = NodePath.join(workDir, "setup_build.log");
         NodeFS.writeFileSync(logPath, "=== STAGE 2: UE 5.9 FULL BUILD ===\n", "utf8");
         const threadId = "mcp:launch:ue59-thread";
         let pidAlive = true;
@@ -330,8 +330,8 @@ describe("CernoProcessBridge", () => {
           pid: 1337797,
           proc_start_ticks: 6633455,
           cwd: workDir,
-          log_path: "ue59_setup_build.log",
-          command: "ssh -o ServerAliveInterval=30 dev-host-x engine_launch_7a34.sh build",
+          log_path: "setup_build.log",
+          command: "ssh -o ServerAliveInterval=30 host-b engine_launch.sh build",
         });
 
         const domainEvents = yield* PubSub.unbounded<OrchestrationV2DomainEvent>();
@@ -350,7 +350,7 @@ describe("CernoProcessBridge", () => {
           cernoBridge: {
             snapshotDirs: [snapDir],
             platform: "linux",
-            localHostname: "dev-host-x",
+            localHostname: "host-a",
             ciHostsPath: null,
             expectedUid: null,
             pollIntervalMs: 60_000,
@@ -362,7 +362,7 @@ describe("CernoProcessBridge", () => {
             isWorkspaceAllowed: async (p) => p.startsWith(workDir),
           },
           backgroundBridge: {
-            localHostname: "dev-host-x",
+            localHostname: "host-a",
             ciHostsPath: null,
             commandDebounceMs: 10,
             getShellSnapshot: async () => emptySnapshot,
@@ -419,7 +419,7 @@ describe("CernoProcessBridge", () => {
             driver: "antigravity",
             status: "running",
             title: "Ran command",
-            input: `cerno watch --monitor --wake-on-alert --log ${logPath} -- ssh -o ServerAliveInterval=30 dev-host-x engine_launch_7a34.sh build`,
+            input: `cerno watch --monitor --wake-on-alert --log ${logPath} -- ssh -o ServerAliveInterval=30 host-b engine_launch.sh build`,
             output: null,
             exitCode: null,
             startedAt: nowUtc,
@@ -470,7 +470,7 @@ describe("CernoProcessBridge", () => {
             driver: "antigravity",
             status: "completed",
             title: "Ran command",
-            input: `cerno watch --monitor --wake-on-alert --log ${logPath} -- ssh -o ServerAliveInterval=30 dev-host-x engine_launch_7a34.sh build`,
+            input: `cerno watch --monitor --wake-on-alert --log ${logPath} -- ssh -o ServerAliveInterval=30 host-b engine_launch.sh build`,
             output: null,
             exitCode: null,
             startedAt: nowUtc,
@@ -486,7 +486,7 @@ describe("CernoProcessBridge", () => {
             expect(jobsAfterTimeout).toHaveLength(1);
             expect(jobsAfterTimeout[0]!.id).toBe("cerno:1337797:6633455");
             expect(jobsAfterTimeout[0]!.state).toBe("running");
-            expect(jobsAfterTimeout[0]!.binding.host).toBe("dev-host-x");
+            expect(jobsAfterTimeout[0]!.binding.host).toBe("host-b");
 
             // Finding #1: SSE stream received the cerno upsert and bg removal!
             const sseAfterTimeout = sseChunks.slice(sseCountBeforeTimeout).join("");

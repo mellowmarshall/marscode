@@ -54,3 +54,9 @@ node_modules/
 .playbook/evidence/
 
 /packages/ssh/.ssh-launcher-test-*/
+
+# Host-local setup and agent working files; never committed.
+/fleet-shape.json
+/ci-hosts.json
+/plans/
+.claude/settings.local.json

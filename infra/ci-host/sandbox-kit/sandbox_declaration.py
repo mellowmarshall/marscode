@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The repo's sandbox declaration, checked and joined with its fleet shape (private-repo).
+"""The repo's sandbox declaration, checked and joined with its fleet shape.
 
 The declaration (default deploy/sandbox/sandbox.json) holds only what the fleet shape does not.
 Everything the fleet shape holds is read from it: the server's remote directory and ssh variable,

@@ -1,5 +1,5 @@
-/* util-linux's flock, for a macOS CI host's GNU bundle (ci-gnu-userland.sh,
- * private-repo): util-linux does not build on macOS, and the Mac's own flock
+/* util-linux's flock, for a macOS CI host's GNU bundle (ci-gnu-userland.sh):
+ * util-linux does not build on macOS, and the Mac's own flock
  * was a Python shim that read `flock -w 30 9` as descriptor 30.
  *
  *   flock [options] FD
@@ -14,7 +14,7 @@
  * refused with 64: -E abc, -E 300, -w 1s and a descriptor past INT_MAX as
  * util-linux refuses them; -w -1 and -w inf too (util-linux exits 71 there).
  * Read as atoi/atof read them, -E abc made a lock not taken exit 0 and -w -1
- * wait forever (private-repo). The -w deadline is on the monotonic clock. ci-gnu-userland.test.sh holds it to util-linux's
+ * wait forever. The -w deadline is on the monotonic clock. ci-gnu-userland.test.sh holds it to util-linux's
  * behaviour. */
 #include <errno.h>
 #include <fcntl.h>

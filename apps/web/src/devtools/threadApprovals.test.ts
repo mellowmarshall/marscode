@@ -32,7 +32,7 @@ function makeGuard(overrides: Partial<PendingGuardRequest> = {}): PendingGuardRe
     guard: "ship-queue",
     command: ["git", "push", "--force"],
     argvSha256: "a".repeat(64),
-    cwd: "/dataprivate-repo/wt-1",
+    cwd: "/data/Dev/example-repo/wt-1",
     session: "sess-1",
     pid: 1234,
     threadId: "thread-A",
@@ -46,8 +46,8 @@ function makeGuard(overrides: Partial<PendingGuardRequest> = {}): PendingGuardRe
 
 function makeHold(overrides: Partial<ShipQueueDepRepoSummary> = {}): ShipQueueDepRepoSummary {
   return {
-    repo: "devtools",
-    reportId: "devtools:abc123",
+    repo: "example-repo",
+    reportId: "example-repo:abc123",
     status: "pending",
     scannedAt: freshScannedAt,
     active: true,
@@ -112,18 +112,18 @@ describe("threadApprovals unified approval subroutine", () => {
   it("enforces strict thread_id attribution (no branch/worktree heuristic leak for outside CLI runs, M5) and exact server active attempt states (H2)", () => {
     const liveShipOnA: ShipQueueJob = {
       id: "10984",
-      repo: "private-repo",
+      repo: "example-org/example-repo",
       branch: "feat/x",
-      worktree: "/dataprivate-repo/wt-1",
+      worktree: "/data/Dev/example-repo/wt-1",
       thread_id: "thread-A",
       state: "parked",
     };
     // Outside-T3 CLI ship job sharing branch/worktree with thread-A MUST NOT leak into thread-A (M5)!
     const outsideCliShip: ShipQueueJob = {
       id: "10999",
-      repo: "private-repo",
+      repo: "example-org/example-repo",
       branch: "feat/x",
-      worktree: "/dataprivate-repo/wt-1",
+      worktree: "/data/Dev/example-repo/wt-1",
       state: "parked",
     };
     const doneShipOnA: ShipQueueJob = { ...liveShipOnA, id: "10980", state: "done" };
@@ -241,7 +241,7 @@ describe("threadApprovals unified approval subroutine", () => {
   it("strips bidi/control/tag spoofing characters, preserves full argv without truncation (M4), and rolls up descendant subagents (M6)", () => {
     const poisoned = makeHold({
       repo: "dev\u202etools",
-      reportId: "devtools:abc\u200b123",
+      reportId: "example-repo:abc\u200b123",
       updates: [
         {
           depName: "pkg\u202efake",
@@ -352,7 +352,7 @@ describe("threadApprovals unified approval subroutine", () => {
     const [scanErrEntry] = deriveThreadDevtoolsApprovals({
       threadId: "thread-A",
       pendingGuards: [],
-      shipJobs: [{ id: "10984", repo: "devtools", thread_id: "thread-A", state: "running" }],
+      shipJobs: [{ id: "10984", repo: "example-repo", thread_id: "thread-A", state: "running" }],
       depsRepos: [hold],
       nowMs,
     });
@@ -363,7 +363,7 @@ describe("threadApprovals unified approval subroutine", () => {
       "/ship-queue/deps/decide",
       expect.objectContaining({
         method: "POST",
-        body: { repo: "devtools", reportId: "devtools:abc123", decision: "reject" },
+        body: { repo: "example-repo", reportId: "example-repo:abc123", decision: "reject" },
       }),
     );
 
@@ -375,7 +375,7 @@ describe("threadApprovals unified approval subroutine", () => {
       "/ship-queue/deps/scan",
       expect.objectContaining({
         method: "POST",
-        body: { repo: "devtools" },
+        body: { repo: "example-repo" },
       }),
     );
 
@@ -383,8 +383,8 @@ describe("threadApprovals unified approval subroutine", () => {
     expect(depScanKey(makeHold({ scannedAt: null, error: "err A" }))).not.toBe(
       depScanKey(makeHold({ scannedAt: null, error: "err B" })),
     );
-    markRepoDepsScanning(envId, "devtools", depScanKey(hold));
-    markRepoDepsDeciding(envId, "devtools", depScanKey(hold));
+    markRepoDepsScanning(envId, "example-repo", depScanKey(hold));
+    markRepoDepsDeciding(envId, "example-repo", depScanKey(hold));
   });
 
   it("renders bundled protected-diff approvals with Approve for this diff and sends scope=bundle, while whole-commit gates stay Approve once", async () => {
@@ -397,7 +397,7 @@ describe("threadApprovals unified approval subroutine", () => {
       bundleEligible: true,
       wholeCommitGates: [],
       bundle: {
-        repo: "private-repo",
+        repo: "example-org/example-repo",
         branch: "issue-1352",
         prOrIssue: "#1352",
         gates: [{ gateId: "allowlist", reason: "exceptions.json modified" }],
@@ -414,7 +414,7 @@ describe("threadApprovals unified approval subroutine", () => {
       bundleEligible: false,
       wholeCommitGates: ["no-review"],
       bundle: {
-        repo: "private-repo",
+        repo: "example-org/example-repo",
         branch: "issue-1352",
         prOrIssue: "#1352",
         gates: [{ gateId: "no-review", reason: "missing review" }],

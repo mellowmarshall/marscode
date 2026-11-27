@@ -109,18 +109,18 @@ afterEach(() => {
 
 const SAMPLE_CI_HOSTS = {
   hosts: [
-    { name: "dev-host-x", ssh: null, note: "this host: the queue's own" },
-    { name: "dev-host-x", ssh: "dev-host-x", note: "remote worker RX 6800 XT" },
+    { name: "host-a", ssh: null, note: "this host: the queue's own" },
+    { name: "host-b", ssh: "host-b", note: "remote GPU worker" },
     {
-      name: "host-x",
-      ssh: "host-x-wsl",
-      note: "Ubuntu 24.04 in WSL 2 with RTX 3080 GPU",
+      name: "host-c",
+      ssh: "host-c-wsl",
+      note: "Ubuntu 24.04 in WSL 2 with RTX 1234 GPU",
     },
     {
-      name: "host-x-linux",
-      ssh: "host-x-linux",
-      on: "host-x",
-      note: "OrbStack Linux on host-x",
+      name: "host-d-linux",
+      ssh: "host-d-linux",
+      on: "host-d",
+      note: "Linux VM on host-d",
     },
   ],
 };
@@ -379,53 +379,48 @@ describe("Bounded Jobs extractors & generic progress", () => {
 
 describe("commandJobParser & logFileGuard", () => {
   it("infers remote fleet hosts dynamically from ci-hosts.json, SSH commands, wrapper scripts, and GPU hints", () => {
-    const fleet = parseFleetHostsConfig(SAMPLE_CI_HOSTS, "dev-host-x");
+    const fleet = parseFleetHostsConfig(SAMPLE_CI_HOSTS, "host-a");
 
     expect(
       inferTargetHost(
-        "cd /data/Dev/private-repo/private-repo && rm -f logs/rise2_a.log && cerno watch --monitor --log logs/rise2_a.log -- scripts/remote.sh wsl rise_t2 surface_scene2.py",
-        "Rise test v2 on 3080",
-        "dev-host-x",
+        "cd /data/Dev/tools/render-job && rm -f logs/render_a.log && cerno watch --monitor --log logs/render_a.log -- scripts/remote.sh wsl render_scene.py",
+        "Render test A",
+        "host-a",
         fleet,
       ),
-    ).toBe("host-x");
+    ).toBe("host-c");
 
     expect(
       inferTargetHost(
-        "cd /data/Dev/private-repo/private-repo && cerno watch --monitor --log logs/rise2_b.log -- scripts/remote.sh 7a34 rise_t2 surface_scene2.py",
-        "Rise test v2 on 6800 XT",
-        "dev-host-x",
+        "cd /data/Dev/tools/render-job && cerno watch --monitor --log logs/render_b.log -- scripts/remote.sh host-b render_scene.py",
+        "Render test B",
+        "host-a",
         fleet,
       ),
-    ).toBe("dev-host-x");
+    ).toBe("host-b");
 
     expect(
       inferTargetHost(
-        "ssh -o BatchMode=yes -p 2222 dev@host-x-linux 'cargo test'",
+        "ssh -o BatchMode=yes -p 2222 dev@host-d-linux 'cargo test'",
         undefined,
-        "dev-host-x",
+        "host-a",
         fleet,
       ),
-    ).toBe("host-x");
+    ).toBe("host-d");
 
-    expect(
-      inferTargetHost(
-        "python3 train_micro_f6_stage2.py --epochs 6",
-        "Stage 2",
-        "dev-host-x",
-        fleet,
-      ),
-    ).toBe("dev-host-x");
+    expect(inferTargetHost("python3 train_stage2.py --epochs 6", "Stage 2", "host-a", fleet)).toBe(
+      "host-a",
+    );
 
     // Paths or comments mentioning a remote hostname must NOT falsely route a local command
     expect(
       inferTargetHost(
-        "cp -r /data/host-x-backup/run1 /tmp/out # compare vs host-x",
+        "cp -r /srv/backup/host-c/run1 /tmp/out # compare vs host-c",
         "Copy local backup",
-        "dev-host-x",
+        "host-a",
         fleet,
       ),
-    ).toBe("dev-host-x");
+    ).toBe("host-a");
   });
 
   it("classifies Ship Queue commands as skip, extracts log paths, infers kinds, and produces URL-safe job IDs", () => {
@@ -474,18 +469,18 @@ describe("commandJobParser & logFileGuard", () => {
 
     expect(
       extractCommandLogPath(
-        "cd /data/Dev/private-repo/private-repo && cerno watch --monitor --log logs/rise2_a.log -- scripts/remote.sh wsl",
+        "cd /data/Dev/tools/render-job && cerno watch --monitor --log logs/render_a.log -- scripts/remote.sh wsl",
         null,
       ),
-    ).toBe("/data/Dev/private-repo/private-repo/logs/rise2_a.log");
+    ).toBe("/data/Dev/tools/render-job/logs/render_a.log");
     expect(extractCommandLogPath("cerno tail --monitor -F --pid 123 /tmp/run.log", null)).toBe(
       "/tmp/run.log",
     );
-    expect(extractCommandLogPath("python3 train.py 2>&1 | tee train.log", "/data/Dev/private-repo")).toBe(
-      "/data/Dev/private-repo/train.log",
-    );
+    expect(
+      extractCommandLogPath("python3 train.py 2>&1 | tee train.log", "/data/Dev/project-d"),
+    ).toBe("/data/Dev/project-d/train.log");
 
-    expect(inferCommandJobKind("blender -b -P scene.py", "Rise test on 3080")).toBe("render");
+    expect(inferCommandJobKind("blender -b -P scene.py", "Render test on 1234")).toBe("render");
     expect(inferCommandJobKind("python3 train_f6.py", undefined)).toBe("train");
     expect(inferCommandJobKind("cargo test --workspace", undefined)).toBe("test");
     expect(inferCommandJobKind("pnpm vitest run src/render.test.ts", undefined)).toBe("test");
@@ -494,28 +489,28 @@ describe("commandJobParser & logFileGuard", () => {
     expect(
       deriveCommandTitle(
         undefined,
-        "cd /data/Dev/private-repo && cerno watch --monitor --log /tmp/a.log -- cargo test -p core",
+        "cd /data/Dev/project-c && cerno watch --monitor --log /tmp/a.log -- cargo test -p core",
       ),
     ).toBe("cargo test -p core");
 
     // Antigravity placeholder title ("Ran command") must be ignored in favor of readable script payload
     const multilineMlScript = [
-      "mkdir -p /data/cache/private-repo/logs",
-      'LOG="/data/cache/private-repo/logs/v5_68m_export_and_dev.log"',
+      "mkdir -p /data/cache/models/logs",
+      'LOG="/data/cache/models/logs/v5_export_and_dev.log"',
       ': > "$LOG"',
       "(",
       "  set -euo pipefail",
-      "  cd /home/dev/Dev/private-repo/seam",
-      '  echo "=== [1/4] Re-exporting SeamPackedReader-v5-68m ==="',
+      "  cd /home/dev/Dev/project-d/model",
+      '  echo "=== [1/4] Re-exporting ModelReader-v5 ==="',
       "  uv run export.py",
       ') > "$LOG" 2>&1 &',
       'cerno tail --monitor -F --pid $! "$LOG"',
     ].join("\n");
     expect(deriveCommandTitle("Ran command", multilineMlScript)).toBe(
-      "[1/4] Re-exporting SeamPackedReader-v5-68m",
+      "[1/4] Re-exporting ModelReader-v5",
     );
     expect(extractCommandLogPath(multilineMlScript, null)).toBe(
-      "/data/cache/private-repo/logs/v5_68m_export_and_dev.log",
+      "/data/cache/models/logs/v5_export_and_dev.log",
     );
     expect(
       resolveCommandTerminalOutcome({
@@ -581,7 +576,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         const dir = mkTempDir("t3-bg-bridge-");
         const ciHostsPath = NodePath.join(dir, "ci-hosts.json");
         NodeFS.writeFileSync(ciHostsPath, JSON.stringify(SAMPLE_CI_HOSTS), "utf8");
-        const logPath = NodePath.join(dir, "rise_a.log");
+        const logPath = NodePath.join(dir, "render_a.log");
 
         const domainEvents = yield* PubSub.unbounded<OrchestrationV2DomainEvent>();
         const outputFrames = yield* PubSub.unbounded<OrchestrationV2CommandOutputFrame>();
@@ -590,7 +585,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         const registry = makeJobRegistry({
           enableShipBridge: false,
           backgroundBridge: {
-            localHostname: "dev-host-x",
+            localHostname: "host-a",
             ciHostsPath,
             commandDebounceMs: 60,
             getShellSnapshot: async (): Promise<OrchestrationV2ThreadShellSnapshot> => ({
@@ -612,7 +607,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         yield* Effect.addFinalizer(() => Effect.promise(() => registry.dispose()));
 
         const threadId = "c05c7b71-c315-450d-98fc-ea9e8400c5b1";
-        const itemId = "turn-item:provider:claudeAgent:native-item:toolu_rise_a";
+        const itemId = "turn-item:provider:claudeAgent:native-item:toolu_render_a";
 
         // 1. Simulate Claude's `Bash(run_in_background: true)` tool call completing right before
         //    `provider-thread.updated` registers the pending background task — must NOT leave a duplicate!
@@ -624,9 +619,9 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
               id: itemId,
               threadId,
               status: "running",
-              title: "Rise test v2 on 3080",
-              command: `cerno watch --monitor --log ${logPath} -- scripts/remote.sh wsl rise_t2 surface_scene2.py`,
-              nativeId: "toolu_rise_a",
+              title: "Render test A",
+              command: `cerno watch --monitor --log ${logPath} -- scripts/remote.sh wsl render_scene.py`,
+              nativeId: "toolu_render_a",
             }),
           ),
         );
@@ -638,9 +633,9 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
               id: itemId,
               threadId,
               status: "completed",
-              title: "Rise test v2 on 3080",
-              command: `cerno watch --monitor --log ${logPath} -- scripts/remote.sh wsl rise_t2 surface_scene2.py`,
-              nativeId: "toolu_rise_a",
+              title: "Render test A",
+              command: `cerno watch --monitor --log ${logPath} -- scripts/remote.sh wsl render_scene.py`,
+              nativeId: "toolu_render_a",
               exitCode: 0,
             }),
           ),
@@ -656,19 +651,19 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
               {
                 taskId: "boynqyqvz",
                 kind: "command",
-                description: "Rise test v2 on 3080",
-                command: `cerno watch --monitor --log ${logPath} -- scripts/remote.sh wsl rise_t2 surface_scene2.py`,
+                description: "Render test A",
+                command: `cerno watch --monitor --log ${logPath} -- scripts/remote.sh wsl render_scene.py`,
                 itemId: TurnItemId.make(itemId),
-                nativeItemId: "toolu_rise_a",
+                nativeItemId: "toolu_render_a",
                 sourceThreadId: ThreadId.make(threadId),
                 awaited: true,
               },
               {
                 taskId: "b82lo44kw",
                 kind: "command",
-                description: "Rise test v2 on 6800 XT",
+                description: "Render test B",
                 command:
-                  "cerno watch --monitor --log logs/rise2_b.log -- scripts/remote.sh 7a34 rise_t2 surface_scene2.py",
+                  "cerno watch --monitor --log logs/render_b.log -- scripts/remote.sh host-b render_scene.py",
                 sourceThreadId: ThreadId.make(threadId),
                 awaited: true,
               },
@@ -693,16 +688,16 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         );
 
         const jobs = yield* Effect.promise(() => registry.listJobs({ threadId }));
-        const job3080 = jobs.find((j) => j.title === "Rise test v2 on 3080")!;
-        const job6800 = jobs.find((j) => j.title === "Rise test v2 on 6800 XT")!;
-        expect(job3080.source).toBe("background");
-        expect(job3080.binding.host).toBe("host-x");
-        expect(job3080.kind).toBe("render");
-        expect(job3080.state).toBe("running");
+        const jobA = jobs.find((j) => j.title === "Render test A")!;
+        const jobB = jobs.find((j) => j.title === "Render test B")!;
+        expect(jobA.source).toBe("background");
+        expect(jobA.binding.host).toBe("host-c");
+        expect(jobA.kind).toBe("render");
+        expect(jobA.state).toBe("running");
 
-        expect(job6800.source).toBe("background");
-        expect(job6800.binding.host).toBe("dev-host-x");
-        expect(job6800.kind).toBe("render");
+        expect(jobB.source).toBe("background");
+        expect(jobB.binding.host).toBe("host-b");
+        expect(jobB.kind).toBe("render");
 
         // 3. Live CommandOutputHub chunk updates progress, KPIs, and redacted tail
         const outputChunk: OrchestrationV2CommandOutputFrame = {
@@ -716,20 +711,20 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
           expect
             .poll(
               async () =>
-                (await registry.listJobs({ threadId })).find((j) => j.id === job3080.id)?.progress
+                (await registry.listJobs({ threadId })).find((j) => j.id === jobA.id)?.progress
                   ?.current,
               { timeout: 2_000 },
             )
             .toBe(25),
         );
-        const updated3080 = (yield* Effect.promise(() => registry.listJobs({ threadId }))).find(
-          (j) => j.id === job3080.id,
+        const updatedA = (yield* Effect.promise(() => registry.listJobs({ threadId }))).find(
+          (j) => j.id === jobA.id,
         )!;
-        expect(updated3080.kpis?.some((k) => k.key === "loss")).toBe(true);
-        expect(updated3080.recentTail?.[0]).toContain("Authorization: Bearer [REDACTED]");
+        expect(updatedA.kpis?.some((k) => k.key === "loss")).toBe(true);
+        expect(updatedA.recentTail?.[0]).toContain("Authorization: Bearer [REDACTED]");
 
         // 4. Cancel marks target AND sibling jobs in the owning thread cancelling -> cancelled
-        const cancelRes = yield* Effect.promise(() => registry.cancelJob(job3080.id));
+        const cancelRes = yield* Effect.promise(() => registry.cancelJob(jobA.id));
         expect(cancelRes.ok).toBe(true);
         expect(stoppedThreads).toHaveLength(1);
         expect(stoppedThreads[0]?.threadId).toBe(threadId);
@@ -757,8 +752,8 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
             .toBe(true),
         );
         const finalJobs = yield* Effect.promise(() => registry.listJobs({ threadId }));
-        expect(finalJobs.find((j) => j.id === job3080.id)?.state).toBe("cancelled");
-        expect(finalJobs.find((j) => j.id === job6800.id)?.state).toBe("cancelled");
+        expect(finalJobs.find((j) => j.id === jobA.id)?.state).toBe("cancelled");
+        expect(finalJobs.find((j) => j.id === jobB.id)?.state).toBe("cancelled");
       }),
   );
 
@@ -774,7 +769,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         const registry = makeJobRegistry({
           enableShipBridge: false,
           backgroundBridge: {
-            localHostname: "dev-host-x",
+            localHostname: "host-a",
             ciHostsPath: null,
             commandDebounceMs: 60,
             getShellSnapshot: async () => ({
@@ -996,8 +991,8 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
       "utf8",
     );
     const doneNoDeploy = adaptShipQueueJob(
-      { id: "10984", repo: "private-repo", state: "done", merge_exit: "0" },
-      "dev-host-x",
+      { id: "10984", repo: "tools", state: "done", merge_exit: "0" },
+      "host-a",
       1,
       jobsRoot,
     );
@@ -1014,7 +1009,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         stage: "ci",
         title: "Fix host sync",
       },
-      "dev-host-x",
+      "host-a",
       1,
       jobsRoot,
     );
@@ -1102,7 +1097,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         const registry = makeJobRegistry({
           enableShipBridge: false,
           backgroundBridge: {
-            localHostname: "dev-host-x",
+            localHostname: "host-a",
             ciHostsPath,
             commandDebounceMs: 40,
             pendingFinishGraceMs: 40,
@@ -1152,7 +1147,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
               {
                 taskId: "t-cancel-race",
                 kind: "command",
-                description: "Long run on 3080",
+                description: "Long run on 1234",
                 command: `cerno watch --monitor --log ${fakeRemoteLog} -- scripts/remote.sh wsl train.py`,
               },
             ],
@@ -1169,7 +1164,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         const remoteJob = (yield* Effect.promise(() =>
           registry.listJobs({ threadId: appTid }),
         ))[0]!;
-        expect(remoteJob.binding.host).toBe("host-x");
+        expect(remoteJob.binding.host).toBe("host-c");
         expect(remoteJob.progress).toBeUndefined();
 
         yield* PubSub.publish(
@@ -1204,7 +1199,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
               {
                 taskId: "t-cancel-race",
                 kind: "command",
-                description: "Long run on 3080",
+                description: "Long run on 1234",
                 command: "scripts/remote.sh wsl train.py",
               },
               {
@@ -1433,7 +1428,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
       command: complexCmd,
       kind: "test",
       title: "Run checks",
-      host: "dev-host-x",
+      host: "host-a",
       startedAtIso: "2026-11-22T15:00:00Z",
     });
     ingestCommandOutputFrame(
@@ -1570,7 +1565,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         const registry = makeJobRegistry({
           enableShipBridge: false,
           backgroundBridge: {
-            localHostname: "dev-host-x",
+            localHostname: "host-a",
             commandDebounceMs: 10,
             pendingFinishGraceMs: 10,
             streamReconnectDelayMs: 20,
@@ -2073,7 +2068,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         const registry = makeJobRegistry({
           enableShipBridge: false,
           backgroundBridge: {
-            localHostname: "dev-host-x",
+            localHostname: "host-a",
             streamReconnectDelayMs: 15,
             reconcileRetryBaseMs: 25,
             stallCheckIntervalMs: 20,
@@ -2311,7 +2306,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         const registry = makeJobRegistry({
           enableShipBridge: false,
           backgroundBridge: {
-            localHostname: "dev-host-x",
+            localHostname: "host-a",
             commandDebounceMs: 0,
             getShellSnapshot: async () => ({
               schemaVersion: 1,
@@ -2438,7 +2433,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
           const registry = makeJobRegistry({
             enableShipBridge: false,
             backgroundBridge: {
-              localHostname: "dev-host-x",
+              localHostname: "host-a",
               commandDebounceMs: 0,
               streamReconnectDelayMs: 15,
               getShellSnapshot: async () => {
@@ -2547,7 +2542,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         const startupReg = makeJobRegistry({
           enableShipBridge: false,
           backgroundBridge: {
-            localHostname: "dev-host-x",
+            localHostname: "host-a",
             commandDebounceMs: 40,
             getShellSnapshot: async () => ({
               schemaVersion: 1,
@@ -2619,7 +2614,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         const n2Reg = makeJobRegistry({
           enableShipBridge: false,
           backgroundBridge: {
-            localHostname: "dev-host-x",
+            localHostname: "host-a",
             commandDebounceMs: 40,
             getShellSnapshot: async () => ({
               schemaVersion: 1,
@@ -2678,7 +2673,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         const f1Reg = makeJobRegistry({
           enableShipBridge: false,
           backgroundBridge: {
-            localHostname: "dev-host-x",
+            localHostname: "host-a",
             commandDebounceMs: 80,
             getShellSnapshot: async () => ({
               schemaVersion: 1,
@@ -2752,7 +2747,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         const f2Reg = makeJobRegistry({
           enableShipBridge: false,
           backgroundBridge: {
-            localHostname: "dev-host-x",
+            localHostname: "host-a",
             commandDebounceMs: 40,
             pendingFinishGraceMs: 10,
             getShellSnapshot: async () => ({
@@ -2872,7 +2867,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         const r51Reg = makeJobRegistry({
           enableShipBridge: false,
           backgroundBridge: {
-            localHostname: "dev-host-x",
+            localHostname: "host-a",
             reconcileRetryBaseMs: 25,
             pendingFinishGraceMs: 10,
             getShellSnapshot: async () => {
@@ -2948,7 +2943,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
         const r52Reg = makeJobRegistry({
           enableShipBridge: false,
           backgroundBridge: {
-            localHostname: "dev-host-x",
+            localHostname: "host-a",
             commandDebounceMs: 20,
             reconcileRetryBaseMs: 35,
             getShellSnapshot: async () => ({

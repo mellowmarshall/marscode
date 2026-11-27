@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What sandbox-kit reads from Doppler, on stdin, never in argv (private-repo).
+"""What sandbox-kit reads from Doppler, on stdin, never in argv.
 
   sandbox_doppler.py names [--declaration PATH]
       stdin: `doppler secrets --only-names --json`. Exit 1, with one line per name, when the

@@ -1561,17 +1561,20 @@ export const layerWsRpc = (
         (thread) =>
           thread.worktreePath === null
             ? Effect.void
-            : threadManagement
-                .dispatch({
-                  type: "thread.metadata.update",
-                  commandId: CommandId.make(`terminal-worktree-detach:${crypto.randomUUID()}`),
-                  threadId: thread.id,
-                  worktreePath: null,
-                  branch: null,
-                  expectedWorktreePath: thread.worktreePath,
-                  expectedBranch: thread.branch,
-                })
-                .pipe(Effect.ignore),
+            : random.uuidV4().pipe(
+                Effect.flatMap((id) =>
+                  threadManagement.dispatch({
+                    type: "thread.metadata.update",
+                    commandId: CommandId.make(`terminal-worktree-detach:${id}`),
+                    threadId: thread.id,
+                    worktreePath: null,
+                    branch: null,
+                    expectedWorktreePath: thread.worktreePath,
+                    expectedBranch: thread.branch,
+                  }),
+                ),
+                Effect.ignore,
+              ),
       );
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;

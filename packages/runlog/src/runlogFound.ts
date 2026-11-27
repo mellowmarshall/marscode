@@ -1,6 +1,6 @@
 /**
  * The result one test-runner parser finds in a log, and the line helpers every
- * parser shares (a port of devtools/runlog/runlog_formats.py, private-repo).
+ * parser shares (a port of an earlier Python runlog formats module).
  *
  * A failure keeps its log line number: the summary's detail is the earliest
  * failure across all formats found in one log.

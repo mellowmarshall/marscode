@@ -41,7 +41,7 @@ import {
   parseSizeBytes,
   parseSsListeners,
 } from "./DockerPsParser.ts";
-import { NativeServersScanner } from "./NativeServersScanner.ts";
+import { devListenerServiceLabel, NativeServersScanner } from "./NativeServersScanner.ts";
 import {
   parseEtimeSeconds,
   parsePsOutput,
@@ -219,6 +219,18 @@ describe("NativeServersScanner and NativeSessionsScanner parsers & self-protecti
     expect(procs[1]?.args).toContain("T3 Code.app");
   });
 
+  it("labels dev listeners by project directory, not by `/` or the user's home directory", () => {
+    expect(devListenerServiceLabel("node", "/home/dev/Dev/project-a", "/home/dev")).toBe(
+      "project-a (node)",
+    );
+    expect(devListenerServiceLabel("node", "/home/dev", "/home/dev")).toBe("node");
+    expect(devListenerServiceLabel("node", "/home/dev/", "/home/dev")).toBe("node");
+    expect(devListenerServiceLabel("node", "/", "/home/dev")).toBe("node");
+    expect(devListenerServiceLabel("node", undefined, "/home/dev")).toBe("node");
+    // Another user's home basename is a real directory name, not the local home.
+    expect(devListenerServiceLabel("vite", "/home/ops", "/home/dev")).toBe("ops (vite)");
+  });
+
   it("refuses to stop T3's own PID, arbitrary unscanned containers, or non-Linux sessions", async () => {
     const scanner = new NativeServersScanner("linux");
     const res = await scanner.controlServer("stop", `dev:${process.pid}:3000`, {
@@ -247,17 +259,17 @@ describe("RemoteNodeProber peer-first and SSH fallback", () => {
     const prober = new RemoteNodeProber({
       listPeerLinks: async () => [
         {
-          environmentId: "env-msi",
-          label: "host-x-wsl WSL",
-          resolve: async () => ({ url: "https://host-x.ts.net", token: "tok_123" }),
+          environmentId: "env-host-c",
+          label: "host-c-wsl WSL",
+          resolve: async () => ({ url: "https://host-c.example.ts.net", token: "tok_123" }),
         },
       ],
       fetchJson: async (url, token) => {
-        expect(url).toBe("https://host-x.ts.net/api/devtools/fleet/self");
+        expect(url).toBe("https://host-c.example.ts.net/api/devtools/fleet/self");
         expect(token).toBe("tok_123");
         return {
           host: {
-            name: "host-x",
+            name: "host-c",
             uptime_s: 4000,
             load1: 0.75,
             cpus: 16,
@@ -279,7 +291,7 @@ describe("RemoteNodeProber peer-first and SSH fallback", () => {
       },
     });
 
-    const node = await prober.probeTarget({ name: "host-x", ssh: "host-x-wsl" });
+    const node = await prober.probeTarget({ name: "host-c", ssh: "host-c-wsl" });
     expect(sshCalls).toBe(0);
     expect(node.status).toBe("up");
     expect(node.host.cpus).toBe(16);
@@ -298,6 +310,38 @@ describe("RemoteNodeProber peer-first and SSH fallback", () => {
     expect(sanitized?.host.cpu_hist).toEqual([]);
     expect(sanitized?.host.disks).toEqual([]);
     expect("injectedKey" in (sanitized as unknown as Record<string, unknown>)).toBe(false);
+  });
+
+  it("matches peer labels across the local user's `<user>-` hostname prefix only", async () => {
+    const fetched: string[] = [];
+    const makeProber = (localUsername: string) =>
+      new RemoteNodeProber({
+        localUsername,
+        listPeerLinks: async () => [
+          {
+            environmentId: "env-b",
+            label: "host-b",
+            resolve: async () => ({ url: "https://host-b.example.ts.net", token: "tok" }),
+          },
+        ],
+        fetchJson: async (url) => {
+          fetched.push(url);
+          return { host: { name: "dev-host-b", cpus: 8 }, servers: [], status: "up" };
+        },
+        runSshProbe: async () => null,
+      });
+
+    const matched = await makeProber("Dev").probeTarget({ name: "dev-host-b", ssh: "dev-host-b" });
+    expect(matched.status).toBe("up");
+    expect(fetched).toEqual(["https://host-b.example.ts.net/api/devtools/fleet/self"]);
+
+    fetched.length = 0;
+    const otherUser = await makeProber("ops").probeTarget({
+      name: "dev-host-b",
+      ssh: "dev-host-b",
+    });
+    expect(fetched).toEqual([]);
+    expect(otherUser.status).not.toBe("up");
   });
 
   it("parses Linux and macOS SSH fallback probes accurately", () => {
@@ -325,7 +369,7 @@ describe("RemoteNodeProber peer-first and SSH fallback", () => {
       "---END---",
     ].join("\n");
 
-    const linuxNode = parseRemoteProbeOutput("dev-host-x", linuxOut, "dev-host-x");
+    const linuxNode = parseRemoteProbeOutput("host-b", linuxOut, "host-b");
     expect(linuxNode.status).toBe("up");
     expect(linuxNode.host.cpus).toBe(12);
     expect(linuxNode.host.cpu_pct).toBe(33.3);
@@ -360,7 +404,7 @@ describe("RemoteNodeProber peer-first and SSH fallback", () => {
       "---END---",
     ].join("\n");
 
-    const macNode = parseRemoteProbeOutput("host-x", darwinOut, "host-x");
+    const macNode = parseRemoteProbeOutput("host-d", darwinOut, "host-d");
     expect(macNode.host.cpus).toBe(10);
     expect(macNode.host.cpu_pct).toBe(30);
     expect(macNode.power).toBe("battery");

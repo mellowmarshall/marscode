@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh: install sandbox-kit into a bin directory (private-repo).
+# install.sh: install sandbox-kit into a bin directory.
 #
 # Usage: install.sh [BIN_DIR]       (default: $HOME/.local/bin)
 #

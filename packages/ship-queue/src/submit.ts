@@ -21,6 +21,7 @@ import {
   revParse,
   worktreeChanges,
 } from "./gitQueries.ts";
+import { isPrivateVisibility } from "./repoVisibility.ts";
 import type { JobRecord, ShipQueueDeps } from "./types.ts";
 import { readCurrentWorkerVersion, withVersionsLock } from "./workerVersion.ts";
 
@@ -31,6 +32,8 @@ const CLOSING_ISSUE_RE =
   /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:[\w.-]+\/[\w.-]+)?#\d+\b/i;
 /** Failures that judged the branch's own work; a cancel or a lost watcher never counts. */
 const PREMISE_REASONS = ["rebase_conflict", "house", "push", "merge"];
+
+export type StampAudience = "public" | "private";
 
 export interface AgentIdentity {
   readonly session?: string | undefined;
@@ -69,14 +72,24 @@ export function bodyProblem(body: string): string | null {
   return null;
 }
 
-/** The submitter's provenance, appended once so the PR and its merge commit never drop it. */
-export function stampBody(body: string, identity: AgentIdentity): string {
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The submitter's provenance, appended once so the PR and its merge commit never drop it. A
+ * public (or unknown) repo gets only opaque UUIDs (PLAYBOOK §16 `agent-session-ids`).
+ */
+export function stampBody(body: string, identity: AgentIdentity, audience: StampAudience): string {
+  const visible = (value: string | undefined) => {
+    const id = value?.trim() ?? "";
+    return audience === "private" || UUID_RE.test(id) ? id : "";
+  };
   const lines: string[] = [];
-  const session = identity.session?.trim();
-  const thread = identity.thread?.trim();
-  if (session && !body.includes(`Agent Session: ${session}`))
-    lines.push(`Agent Session: ${session}`);
-  if (thread && !body.includes(`Agent Thread: ${thread}`)) lines.push(`Agent Thread: ${thread}`);
+  for (const [key, id] of [
+    ["Agent Session", visible(identity.session)],
+    ["Agent Thread", visible(identity.thread)],
+  ] as const) {
+    if (id && !body.includes(`${key}: ${id}`)) lines.push(`${key}: ${id}`);
+  }
   if (lines.length === 0) return body;
   return `${body.replace(/\s+$/, "")}\n\n${lines.join("\n")}\n`;
 }
@@ -193,7 +206,9 @@ export async function submitJob(deps: ShipQueueDeps, input: SubmitInput): Promis
     );
   }
   writeRegistration(deps.root, repo, { primary, remoteUrl: url });
-  const stampedBody = stampBody(input.body, input.identity);
+  const visibility = (await deps.forge.repoVisibility?.({ cwd: worktree, repo })) ?? "unknown";
+  const audience = isPrivateVisibility(visibility) ? "private" : "public";
+  const stampedBody = stampBody(input.body, input.identity, audience);
   const created = withVersionsLock(
     deps.root,
     { self: deps.self, isAlive: deps.isProcessAlive },

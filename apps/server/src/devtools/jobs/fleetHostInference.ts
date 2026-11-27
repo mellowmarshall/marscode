@@ -15,7 +15,7 @@ export interface FleetHostDescriptor {
   readonly exactTokens: ReadonlySet<string>;
   /** Lowercase short suffix tokens matched only in explicit remote-target slots. */
   readonly shortTokens: ReadonlySet<string>;
-  /** Lowercase GPU/hardware hints parsed from `ci-hosts.json` notes (e.g. `rtx 3080`, `3080`). */
+  /** Lowercase GPU/hardware hints parsed from `ci-hosts.json` notes (e.g. `rtx 1234`, `1234`). */
   readonly noteHints: ReadonlyArray<string>;
 }
 
@@ -235,7 +235,7 @@ export function inferTargetHost(
       }
     }
 
-    // 3. Hardware/GPU hint from `ci-hosts.json` notes matched in description (e.g. `on 3080`)
+    // 3. Hardware/GPU hint from `ci-hosts.json` notes matched in description (e.g. `on 1234`)
     for (const h of remoteHosts) {
       for (const hint of h.noteHints) {
         if (hasWordToken(descLower, hint)) {

@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Signal-safe `gh-run` executor with guard enforcement, prose stamping, and temp cleanup.
 import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 
 import { cleanupGhStampTempDirs, prepareStampedGhArgs } from "./ghAttribution.ts";
@@ -71,7 +72,21 @@ export async function runGhSubcommand(
   io: GhRunIo,
 ): Promise<number> {
   const { realGhOverride, cwd, rest } = parseGhRunArgs(args, io.cwd);
-  const guardCode = await enforceDirectGuard("gh", rest, cwd, runtime);
+  // The text guard and the stamper may both need stdin; it is read from fd 0 at most once.
+  let stdinText = io.stdin;
+  let readFd0 = false;
+  const readStdin = () => {
+    if (stdinText === undefined) {
+      readFd0 = true;
+      try {
+        stdinText = NodeFS.readFileSync(0, "utf8");
+      } catch {
+        stdinText = "";
+      }
+    }
+    return stdinText;
+  };
+  const guardCode = await enforceDirectGuard("gh", rest, cwd, runtime, { readStdin });
   if (guardCode !== 0) return guardCode;
 
   const prepared = prepareStampedGhArgs(rest, cwd, config, {
@@ -80,8 +95,9 @@ export async function runGhSubcommand(
     socketPath: io.socketPath,
     allowEnvThreadId: io.allowEnvThreadId,
     testMode: io.testMode,
-    stdin: io.stdin,
+    stdin: stdinText,
   });
+  const replayStdin = readFd0 && !prepared.consumedStdin;
   const realGh = realGhOverride || config.realGh;
 
   let child: NodeChildProcess.ChildProcess | null = null;
@@ -109,8 +125,13 @@ export async function runGhSubcommand(
       child = NodeChildProcess.spawn(realGh, [...prepared.args], {
         cwd,
         env: io.env,
-        stdio: prepared.consumedStdin ? ["ignore", "inherit", "inherit"] : "inherit",
+        stdio: replayStdin
+          ? ["pipe", "inherit", "inherit"]
+          : prepared.consumedStdin
+            ? ["ignore", "inherit", "inherit"]
+            : "inherit",
       });
+      if (replayStdin) child.stdin?.end(stdinText);
       child.on("error", (err) => {
         io.err(`gh-run: failed to execute ${realGh}: ${err.message}`);
         resolve(127);

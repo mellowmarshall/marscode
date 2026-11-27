@@ -13,6 +13,9 @@ export const jobsDir = (root: string) => NodePath.join(root, "jobs");
 export const jobDir = (root: string, id: string) => NodePath.join(jobsDir(root), id);
 export const jobLogPath = (root: string, id: string) => NodePath.join(jobDir(root, id), "log");
 export const jobBodyPath = (root: string, id: string) => NodePath.join(jobDir(root, id), "body.md");
+/** The `PLAYBOOK_EVIDENCE_DIR` a job's steps and house stages write receipts to. */
+export const jobEvidenceDir = (root: string, id: string) =>
+  NodePath.join(jobDir(root, id), "work", "playbook-evidence");
 export const jobReviewPath = (root: string, id: string) =>
   NodePath.join(jobDir(root, id), "declaration-challenge.txt");
 const openDir = (root: string) => NodePath.join(jobsDir(root), "open");

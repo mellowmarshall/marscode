@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs one of the fleet-check CLIs (fly, hcloud, op, doppler) on a CI
-# host, for the toolchain in ci-hosts.json (private-repo): the live fleet
+# host, for the toolchain in ci-hosts.json: the live fleet
 # checks list the Fly, Hetzner, 1Password and Doppler accounts with them, and
 # a CI host without them reported every one UNPROVEN.
 #
@@ -9,11 +9,11 @@
 # Each is a pinned release for Linux x86_64 (WSL included), Linux aarch64 or macOS arm64,
 # checked against the sha256 below before anything is installed: the project's
 # published checksums where it has them (fly, hcloud, doppler, kept current by
-# `ship-queue deps` through sq_pins.json, private-repo), else the digest
+# `ship-queue deps` through sq_pins.json), else the digest
 # recorded from the download (op, raised by hand). The binaries go to the CI's own
 # directory, ~/.local/share/ship-queue-ci/bin (on every CI step's PATH,
 # CI_PATH_SETUP), never ~/.local/bin: an agent's shell finds ~/.local/bin
-# before the private-repo' shims, so a raw fly there would step around them.
+# before the host guards' shims, so a raw fly there would step around them.
 set -euo pipefail
 
 tool=${1:?usage: ci-fleet-tools.sh fly|hcloud|op|doppler}
@@ -43,7 +43,7 @@ read -r url want member <<<"$(release "$tool" "$platform")" || true
 tmp=$(mktemp -d)
 # Names of this run's own beside the tool: two provisions of one tool at once
 # (a host update and a job's provide step) never rename each other's file
-# away, as two writers of the queue's library did (private-repo).
+# away, as two writers of the queue's library did.
 next="$dest/.$member.next.$$" link="$dest/.fly.next.$$"
 trap 'rm -rf "$tmp"; rm -f "$next" "$link"' EXIT
 # A run that was killed leaves its names behind: removed once its pid is gone.

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.dev/schemas/playbook.schema.json",
+  "$id": "urn:marscode:schema:playbook",
   "title": "Playbook declaration (evidence-only, stack-agnostic)",
   "description": "Repo declaration of applicable playbook sections, scoped exceptions, and repo-emitted playbook-evidence/v1 receipt locations. Playbook never runs linters, scanners, SQL parsers, or DB replays itself.",
   "type": "object",

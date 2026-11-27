@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sandbox-kit (private-repo): a private sandbox for a repo from one declaration file.
+# sandbox-kit: a private sandbox for a repo from one declaration file.
 #
 #   sandbox-kit check            check the declaration against the fleet shape; print what it resolved
 #   sandbox-kit deploy           bring the sandbox up to this checkout's commit (a clean checkout only)

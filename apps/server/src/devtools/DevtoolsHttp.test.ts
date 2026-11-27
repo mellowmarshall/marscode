@@ -157,7 +157,7 @@ function findHostGuardsDir(): string | null {
   const candidates = [
     process.env.HOST_GUARDS_DIR,
     NodePath.resolve(process.cwd(), "host-guards"),
-    "/home/dev/.t3/worktrees/devtools/10d85e80-d5cc5e1cf0080568/host-guards",
+    "/home/dev/.t3/worktrees/example-repo/10d85e80-d5cc5e1cf0080568/host-guards",
   ].filter((v): v is string => Boolean(v));
   for (const dir of candidates) {
     if (NodeFS.existsSync(NodePath.join(dir, "hg_t3_grant.py"))) {
@@ -2013,13 +2013,13 @@ describe("DevtoolsHttp routes", () => {
         const createdSec = 1_795_000_000;
 
         // 1) Active holding repo with concrete package updates
-        NodeFS.mkdirSync(NodePath.join(dir, "dependencies", "private-repo"), { recursive: true });
+        NodeFS.mkdirSync(NodePath.join(dir, "dependencies", "project-c"), { recursive: true });
         NodeFS.writeFileSync(
-          NodePath.join(dir, "dependencies", "private-repo", "state.json"),
+          NodePath.join(dir, "dependencies", "project-c", "state.json"),
           JSON.stringify({
             holding: true,
             report: {
-              id: "private-repo:abc123",
+              id: "project-c:abc123",
               status: "pending",
               created: createdSec - 60,
               updates: [
@@ -2038,13 +2038,13 @@ describe("DevtoolsHttp routes", () => {
         );
 
         // 2) Inactive onboarding repo (not blocking shipping)
-        NodeFS.mkdirSync(NodePath.join(dir, "dependencies", "exp"), { recursive: true });
+        NodeFS.mkdirSync(NodePath.join(dir, "dependencies", "project-b"), { recursive: true });
         NodeFS.writeFileSync(
-          NodePath.join(dir, "dependencies", "exp", "state.json"),
+          NodePath.join(dir, "dependencies", "project-b", "state.json"),
           JSON.stringify({
             holding: false,
             report: {
-              id: "exp:def456",
+              id: "project-b:def456",
               status: "pending",
               created: createdSec - 120,
               updates: [
@@ -2107,23 +2107,23 @@ describe("DevtoolsHttp routes", () => {
             updates: Array<{ depName: string; currentValue: string; newValue: string }>;
           }>;
         };
-        expect(listJson.repos.map((r) => r.repo)).toEqual(["devtools", "exp", "private-repo"]);
-        const private-repo = listJson.repos.find((r) => r.repo === "private-repo")!;
-        expect(private-repo.holding).toBe(true);
-        expect(private-repo.pendingCount).toBe(1);
-        expect(private-repo.waitingCount).toBe(1);
-        expect(private-repo.updates[0]).toMatchObject({
+        expect(listJson.repos.map((r) => r.repo)).toEqual(["devtools", "project-b", "project-c"]);
+        const projectC = listJson.repos.find((r) => r.repo === "project-c")!;
+        expect(projectC.holding).toBe(true);
+        expect(projectC.pendingCount).toBe(1);
+        expect(projectC.waitingCount).toBe(1);
+        expect(projectC.updates[0]).toMatchObject({
           depName: "serde",
           currentValue: "1.0.210",
           newValue: "1.0.215",
         });
 
-        const exp = listJson.repos.find((r) => r.repo === "exp")!;
-        expect(exp.active).toBe(false);
-        expect(exp.holding).toBe(false);
-        expect(exp.heldCount).toBe(1);
-        expect(exp.failedCount).toBe(1);
-        expect(exp.updates[0]).toMatchObject({
+        const projectB = listJson.repos.find((r) => r.repo === "project-b")!;
+        expect(projectB.active).toBe(false);
+        expect(projectB.holding).toBe(false);
+        expect(projectB.heldCount).toBe(1);
+        expect(projectB.failedCount).toBe(1);
+        expect(projectB.updates[0]).toMatchObject({
           depName: "vite",
           currentValue: "6.0.1",
           newValue: "6.1.0",
@@ -2139,7 +2139,7 @@ describe("DevtoolsHttp routes", () => {
           method: "POST",
           url: "/api/devtools/ship-queue/deps/decide",
           subject: "mcp-agent",
-          body: { reportId: "private-repo:abc123", decision: "reject" },
+          body: { reportId: "project-c:abc123", decision: "reject" },
         });
         expect(mcpRes.status).toBe(403);
 
@@ -2147,7 +2147,7 @@ describe("DevtoolsHttp routes", () => {
           method: "POST",
           url: "/api/devtools/ship-queue/deps/decide",
           subject: "peer-link:remote",
-          body: { reportId: "private-repo:abc123", decision: "approve" },
+          body: { reportId: "project-c:abc123", decision: "approve" },
         });
         expect(peerRes.status).toBe(403);
 
@@ -2156,7 +2156,7 @@ describe("DevtoolsHttp routes", () => {
           method: "POST",
           url: "/api/devtools/ship-queue/deps/decide",
           scopes: [AuthTerminalOperateScope],
-          body: { reportId: "private-repo:abc123", decision: "reject" },
+          body: { reportId: "project-c:abc123", decision: "reject" },
         });
         expect(narrowScopeRes.status).toBe(403);
 
@@ -2171,14 +2171,14 @@ describe("DevtoolsHttp routes", () => {
         const badDecision = yield* runHandler(handler, {
           method: "POST",
           url: "/api/devtools/ship-queue/deps/decide",
-          body: { reportId: "private-repo:abc123", decision: "merge" },
+          body: { reportId: "project-c:abc123", decision: "merge" },
         });
         expect(badDecision.status).toBe(400);
 
         const brokerOff = yield* runHandler(handler, {
           method: "POST",
           url: "/api/devtools/ship-queue/deps/decide",
-          body: { reportId: "private-repo:abc123", decision: "reject" },
+          body: { reportId: "project-c:abc123", decision: "reject" },
         });
         expect(brokerOff.status).toBe(503);
 
@@ -2187,7 +2187,7 @@ describe("DevtoolsHttp routes", () => {
           method: "POST",
           url: "/api/devtools/ship-queue/deps/scan",
           scopes: [AuthOrchestrationReadScope],
-          body: { repo: "private-repo" },
+          body: { repo: "project-c" },
         });
         expect(scanNoScope.status).toBe(403);
 
@@ -2210,15 +2210,12 @@ describe("DevtoolsHttp routes", () => {
 
   it("allows POST /api/sessions/<id>/close with ?node=<host> and rejects invalid POST queries", () => {
     expect(
-      isAllowedFleetPath(
-        "POST",
-        "/api/sessions/process%3A1180298%3A26379999/close?node=dev-host-x",
-      ),
+      isAllowedFleetPath("POST", "/api/sessions/process%3A1180298%3A26379999/close?node=host-b"),
     ).toBe(true);
     expect(
       isAllowedFleetPath("POST", "/api/sessions/process%3A1180298%3A26379999/close?panels=host"),
     ).toBe(false);
-    expect(isAllowedFleetPath("POST", "/api/hosts/check?node=dev-host-x")).toBe(false);
+    expect(isAllowedFleetPath("POST", "/api/hosts/check?node=host-b")).toBe(false);
     expect(
       isAllowedFleetPath("POST", "/api/sessions/process%3A1180298%3A26379999/close?node=../etc"),
     ).toBe(false);
@@ -2226,11 +2223,11 @@ describe("DevtoolsHttp routes", () => {
 
   it("registers layer cleanly in HttpRouter and forwards Layer-provided JobRegistry to /api/devtools/jobs", async () => {
     const now = DateTime.nowUnsafe();
-    const tid = ThreadId.make("thread-exp-1");
+    const tid = ThreadId.make("thread-project-b-1");
     const registry = JobRegistry.makeJobRegistry({
       enableShipBridge: false,
       backgroundBridge: {
-        localHostname: "dev-host-x",
+        localHostname: "host-a",
         ciHostsPath: null,
         getShellSnapshot: async () => ({
           schemaVersion: 1,
@@ -2240,12 +2237,12 @@ describe("DevtoolsHttp routes", () => {
         }),
         getRunningCommandsForThread: async () => [],
         streamDomainEvents: Stream.make({
-          id: EventId.make("ev-exp-1"),
+          id: EventId.make("ev-project-b-1"),
           threadId: tid,
           occurredAt: now,
           type: "provider-thread.updated",
           payload: {
-            id: ProviderThreadId.make("pt-exp"),
+            id: ProviderThreadId.make("pt-project-b"),
             driver: ProviderDriverKind.make("claudeAgent"),
             providerInstanceId: ProviderInstanceId.make("claudeAgent"),
             providerSessionId: null,
@@ -2260,9 +2257,9 @@ describe("DevtoolsHttp routes", () => {
             forkedFrom: null,
             pendingBackgroundTasks: [
               {
-                taskId: "exp-build-1",
+                taskId: "project-b-build-1",
                 kind: "command",
-                description: "EXP shipping check",
+                description: "Project B shipping check",
                 command: "cargo build --release",
               },
             ],
@@ -2326,7 +2323,7 @@ describe("DevtoolsHttp routes", () => {
       const json = (await res.json()) as {
         readonly jobs: ReadonlyArray<{ readonly title: string }>;
       };
-      expect(json.jobs.some((j) => j.title === "EXP shipping check")).toBe(true);
+      expect(json.jobs.some((j) => j.title === "Project B shipping check")).toBe(true);
 
       const capsRes = await handler(new Request("http://localhost/api/devtools/capabilities"));
       expect(capsRes.status).toBe(200);

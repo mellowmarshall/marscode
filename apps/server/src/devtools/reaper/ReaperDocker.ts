@@ -3,6 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
+import { EMPTY_DOCKER_REAP_RULES, type DockerReapRules } from "./ReaperDockerPolicy.ts";
 import type { ReaperLog } from "./ReaperTypes.ts";
 
 const DOCKER_MIN_AGE_S = 300;
@@ -11,21 +12,14 @@ const OWNER_HOST_LABEL = "dev.reaper.owner-host";
 const OWNER_NS_LABEL = "dev.reaper.owner-ns";
 const COMPOSE_LABEL = "com.docker.compose.project";
 const CHECKOUT_LABEL = "dev.devdeck.checkout";
-const KEEP_LABELS = ["dev.reaper.keep", "private-repo.keep-db"];
+const KEEP_LABEL = "dev.reaper.keep";
 const PROTECTED_RESTART_POLICIES = new Set(["always", "unless-stopped", "on-failure"]);
 const BUILTIN_NETWORKS = new Set(["bridge", "host", "none"]);
 const INSPECT_BATCH = 50;
 
-const CONTAINER_PID_PATTERNS = [
-  /^private-repo-proxy-test-(\d+)-/,
-  /^private-repo-ci-(?:postgres|keycloak|sso-redis|redis|smoke-api)-(\d+)$/,
-  /^private-repo-walk-(?:postgres|keycloak)-(\d+)$/,
-  /^[a-z0-9][a-z0-9_.-]*-ci-(\d+)-\d+$/,
-];
-const NETWORK_PID_PATTERNS = [
-  /^private-repo-(?:proxy-test|ci-smoke)-(\d+)$/,
-  /^[a-z0-9][a-z0-9_.-]*-ci-smoke-(\d+)$/,
-];
+// Generic `<name>-ci-<pid>-<n>` names; project-specific patterns come from the policy's `[docker]` section.
+const CONTAINER_PID_PATTERNS = [/^[a-z0-9][a-z0-9_.-]*-ci-(\d+)-\d+$/];
+const NETWORK_PID_PATTERNS = [/^[a-z0-9][a-z0-9_.-]*-ci-smoke-(\d+)$/];
 
 type Labels = Readonly<Record<string, string>>;
 
@@ -38,6 +32,7 @@ export interface DockerScope {
   readonly pidDead: (pid: number) => boolean;
   readonly checkoutDeleted: (path: string) => Promise<boolean>;
   readonly minAgeS?: number;
+  readonly rules?: DockerReapRules;
 }
 
 /** True only when the PID is positively gone on this host. */
@@ -76,13 +71,22 @@ function parseDockerTimestamp(ts: unknown): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
-const hasKeepLabel = (labels: Labels) =>
-  KEEP_LABELS.some((key) =>
-    ["1", "true", "yes"].includes(
-      String(labels[key] ?? "")
-        .trim()
-        .toLowerCase(),
-    ),
+// Any `*.keep` / `*.keep-db` label protects a resource with no policy file at all.
+const isKeepKey = (key: string, keepLabels: ReadonlyArray<string>) =>
+  key === KEEP_LABEL ||
+  key.endsWith(".keep") ||
+  key.endsWith(".keep-db") ||
+  keepLabels.includes(key);
+
+const hasKeepLabel = (labels: Labels, keepLabels: ReadonlyArray<string>) =>
+  Object.entries(labels).some(
+    ([key, value]) =>
+      isKeepKey(key, keepLabels) &&
+      ["1", "true", "yes"].includes(
+        String(value ?? "")
+          .trim()
+          .toLowerCase(),
+      ),
   );
 
 const positivePid = (raw: unknown) => {
@@ -98,7 +102,7 @@ function ownerScopeMatches(labels: Labels, scope: DockerScope): boolean {
 }
 
 function commonRefusal(labels: Labels, created: unknown, scope: DockerScope): boolean {
-  if (labels[COMPOSE_LABEL] || hasKeepLabel(labels)) return true;
+  if (labels[COMPOSE_LABEL] || hasKeepLabel(labels, scope.rules?.keepLabels ?? [])) return true;
   const createdMs = parseDockerTimestamp(created);
   if (createdMs === null || scope.nowMs - createdMs < (scope.minAgeS ?? DOCKER_MIN_AGE_S) * 1_000)
     return true;
@@ -119,7 +123,8 @@ function ownerPidReason(
   if (scope.sharedDaemon) return undefined;
   for (const pattern of patterns) {
     const match = pattern.exec(name);
-    if (match) {
+    // A match without a captured PID (an alternation branch that skips group 1) proves nothing.
+    if (match && /^\d+$/.test(match[1] ?? "")) {
       const pid = Number(match[1]);
       return scope.pidDead(pid) ? `dead owner-pid=${pid} (name)` : null;
     }
@@ -139,7 +144,9 @@ export async function classifyContainer(
   if (PROTECTED_RESTART_POLICIES.has(restart) || commonRefusal(labels, info.Created, scope))
     return null;
   const name = String(info.Name ?? "").replace(/^\//, "");
-  const byPid = ownerPidReason(labels, name, CONTAINER_PID_PATTERNS, scope);
+  const rules = scope.rules ?? EMPTY_DOCKER_REAP_RULES;
+  const patterns = [...rules.containerPidPatterns, ...CONTAINER_PID_PATTERNS];
+  const byPid = ownerPidReason(labels, name, patterns, scope);
   if (byPid !== undefined) return byPid;
   const checkout = String(labels[CHECKOUT_LABEL] ?? "").trim();
   if (checkout && !scope.sharedDaemon && (await scope.checkoutDeleted(checkout))) {
@@ -154,7 +161,9 @@ export function classifyNetwork(info: Record<string, any>, scope: DockerScope): 
   const labels: Labels = info.Labels ?? {};
   if (info.Containers && Object.keys(info.Containers).length > 0) return null;
   if (commonRefusal(labels, info.Created, scope)) return null;
-  return ownerPidReason(labels, name, NETWORK_PID_PATTERNS, scope) ?? null;
+  const rules = scope.rules ?? EMPTY_DOCKER_REAP_RULES;
+  const patterns = [...rules.networkPidPatterns, ...NETWORK_PID_PATTERNS];
+  return ownerPidReason(labels, name, patterns, scope) ?? null;
 }
 
 export interface DockerRunResult {

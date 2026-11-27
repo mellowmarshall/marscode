@@ -188,7 +188,7 @@ export const FLEET_SHAPE_SCHEMA: SchemaNode = Obj({
   stores: Rec(STORE_SCHEMA, KEY),
   permissions: Rec(PERMISSION_SCHEMA, KEY),
   providers: Rec(PROVIDER_NODE, KEY),
-  // Facts every repo may declare (private-repo); an absent section is an empty one.
+  // Facts every repo may declare; an absent section is an empty one.
   decisions: optional(
     Rec(
       Obj({

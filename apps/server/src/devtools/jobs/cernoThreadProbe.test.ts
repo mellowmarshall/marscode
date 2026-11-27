@@ -27,7 +27,7 @@ function writeSnap(dir: string, filename: string, overrides: Record<string, unkn
     updated_at_ms: FIXED_NOW_MS - 1_500,
     mode: "watch-monitor",
     cwd: "/tmp",
-    command: "ssh host-x-wsl ./run.sh",
+    command: "ssh host-c-wsl ./run.sh",
     log_path: "/tmp/run.log",
     state: "RUNNING",
     ...overrides,

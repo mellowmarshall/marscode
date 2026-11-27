@@ -256,7 +256,7 @@ describe("usageLimitsHealth", () => {
       [
         EnvironmentId.make("env-broken-1"),
         {
-          entry: { target: { label: "dev-host-x" } },
+          entry: { target: { label: "host-b" } },
           serverConfig: {
             providers: [
               makeProvider({
@@ -274,7 +274,7 @@ describe("usageLimitsHealth", () => {
       [
         EnvironmentId.make("env-broken-2"),
         {
-          entry: { target: { label: "host-x-wsl" } },
+          entry: { target: { label: "host-c-wsl" } },
           serverConfig: {
             providers: [
               makeProvider({
@@ -294,10 +294,7 @@ describe("usageLimitsHealth", () => {
     const groups = collectLimitRecoveries(presentations);
     expect(groups).toHaveLength(1);
     expect(groups[0]!.driver).toBe(codex);
-    expect(groups[0]!.targets.map((t) => t.environmentLabel)).toEqual([
-      "dev-host-x",
-      "host-x-wsl",
-    ]);
+    expect(groups[0]!.targets.map((t) => t.environmentLabel)).toEqual(["host-b", "host-c-wsl"]);
     expect(groups[0]!.syncSource?.environmentLabel).toBe("Primary");
   });
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sandbox-kit deploy (private-repo): bring the repo's sandbox up to this checkout's commit.
+# sandbox-kit deploy: bring the repo's sandbox up to this checkout's commit.
 # `sandbox-kit deploy` runs this from the repo root. The repo's declaration and fleet shape
 # say where and what (sandbox_declaration.py).
 #

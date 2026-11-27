@@ -13,6 +13,7 @@ import {
   type DockerRunner,
   type DockerScope,
 } from "./ReaperDocker.ts";
+import { parseReaperDockerRules } from "./ReaperDockerPolicy.ts";
 
 const NOW_MS = Date.parse("2030-06-01T12:00:00.000Z");
 const OLD = "2030-06-01T10:00:00.123456789Z";
@@ -24,7 +25,23 @@ afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
 });
 
+const POLICY_TOML = String.raw`
+[[approved]]
+path = "/data/Dev/project-a/tmp"
+enabled = true
+
+[docker]
+keep_labels = ["project-a.keep-db"] # host-local
+container_pid_patterns = [
+  '^project-a-proxy-test-(\d+)-\d+$',
+  '^project-a-ci-(?:postgres|redis)-(\d+)$',
+]
+network_pid_patterns = ['^project-a-(?:proxy-test|ci-smoke)-(\d+)$']
+`;
+const RULES = parseReaperDockerRules(POLICY_TOML);
+
 const scope = (over: Partial<DockerScope> = {}): DockerScope => ({
+  rules: RULES,
   nowMs: NOW_MS,
   selfHost: "workstation",
   selfPidNs: "pid:[4026531836]",
@@ -47,13 +64,89 @@ const container = (
   ...extra,
 });
 
+describe("docker reap rules from the policy file", () => {
+  it("reads only the [docker] section and drops invalid labels and patterns", () => {
+    expect(RULES.keepLabels).toEqual(["project-a.keep-db"]);
+    expect(RULES.containerPidPatterns.map((re) => re.source)).toEqual([
+      "^(?:project-a-proxy-test-(\\d+)-\\d+)$",
+      "^(?:project-a-ci-(?:postgres|redis)-(\\d+))$",
+    ]);
+    expect(RULES.networkPidPatterns).toHaveLength(1);
+    const bad = parseReaperDockerRules(
+      [
+        "[docker]",
+        `keep_labels = ["ok.keep", "bad label"]`,
+        `container_pid_patterns = ['(', '^no-group$']`,
+      ].join("\n"),
+    );
+    expect(bad).toEqual({
+      keepLabels: ["ok.keep"],
+      containerPidPatterns: [],
+      networkPidPatterns: [],
+    });
+  });
+
+  it("anchors every pattern so a top-level alternation cannot match unrelated names", async () => {
+    const rules = parseReaperDockerRules(
+      ["[docker]", String.raw`container_pid_patterns = ['^proj-(\d+)$|.*$', 'bare-(\d+)']`].join(
+        "\n",
+      ),
+    );
+    const [alternation, bare] = rules.containerPidPatterns;
+    expect(alternation!.exec("proj-5151")?.[1]).toBe("5151");
+    expect(alternation!.exec("team-db")?.[1]).toBeUndefined();
+    expect(bare!.test("x-bare-5151")).toBe(false);
+    const s = scope({ rules });
+    expect(await classifyContainer(container("team-db", {}), s)).toBeNull();
+    expect(await classifyContainer(container("proj-5151", {}), s)).toBe(
+      "dead owner-pid=5151 (name)",
+    );
+  });
+
+  it("keeps any truthy *.keep or *.keep-db label without a policy", async () => {
+    const { rules: _rules, ...s } = scope();
+    const dead = { "dev.reaper.owner-pid": "4242" };
+    for (const key of ["project-b.keep-db", "team.keep", "dev.reaper.keep"]) {
+      expect(
+        await classifyContainer(container("k", { ...dead, [key]: "true" }), s),
+        key,
+      ).toBeNull();
+      expect(
+        classifyNetwork({ Name: "n", Created: OLD, Labels: { ...dead, [key]: "yes" } }, s),
+        key,
+      ).toBeNull();
+    }
+    for (const labels of [{ "team.keep": "false" }, { "team.keeper": "true" }]) {
+      expect(await classifyContainer(container("k", { ...dead, ...labels }), s)).toBe(
+        "dead owner-pid=4242 (label)",
+      );
+    }
+  });
+
+  it("reaps no project-named container or network without configured rules", async () => {
+    const { rules: _rules, ...s } = scope();
+    expect(await classifyContainer(container("project-a-ci-postgres-5151", {}), s)).toBeNull();
+    expect(
+      classifyNetwork(
+        { Name: "project-a-proxy-test-5151", Created: OLD, Labels: {}, Containers: {} },
+        s,
+      ),
+    ).toBeNull();
+    const dead = { "dev.reaper.owner-pid": "4242" };
+    expect(await classifyContainer(container("c", dead), s)).toBe("dead owner-pid=4242 (label)");
+    expect(await classifyContainer(container("app-ci-5151-1", {}), s)).toBe(
+      "dead owner-pid=5151 (name)",
+    );
+  });
+});
+
 describe("docker reap safety", () => {
   it("reaps a container only by a positive allowlist rule", async () => {
     const s = scope();
     expect(await classifyContainer(container("job", { "dev.reaper.owner-pid": "4242" }), s)).toBe(
       "dead owner-pid=4242 (label)",
     );
-    expect(await classifyContainer(container("private-repo-ci-postgres-5151", {}), s)).toBe(
+    expect(await classifyContainer(container("project-a-ci-postgres-5151", {}), s)).toBe(
       "dead owner-pid=5151 (name)",
     );
     expect(
@@ -75,7 +168,7 @@ describe("docker reap safety", () => {
       await classifyContainer(container("b", { ...dead, "dev.reaper.keep": "1" }), s),
     ).toBeNull();
     expect(
-      await classifyContainer(container("c", { ...dead, "private-repo.keep-db": "true" }), s),
+      await classifyContainer(container("c", { ...dead, "project-a.keep-db": "true" }), s),
     ).toBeNull();
     expect(
       await classifyContainer(
@@ -97,7 +190,7 @@ describe("docker reap safety", () => {
 
   it("on a shared Docker Desktop daemon, trusts only fully scoped owner labels", async () => {
     const s = scope({ sharedDaemon: true });
-    expect(await classifyContainer(container("private-repo-ci-redis-4242", {}), s)).toBeNull();
+    expect(await classifyContainer(container("project-a-ci-redis-4242", {}), s)).toBeNull();
     expect(
       await classifyContainer(container("a", { "dev.reaper.owner-pid": "4242" }), s),
     ).toBeNull();
@@ -142,8 +235,10 @@ describe("docker reap safety", () => {
       Containers: {},
       ...extra,
     });
-    expect(classifyNetwork(net("private-repo-ci-smoke-4242"), s)).toBe("dead owner-pid=4242 (name)");
-    expect(classifyNetwork(net("private-repo-ci-smoke-4242", { Containers: { abc: {} } }), s)).toBeNull();
+    expect(classifyNetwork(net("project-a-ci-smoke-4242"), s)).toBe("dead owner-pid=4242 (name)");
+    expect(
+      classifyNetwork(net("project-a-ci-smoke-4242", { Containers: { abc: {} } }), s),
+    ).toBeNull();
     expect(
       classifyNetwork(
         net("app-ci-smoke-4242", { Labels: { "com.docker.compose.project": "x" } }),
@@ -160,7 +255,7 @@ describe("docker reap safety", () => {
       container("kept", { "dev.reaper.owner-pid": "4242", "com.docker.compose.project": "app" }),
     ];
     const networks = [
-      { Id: "n1", Name: "private-repo-proxy-test-5151", Created: OLD, Labels: {}, Containers: {} },
+      { Id: "n1", Name: "project-a-proxy-test-5151", Created: OLD, Labels: {}, Containers: {} },
       { Id: "n2", Name: "team-net", Created: OLD, Labels: {}, Containers: {} },
     ];
     const run: DockerRunner = async (args) => {
@@ -170,7 +265,7 @@ describe("docker reap safety", () => {
       if (a === "ps") return { code: 0, stdout: "id-stale\nid-kept\n" };
       if (a === "inspect") return { code: 0, stdout: JSON.stringify(inspect) };
       if (a === "network" && b === "ls")
-        return { code: 0, stdout: "n1\tsilo-proxy-test-5151\nn0\tbridge\nn2\tteam-net\n" };
+        return { code: 0, stdout: "n1\tproject-a-proxy-test-5151\nn0\tbridge\nn2\tteam-net\n" };
       if (a === "network" && b === "inspect") return { code: 0, stdout: JSON.stringify(networks) };
       return { code: 0, stdout: "" };
     };

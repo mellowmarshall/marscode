@@ -1,11 +1,11 @@
 # shellcheck shell=bash
 # The pinned download and store switching of the native-tool installs,
-# ci-jvm.sh, ci-rust.sh, ci-uv.sh and ci-vp.sh (private-repo, #821, #1371), sourced by each.
+# ci-jvm.sh, ci-rust.sh, ci-uv.sh and ci-vp.sh, sourced by each.
 # Bash 3.2 (a Mac CI host's /bin/bash).
 #
 #   ci_platform                 linux-x64 (Linux x86_64, WSL included),
 #                               linux-arm64 (Linux aarch64: a Linux machine on
-#                               a Mac, private-repo) or darwin-arm64 (macOS
+#                               a Mac) or darwin-arm64 (macOS
 #                               arm64); 1 on any other
 #   ci_fetch URL SHA256 OUT     download the vendor's HTTPS URL to OUT and keep
 #                               it only when its sha256 is SHA256

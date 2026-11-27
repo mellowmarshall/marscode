@@ -1,0 +1,5 @@
+#!/bin/sh
+# Refuses a commit message or author/committer identity that breaks PLAYBOOK §16 hygiene.
+set -e
+root=$(git rev-parse --show-toplevel)
+node "$root/packages/hygiene/src/bin.ts" commit-msg "$1"

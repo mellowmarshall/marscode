@@ -6,7 +6,8 @@ import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
-import { reapCargo, type CargoReapOptions } from "./ReaperCargo.ts";
+import { defaultCargoRoots, reapCargo, type CargoReapOptions } from "./ReaperCargo.ts";
+import { parseReaperCargoRoots, readReaperCargoRootsSync } from "./ReaperCargoPolicy.ts";
 
 const NOW_MS = Date.parse("2030-06-01T00:00:00.000Z");
 const DAY = 86_400_000;
@@ -174,5 +175,28 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("reapCargo", ()
     expect(dry.removed).toBe(1);
     expect(NodeFS.existsSync(NodePath.join(target, "debug", "deps"))).toBe(true);
     expect(NodeFS.existsSync(NodePath.join(project, "debug", "deps"))).toBe(true);
+  });
+});
+
+describe("cargo roots from the policy file", () => {
+  it("reads absolute [cargo] roots and adds existing ones to the built-in roots", async () => {
+    const extra = tempDir("reaper-cargo-root-");
+    const policy = NodePath.join(tempDir("reaper-cargo-policy-"), "policy.toml");
+    NodeFS.writeFileSync(
+      policy,
+      [
+        "[docker]",
+        'roots = ["/ignored"]',
+        "[cargo]",
+        `roots = ["${extra}/", "relative/target", "/", "/missing-root-x"] # host-local`,
+      ].join("\n"),
+    );
+    expect(readReaperCargoRootsSync(policy)).toEqual([extra, "/missing-root-x"]);
+    expect(parseReaperCargoRoots("[docker]\nkeep_labels = []\n")).toEqual([]);
+    expect(readReaperCargoRootsSync(NodePath.join(extra, "absent.toml"))).toEqual([]);
+    const home = tempDir("reaper-cargo-home-");
+    const roots = await defaultCargoRoots(home, {}, readReaperCargoRootsSync(policy));
+    expect(roots).toContain(extra);
+    expect(roots).not.toContain("/missing-root-x");
   });
 });

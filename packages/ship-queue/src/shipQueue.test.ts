@@ -145,6 +145,7 @@ function makeFixture(options?: { readonly grant?: () => GuardCheck }) {
       },
     },
     secretScan: async () => [],
+    hygieneScan: async () => ({ kind: "skip", log: "house hygiene: skipped (fixture)" }),
     clock,
     isProcessAlive,
     self: SELF,
@@ -474,6 +475,37 @@ describe("ship-queue engine", () => {
     expect(sh(fx.remoteDir, ["branch", "--list", "feat/10-leaky"])).toBe("");
   });
 
+  it("fails the house stage on a hygiene finding before anything is pushed", async () => {
+    const fx = makeFixture();
+    const seen: string[] = [];
+    const deps: ShipQueueDeps = {
+      ...fx.deps,
+      hygieneScan: async (input) => {
+        seen.push(`${input.repo} ${input.title}`);
+        return {
+          kind: "fail",
+          reason: "house_hygiene classes=data-layout",
+          log: "data-layout abc123def456:g.txt:1 (public:data-dev-root)",
+        };
+      },
+    };
+    const wt = fx.worktree("feat/15-hygiene", { "g.txt": "g\n" });
+    const id = await fx.submitOk(wt, "feat/15-hygiene");
+    registerWatcher(fx.root, id, SELF);
+
+    await runDueWork(deps);
+
+    expect(seen).toHaveLength(1);
+    expect(readJob(fx.root, id)).toMatchObject({
+      state: "failed",
+      reason: "house_hygiene classes=data-layout",
+    });
+    expect(readLog(fx.root, id)).toContain(
+      "data-layout abc123def456:g.txt:1 (public:data-dev-root)",
+    );
+    expect(sh(fx.remoteDir, ["branch", "--list", "feat/15-hygiene"])).toBe("");
+  });
+
   it("keeps a worktree that gained uncommitted work during the merge", async () => {
     const fx = makeFixture();
     const wt = fx.worktree("feat/11-dirty", { "h.txt": "h\n" });
@@ -543,14 +575,41 @@ describe("submit gates", () => {
       branch: "feat/14-retry",
       title: "retry",
       body: "Closes #8\n\n## Premise\nPremise: p\nTest: t\nResult: r\n",
-      identity: { session: "session-fixture", thread: "thread-fixture" },
+      identity: {
+        session: "00000000-0000-4000-8000-00000000a001",
+        thread: "00000000-0000-4000-8000-00000000b002",
+      },
     });
     if (!res.ok) throw new Error(res.reason);
     expect(res.warnings).toEqual([]);
     expect(NodeFS.readFileSync(jobBodyPath(fx.root, res.id), "utf8")).toMatch(
-      /Result: r\n\nAgent Session: session-fixture\nAgent Thread: thread-fixture\n$/,
+      /Result: r\n\nAgent Session: 00000000-0000-4000-8000-00000000a001\nAgent Thread: 00000000-0000-4000-8000-00000000b002\n$/,
     );
-    expect(res.record.thread_id).toBe("thread-fixture");
+    expect(res.record.thread_id).toBe("00000000-0000-4000-8000-00000000b002");
+  });
+
+  it("stamps only UUID ids on a public or unknown repo and raw ids on a private one", async () => {
+    const identity = { session: "sess-raw-1", thread: "00000000-0000-4000-8000-00000000b002" };
+    const submitWith = async (visibility: "private" | "public" | undefined, branch: string) => {
+      const fx = makeFixture();
+      const wt = fx.worktree(branch, { "v.txt": `${branch}\n` });
+      const forge: ShipForge =
+        visibility === undefined
+          ? fx.deps.forge
+          : { ...fx.deps.forge, repoVisibility: async () => visibility };
+      const res = await submitJob(
+        { ...fx.deps, forge },
+        { worktree: wt, branch, title: "t", body: "Closes #8\n", identity },
+      );
+      if (!res.ok) throw new Error(res.reason);
+      return NodeFS.readFileSync(jobBodyPath(fx.root, res.id), "utf8");
+    };
+    expect(await submitWith("private", "feat/16-private")).toBe(
+      `Closes #8\n\nAgent Session: sess-raw-1\nAgent Thread: ${identity.thread}\n`,
+    );
+    const neutral = `Closes #8\n\nAgent Thread: ${identity.thread}\n`;
+    expect(await submitWith("public", "feat/17-public")).toBe(neutral);
+    expect(await submitWith(undefined, "feat/18-unknown")).toBe(neutral);
   });
 });
 

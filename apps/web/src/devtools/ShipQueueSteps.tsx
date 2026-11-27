@@ -1,7 +1,7 @@
 /**
  * Pipeline step derivation and state helpers for ship-queue jobs.
  * Matches exact `sq_job.py`, `ship-queue-pipeline.sh`, `ship-queue-ci.sh`, `ship-queue-land.sh`,
- * and DevDeck (`private-repo`, `#1240`) semantics.
+ * and DevDeck post-merge (deploy) semantics.
  */
 import { msg } from "gt-react";
 

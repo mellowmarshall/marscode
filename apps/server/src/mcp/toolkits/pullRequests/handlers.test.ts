@@ -40,6 +40,7 @@ import * as PullRequestService from "../../../pullRequest/PullRequestService.ts"
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
+import * as GitHubProseTestkit from "../githubProse.testkit.ts";
 import { listThreadPullRequests } from "./handlers.ts";
 import * as PullRequestsHandlers from "./handlers.ts";
 import { CHILD_PULL_REQUEST_REPORT_NEXT, PullRequestsToolkit } from "./tools.ts";
@@ -155,6 +156,7 @@ interface HarnessOptions {
   >;
   readonly pullRequests?: Partial<PullRequestService.PullRequestService["Service"]>;
   readonly git?: Partial<GitManager.GitManager["Service"]>;
+  readonly github?: GitHubProseTestkit.GitHubBoundary;
 }
 
 const NO_GUIDE: PullRequestReviewGuideResult = { guide: null, run: null, currentHeadSha: "head-1" };
@@ -214,6 +216,7 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
     Layer.mock(GitManager.GitManager)(options.git ?? {}),
     Layer.succeed(SecureRandom.SecureRandom, testCrypto),
     McpToolAccessTestkit.liveThreadsLayer,
+    GitHubProseTestkit.layer(options.github),
   );
   const toolkit = yield* PullRequestsToolkit.pipe(
     Effect.provide(
@@ -1510,5 +1513,72 @@ describe("source control tools", () => {
       });
       expect(reviewBodies).toEqual([`Looks good.\n\n${expectedTrailer}`]);
     }),
+  );
+
+  it.effect(
+    "refuses public PR text with §16 findings at every posting tool and posts clean text unstamped",
+    () =>
+      Effect.gen(function* () {
+        const posted: Array<string> = [];
+        const reads: Array<string> = [];
+        const denylist = yield* GitHubProseTestkit.tempDenylist(
+          "@class host-names\nwidget-box-[0-9]+\n",
+        );
+        const harness = yield* makeHarness({
+          thread: branchThread,
+          github: {
+            visibility: { "t3tools/t3code": "public" },
+            reads,
+            env: { HOME: "/home/dev", MARSCODE_HYGIENE_DENYLIST: denylist },
+          },
+          git: {
+            createPullRequest: (input) =>
+              Effect.sync(() => void posted.push(`create:${input.body}`)).pipe(
+                Effect.as({
+                  status: "created" as const,
+                  url: "https://github.com/t3tools/t3code/pull/42",
+                  number: 42,
+                  baseBranch: "main",
+                  headBranch: "tools",
+                  title: input.title,
+                }),
+              ),
+          },
+          pullRequests: {
+            update: (input) => Effect.sync(() => void posted.push(`update:${input.title}`)),
+            comment: (input) => Effect.sync(() => void posted.push(`comment:${input.body}`)),
+            replyToThread: (input) => Effect.sync(() => void posted.push(`reply:${input.body}`)),
+            submitReview: (input) => Effect.sync(() => void posted.push(`review:${input.body}`)),
+          },
+        });
+        const banned = "Ran on widget-box-9";
+        const rejected = [
+          yield* harness
+            .call("pull_request_create", { title: "Fix", body: banned })
+            .pipe(Effect.flip),
+          yield* harness
+            .call("pull_request_update", { title: "Fix /data/Dev/widget-lab" })
+            .pipe(Effect.flip),
+          yield* harness.call("pull_request_respond", { body: banned }).pipe(Effect.flip),
+          yield* harness
+            .call("pull_request_respond", { reviewThreadId: "open-thread", body: banned })
+            .pipe(Effect.flip),
+          yield* harness
+            .call("pull_request_review", { verdict: "comment", body: banned })
+            .pipe(Effect.flip),
+        ];
+        expect(rejected.map((error) => error._tag)).toEqual(
+          Array.from({ length: 5 }, () => "GitHubTextRejectedError"),
+        );
+        expect(rejected[1]).toMatchObject({
+          findings: ["data-layout title:1 (public:data-dev-root)"],
+        });
+        expect(rejected.map((error) => error.message).join("\n")).not.toMatch(/widget/);
+        expect(posted).toEqual([]);
+
+        yield* harness.call("pull_request_respond", { body: "Top-level comment." });
+        expect(posted).toEqual(["comment:Top-level comment."]);
+        expect(new Set(reads)).toEqual(new Set(["t3tools/t3code"]));
+      }),
   );
 });

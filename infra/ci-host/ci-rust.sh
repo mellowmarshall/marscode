@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The CI hosts' Rust, for the toolchain in ci-hosts.json (private-repo): a
+# The CI hosts' Rust, for the toolchain in ci-hosts.json: a
 # repo's rust-toolchain.toml pins a release with its components, and its CI
 # sets RUSTUP_AUTO_INSTALL=0, so a host must hold that release before a job
 # comes (the manifest's rust tool). The cargo tool is the same pinned release

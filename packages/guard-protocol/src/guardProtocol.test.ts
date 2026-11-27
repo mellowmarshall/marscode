@@ -34,7 +34,7 @@ describe("@t3tools/guard-protocol", () => {
     );
 
     const key1 = computeBundleKey({
-      repo: "private-repo",
+      repo: "example-org/example-repo",
       branch: "issue-1352",
       prOrIssue: "#1352",
       guard: "ship-queue",
@@ -44,7 +44,7 @@ describe("@t3tools/guard-protocol", () => {
       bodySha256: "",
     });
     const key2 = computeBundleKey({
-      repo: "private-repo",
+      repo: "example-org/example-repo",
       branch: "issue-1352",
       prOrIssue: "#1352",
       guard: "ship-queue",
@@ -54,7 +54,7 @@ describe("@t3tools/guard-protocol", () => {
       bodySha256: "",
     });
     const keyChanged = computeBundleKey({
-      repo: "private-repo",
+      repo: "example-org/example-repo",
       branch: "issue-1352",
       prOrIssue: "#1352",
       guard: "ship-queue",
@@ -72,7 +72,7 @@ describe("@t3tools/guard-protocol", () => {
     const diffSha = canonicalProtectedDiffSha256("+marscode");
     const ok = parseBundleSpec(
       {
-        repo: "private-repo",
+        repo: "example-org/example-repo",
         branch: "issue-1352",
         gates: [{ gateId: "allowlist", reason: "exceptions.json modified" }],
         protectedPaths: ["host-guards/exceptions.json"],
@@ -88,7 +88,7 @@ describe("@t3tools/guard-protocol", () => {
 
     const wholeCommit = parseBundleSpec(
       {
-        repo: "private-repo",
+        repo: "example-org/example-repo",
         branch: "issue-1352",
         gates: [
           { gateId: "allowlist", reason: "exceptions.json modified" },
@@ -117,7 +117,7 @@ describe("@t3tools/guard-protocol", () => {
         v: 1,
         grantId: "t3g_0123456789abcdef",
         bundleKey: "a".repeat(64),
-        repo: "private-repo",
+        repo: "example-org/example-repo",
         branch: "issue-1352",
         prOrIssue: "#1352",
         guard: "ship-queue",

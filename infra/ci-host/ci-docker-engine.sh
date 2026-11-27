@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Keeps a CI host's Docker engine answering (private-repo). OrbStack on the
+# Keeps a CI host's Docker engine answering. OrbStack on the
 # Mac hangs or stops while the Mac sleeps unused; before #874 the queue read
 # the client's version only, and a hung engine surfaced as docker-shared-root
 # "needs-admin".

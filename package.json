@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "prepare": "vp config --no-agent",
+    "prepare": "node .githooks/configure.ts",
     "dev": "node scripts/dev-runner.ts dev",
     "profile:startup": "node scripts/profile-startup.mjs",
     "dev:share": "node scripts/dev-runner.ts dev --share",

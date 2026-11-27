@@ -12,15 +12,15 @@ import type { JobSummary } from "./jobs/jobTypes";
 
 function makeHost(overrides: Partial<MergedFleetHost>): MergedFleetHost {
   return {
-    id: "host-x",
-    shortName: "host-x",
-    probeHostName: "host-x",
+    id: "host-c",
+    shortName: "host-c",
+    probeHostName: "host-c",
     isLocal: false,
     hasDevdeckNode: true,
     status: "online",
     problem: null,
     platform: "linux",
-    ssh: "host-x-wsl",
+    ssh: "host-c-wsl",
     note: null,
     telemetry: null,
     power: null,
@@ -57,26 +57,26 @@ function makeJob(id: string, overrides: Partial<JobSummary> = {}): JobSummary {
 }
 
 describe("Fleet host environment matching", () => {
-  it("normalizes host labels the same way as the server prober", () => {
-    expect(normalizeFleetHostToken("host-x WSL")).toBe("host-x");
-    expect(normalizeFleetHostToken("host-x-wsl WSL")).toBe("host-x");
+  it("normalizes host labels by case, WSL suffix, .local suffix, and punctuation", () => {
+    expect(normalizeFleetHostToken("Host-C WSL")).toBe("hostc");
+    expect(normalizeFleetHostToken("host-c-wsl WSL")).toBe("hostc");
     expect(normalizeFleetHostToken("box_wsl")).toBe("box");
-    expect(normalizeFleetHostToken("dev-host-x")).toBe("host-x");
-    expect(normalizeFleetHostToken("host-x.local")).toBe("host-x");
+    expect(normalizeFleetHostToken("Dev-Model-7X")).toBe("devmodel7x");
+    expect(normalizeFleetHostToken("host-d.local")).toBe("hostd");
     expect(normalizeFleetHostToken(null)).toBe("");
   });
 
   it("matches a remote host to its linked environment by a WSL label or its SSH alias", () => {
     const active = EnvironmentId.make("env-local");
-    const msi = EnvironmentId.make("env-msi");
+    const hostCEnv = EnvironmentId.make("env-host-c");
     const environments = [
       { environmentId: active, label: "This machine", serverConfig: null },
-      { environmentId: msi, label: "host-x-wsl WSL", serverConfig: null },
+      { environmentId: hostCEnv, label: "host-c-wsl WSL", serverConfig: null },
     ];
-    expect(matchHostEnvironmentId(makeHost({}), active, environments)).toBe(msi);
+    expect(matchHostEnvironmentId(makeHost({}), active, environments)).toBe(hostCEnv);
     // Only the SSH alias names the peer.
-    const byAlias = makeHost({ id: "gamer", shortName: "gamer", probeHostName: null });
-    expect(matchHostEnvironmentId(byAlias, active, environments)).toBe(msi);
+    const byAlias = makeHost({ id: "alias-only", shortName: "alias-only", probeHostName: null });
+    expect(matchHostEnvironmentId(byAlias, active, environments)).toBe(hostCEnv);
     expect(matchHostEnvironmentId(makeHost({ isLocal: true }), active, environments)).toBe(active);
     expect(
       matchHostEnvironmentId(
@@ -89,13 +89,13 @@ describe("Fleet host environment matching", () => {
 
   it("never matches the active environment for a remote host", () => {
     const active = EnvironmentId.make("env-local");
-    const environments = [{ environmentId: active, label: "host-x", serverConfig: null }];
+    const environments = [{ environmentId: active, label: "host-c", serverConfig: null }];
     expect(matchHostEnvironmentId(makeHost({}), active, environments)).toBeNull();
   });
 
   it("keeps same-id local and remote jobs apart and routes each to its environment", () => {
     const active = EnvironmentId.make("env-local");
-    const msi = EnvironmentId.make("env-msi");
+    const hostCEnv = EnvironmentId.make("env-host-c");
     const local = [makeJob("a"), makeJob("sq", { source: "ship-queue" })];
     const remote = [
       makeJob("r1", { binding: { host: "DESKTOP-123" } }),
@@ -105,20 +105,20 @@ describe("Fleet host environment matching", () => {
     const merged = mergeRemoteEnvironmentJobs({
       activeEnvironmentId: active,
       localJobs: local,
-      remoteEnvironmentId: msi,
+      remoteEnvironmentId: hostCEnv,
       remoteJobs: remote,
       remoteHost: makeHost({}),
     });
     const keys = merged.jobs.map((j) => j.id);
-    expect(keys).toEqual(["a", "env:env-msi:r1", "env:env-msi:a"]);
-    for (const j of merged.jobs.slice(1)) expect(j.binding.host).toBe("host-x");
+    expect(keys).toEqual(["a", "env:env-host-c:r1", "env:env-host-c:a"]);
+    for (const j of merged.jobs.slice(1)) expect(j.binding.host).toBe("host-c");
     expect(merged.jobs[0]!.binding.host).toBe("");
     expect(resolveFleetJobTarget(merged.targets, "a", active)).toEqual({
       environmentId: active,
       jobId: "a",
     });
-    expect(resolveFleetJobTarget(merged.targets, "env:env-msi:a", active)).toEqual({
-      environmentId: msi,
+    expect(resolveFleetJobTarget(merged.targets, "env:env-host-c:a", active)).toEqual({
+      environmentId: hostCEnv,
       jobId: "a",
     });
     expect(resolveFleetJobTarget(merged.targets, "unknown", active)).toEqual({
@@ -130,7 +130,7 @@ describe("Fleet host environment matching", () => {
       const only = mergeRemoteEnvironmentJobs({
         activeEnvironmentId: active,
         localJobs: local,
-        remoteEnvironmentId: msi,
+        remoteEnvironmentId: hostCEnv,
         remoteJobs: remote,
         remoteHost,
       });

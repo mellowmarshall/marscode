@@ -41,7 +41,7 @@ function expectNoLocalDetail(session: FleetSessionItem): void {
 }
 
 const peerHost = {
-  name: "host-x",
+  name: "host-c",
   uptime_s: 4000,
   cpus: 16,
   cpu_pct: 40,
@@ -69,8 +69,8 @@ describe("Fleet peer session redaction", () => {
 
   it("includes redacted sessions in the peer self node state, and full sessions locally", () => {
     const sources = {
-      hostname: "dev-host-x",
-      hostSampler: new NativeHostSampler({ hostname: "dev-host-x", platform: "linux" }),
+      hostname: "host-a",
+      hostSampler: new NativeHostSampler({ hostname: "host-a", platform: "linux" }),
       servers: [],
       sessions: [localSession],
     };
@@ -127,7 +127,7 @@ describe("Fleet RemoteNodeProber remote sessions", () => {
         servers: [],
         sessions: [{ ...localSession, close_allowed: true }, { bogus: true }],
       },
-      { name: "host-x", ssh: "host-x-wsl" },
+      { name: "host-c", ssh: "host-c-wsl" },
     );
     expect(node?.sessions).toHaveLength(1);
     expectNoLocalDetail(node!.sessions![0]!);
@@ -139,9 +139,9 @@ describe("Fleet RemoteNodeProber remote sessions", () => {
     const prober = new RemoteNodeProber({
       listPeerLinks: async () => [
         {
-          environmentId: "env-msi",
-          label: "host-x-wsl WSL",
-          resolve: async () => ({ url: "https://msi.example", token: "tok" }),
+          environmentId: "env-host-c",
+          label: "host-c-wsl WSL",
+          resolve: async () => ({ url: "https://host-c.example", token: "tok" }),
         },
       ],
       fetchJson: async () => ({ host: peerHost, servers: [], sessions: [localSession] }),
@@ -150,10 +150,10 @@ describe("Fleet RemoteNodeProber remote sessions", () => {
         return null;
       },
     });
-    const node = await prober.probeTarget({ name: "host-x", ssh: "host-x-wsl" });
+    const node = await prober.probeTarget({ name: "host-c", ssh: "host-c-wsl" });
     expect(sshCalls).toBe(0);
     expect(node.sessions?.map((s) => s.name)).toEqual(["vitest"]);
-    expect(prober.getCachedNodes()["host-x"]?.sessions).toHaveLength(1);
+    expect(prober.getCachedNodes()["host-c"]?.sessions).toHaveLength(1);
   });
 });
 

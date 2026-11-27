@@ -21,16 +21,18 @@ const SESSION_RE = /^.+-[0-9a-z]+$/;
 const lstatOrNull = (p: string) => NodeFSP.lstat(p).catch(() => null);
 const isPlainDir = async (p: string) => (await lstatOrNull(p))?.isDirectory() === true;
 
+/** Built-in roots plus the policy's `[cargo] roots`, kept when they are directories. */
 export async function defaultCargoRoots(
   homeDir: string,
   env: NodeJS.ProcessEnv,
+  extraRoots: ReadonlyArray<string> = [],
 ): Promise<string[]> {
   const candidates = [
     "/data/Dev",
     NodePath.join(homeDir, "Dev-data"),
     NodePath.join(homeDir, "Dev"),
     ...(env.CARGO_TARGET_DIR ? [env.CARGO_TARGET_DIR] : []),
-    "/data/private-repo/cargo-target",
+    ...extraRoots,
   ];
   const out: string[] = [];
   for (const root of candidates) {

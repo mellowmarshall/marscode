@@ -8,12 +8,10 @@ import type { MergedFleetHost } from "./devdeckTypes";
 import { readCachedCapabilities } from "./devtoolsStreams";
 import { isHostJob, type JobSummary } from "./jobs/jobTypes";
 
-/** Same rules as `normalizeToken` in the server `RemoteNodeProber.ts`. */
 export function normalizeFleetHostToken(raw: string | null | undefined): string {
   return (raw ?? "")
     .trim()
     .toLowerCase()
-    .replace(/^dev-/, "")
     .replace(/\.local$/, "")
     .replace(/(?:[\s_-]+wsl)+$/, "")
     .replace(/[^a-z0-9]+/g, "");

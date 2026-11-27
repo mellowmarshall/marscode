@@ -82,7 +82,7 @@ describe("resolveThreadShipStatus", () => {
       },
       {
         id: "102",
-        worktree: "/home/dev/.t3private-repo/wt-b",
+        worktree: "/home/dev/.t3/worktrees/project-b/wt-b",
         branch: "feat/deploy-me",
         state: "running",
         last_marker: "POST_MERGE job=102",
@@ -96,7 +96,7 @@ describe("resolveThreadShipStatus", () => {
         threadId: "thread-a",
         branch: "feat/a",
         worktreePath: null,
-        gitCwd: "/home/devprivate-repo",
+        gitCwd: "/home/dev/Dev/example-repo",
       }),
     ).toEqual({
       phase: "shipping",
@@ -108,8 +108,8 @@ describe("resolveThreadShipStatus", () => {
         jobs,
         threadId: "thread-b",
         branch: "feat/deploy-me",
-        worktreePath: "/home/dev/.t3private-repo/wt-b/",
-        gitCwd: "/home/devprivate-repo",
+        worktreePath: "/home/dev/.t3/worktrees/project-b/wt-b/",
+        gitCwd: "/home/dev/Dev/project-b",
       }),
     ).toEqual({
       phase: "deploying",
@@ -167,7 +167,7 @@ describe("resolveThreadShipStatus", () => {
         threadId: "thread-done",
         branch: "main",
         worktreePath: null,
-        gitCwd: "/home/devprivate-repo",
+        gitCwd: "/home/dev/Dev/example-repo",
       }),
     ).toBeNull();
   });

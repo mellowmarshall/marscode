@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The CI hosts' uv and its managed Python 3.12, for the toolchain in
-# ci-hosts.json (private-repo): Ubuntu 24.04 hosts have CPython 3.12.3 linked
+# ci-hosts.json: Ubuntu 24.04 hosts have CPython 3.12.3 linked
 # against system SQLite 3.45.1 while Ubuntu 26.04 and macOS hosts used uv's
 # standalone CPython builds with newer SQLite, which named an EXPLAIN QUERY
 # PLAN step differently. Every CI host runs the same pinned uv and the same
@@ -21,8 +21,8 @@
 # <data root>/ship-queue-ci/uv-<version>, switched with switch_to (keeping the
 # current and previous build), and uv and uvx link into
 # ~/.local/share/ship-queue-ci/bin and ~/.local/bin. CPython unpacks as a real
-# directory, ~/.local/share/uv/python/cpython-<ver>-<key>, uv's own layout
-# (private-repo): under only-managed, uv accepts an interpreter only when its
+# directory, ~/.local/share/uv/python/cpython-<ver>-<key>, uv's own layout:
+# under only-managed, uv accepts an interpreter only when its
 # real sys.base_prefix lies in uv's Python directory, and CPython resolves
 # symlinks to find its prefix, so a build linked in from the data root is
 # "not managed" and uv recreates every project venv on every run.

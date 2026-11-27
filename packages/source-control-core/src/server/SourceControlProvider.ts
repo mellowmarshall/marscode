@@ -228,6 +228,15 @@ export class SourceControlProvider extends Context.Service<
       /** The host the repository is on. Without it, the checkout's host. */
       readonly host?: string;
     }) => Effect.Effect<SourceControlRepositoryCloneUrls, SourceControlProviderError>;
+    /**
+     * Who can read the repository; GitHub `internal` reads as `private`. Absent where the host
+     * cannot say, which callers treat as public.
+     */
+    readonly getRepositoryVisibility?: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host?: string;
+    }) => Effect.Effect<SourceControlRepositoryVisibility, SourceControlProviderError>;
     readonly createRepository: (input: {
       readonly cwd: string;
       readonly repository: string;

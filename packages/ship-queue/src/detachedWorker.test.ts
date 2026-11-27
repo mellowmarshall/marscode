@@ -58,6 +58,7 @@ case "$sub" in
     g -C "$c" push -q origin "HEAD:refs/heads/$base"
     sed -i 4s/open/merged/ "$f"
     echo "merged #$n" ;;
+  "api repos/"*) echo private ;;
   *) echo "fake gh: unsupported $sub" >&2; exit 2 ;;
 esac
 `;
@@ -126,6 +127,12 @@ describe("detached worker", () => {
     const bin = NodePath.join(tmp, "bin");
     NodeFS.mkdirSync(bin);
     NodeFS.writeFileSync(NodePath.join(bin, "gh"), FAKE_GH, { mode: 0o755 });
+    // Shadows the host's playbook so the advisory challenge never reaches a live reviewer.
+    NodeFS.writeFileSync(
+      NodePath.join(bin, "playbook"),
+      '#!/usr/bin/env bash\nwhile [ $# -gt 0 ]; do [ "$1" = --out ] && printf "PLAYBOOK REVIEW: PASS\\n" > "$2"; shift; done\n',
+      { mode: 0o755 },
+    );
     NodeFS.writeFileSync(NodePath.join(tmp, "body.md"), "Adds z.\n\nCloses #20\n");
     const root = NodePath.join(tmp, "queue");
     const env = {
@@ -163,7 +170,9 @@ describe("detached worker", () => {
     expect(code, readLog(root, id)).toBe(0);
     expect(lines[0]).toMatch(new RegExp(`^QUEUED job=${id} branch=feat/20-detached`));
     expect(lines).toEqual(expect.arrayContaining(["PUSH_EXIT=0", "PR=1", "MERGE_EXIT=0"]));
-    expect(lines.at(-1)).toMatch(new RegExp(`^DONE job=${id} pr=1 at=`));
+    expect(lines.findLast((line) => line.startsWith("DONE "))).toMatch(
+      new RegExp(`^DONE job=${id} pr=1 at=`),
+    );
 
     const job = readJob(root, id);
     expect(job?.state).toBe("done");

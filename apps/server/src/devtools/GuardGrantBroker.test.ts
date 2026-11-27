@@ -112,7 +112,7 @@ describe("GuardGrantBroker bundled content-digest approvals & SQLite persistence
             "diff --git a/host-guards/exceptions.json\n+marscode",
           );
           const bundle1 = {
-            repo: "private-repo",
+            repo: "example-org/example-repo",
             branch: "issue-1352",
             pr_or_issue: "#1352",
             gates: [{ gate_id: "allowlist", reason: "exceptions.json modified" }],
@@ -135,7 +135,7 @@ describe("GuardGrantBroker bundled content-digest approvals & SQLite persistence
             v: 1,
             op: "request",
             guard: "ship-queue",
-            command: ["submit", "/dataprivate-repo/issue-1352", "issue-1352"],
+            command: ["submit", "/data/Dev/example-repo/issue-1352", "issue-1352"],
             cwd: tmpDir,
             proposed_reason: "Add marscode waiver",
             bundle: bundle1,
@@ -147,7 +147,7 @@ describe("GuardGrantBroker bundled content-digest approvals & SQLite persistence
             v: 1,
             op: "request",
             guard: "ship-queue",
-            command: ["submit", "/dataprivate-repo/issue-1352", "issue-1352"],
+            command: ["submit", "/data/Dev/example-repo/issue-1352", "issue-1352"],
             cwd: tmpDir,
             proposed_reason: "Add marscode waiver",
             bundle: bundle1,
@@ -184,7 +184,7 @@ describe("GuardGrantBroker bundled content-digest approvals & SQLite persistence
           // Verify offline Ed25519 signature (includes threadId and expiresAt).
           const stored = yield* repo.findActiveByBundleKey(
             computeBundleKey({
-              repo: "private-repo",
+              repo: "example-org/example-repo",
               branch: "issue-1352",
               prOrIssue: "#1352",
               guard: "ship-queue",
@@ -230,7 +230,7 @@ describe("GuardGrantBroker bundled content-digest approvals & SQLite persistence
               v: 1,
               op: "check",
               guard: "ship-queue",
-              command: ["submit", "/dataprivate-repo/issue-1352", "issue-1352"],
+              command: ["submit", "/data/Dev/example-repo/issue-1352", "issue-1352"],
               cwd: tmpDir,
               bundle: bundle1,
             }),
@@ -240,7 +240,7 @@ describe("GuardGrantBroker bundled content-digest approvals & SQLite persistence
 
           // 2c. Forged / tampered SQLite row is rejected by signature verification.
           const forgedKey = computeBundleKey({
-            repo: "private-repo",
+            repo: "example-org/example-repo",
             branch: "forged-branch",
             prOrIssue: "#9999",
             guard: "ship-queue",
@@ -253,7 +253,7 @@ describe("GuardGrantBroker bundled content-digest approvals & SQLite persistence
             grantId: "t3g_forged_row",
             bundleKey: forgedKey,
             threadId: "thread-alpha",
-            repo: "private-repo",
+            repo: "example-org/example-repo",
             branch: "forged-branch",
             worktree: tmpDir,
             prOrIssue: "#9999",
@@ -274,7 +274,7 @@ describe("GuardGrantBroker bundled content-digest approvals & SQLite persistence
               v: 1,
               op: "check",
               guard: "ship-queue",
-              command: ["submit", "/dataprivate-repo/forged", "forged-branch"],
+              command: ["submit", "/data/Dev/example-repo/forged", "forged-branch"],
               cwd: tmpDir,
               bundle: { ...bundle1, branch: "forged-branch", pr_or_issue: "#9999" },
             }),
@@ -311,7 +311,7 @@ describe("GuardGrantBroker bundled content-digest approvals & SQLite persistence
               v: 1,
               op: "request",
               guard: "ship-queue",
-              command: ["submit", "/dataprivate-repo/issue-1352", "issue-1352"],
+              command: ["submit", "/data/Dev/example-repo/issue-1352", "issue-1352"],
               cwd: tmpDir,
               bundle: { ...bundle1, commit_sha: "b".repeat(40) },
             }),
@@ -330,7 +330,7 @@ describe("GuardGrantBroker bundled content-digest approvals & SQLite persistence
               v: 1,
               op: "check",
               guard: "ship-queue",
-              command: ["submit", "/dataprivate-repo/issue-1352", "issue-1352"],
+              command: ["submit", "/data/Dev/example-repo/issue-1352", "issue-1352"],
               cwd: tmpDir,
               bundle: { ...bundle1, protected_diff_sha256: diffSha2 },
             }),
@@ -344,7 +344,7 @@ describe("GuardGrantBroker bundled content-digest approvals & SQLite persistence
               op: "request",
               wait: false,
               guard: "ship-queue",
-              command: ["submit", "/dataprivate-repo/issue-1352", "issue-1352", "--no-review"],
+              command: ["submit", "/data/Dev/example-repo/issue-1352", "issue-1352", "--no-review"],
               cwd: tmpDir,
               bundle: {
                 ...bundle1,
@@ -384,7 +384,7 @@ describe("GuardGrantBroker bundled content-digest approvals & SQLite persistence
 
           // 6. PR merge auto-invalidates the remaining bundle grant.
           const invalidated = yield* Effect.promise(() =>
-            broker.invalidateRepoPr("private-repo", 1352, "pr-merged"),
+            broker.invalidateRepoPr("example-org/example-repo", 1352, "pr-merged"),
           );
           expect(invalidated).toBe(1);
           const afterMerge = yield* Effect.promise(() => broker.listActiveGrants());

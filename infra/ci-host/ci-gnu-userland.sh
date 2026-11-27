@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs the GNU userland on a macOS CI host, for the gnu-userland tool in
-# ci-hosts.json (private-repo): GNU coreutils, sed, findutils and grep, and a
+# ci-hosts.json: GNU coreutils, sed, findutils and grep, and a
 # setsid and a flock, so a CI step runs the same `stat -c`, `sed -i`,
 # `date -d`, `touch -d`, `realpath -m`, `paste`, `timeout`, `setsid` and
 # `flock -w` on every host. tar stays the Mac's own (bsdtar): it reads .xz
@@ -73,7 +73,7 @@ for t in stat sed find grep timeout realpath paste; do "$d/bin/$t" --version >/d
 "$d/bin/setsid" -w true || { echo "ci-gnu-userland: $d/bin/setsid does not run" >&2; exit 1; }
 "$d/bin/flock" -w 1 "$src/t.lock" true || { echo "ci-gnu-userland: $d/bin/flock does not run" >&2; exit 1; }
 # The system's ln and mv: a provision runs this with an older bundle's GNU
-# tools first on PATH, and GNU mv has no -h (private-repo).
+# tools first on PATH, and GNU mv has no -h.
 /bin/ln -sfn "${d##*/}" "$s/.gnu.next"
 # -h: replace the link itself, never move into the directory it names.
 /bin/mv -fh "$s/.gnu.next" "$s/gnu"

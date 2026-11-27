@@ -17,7 +17,9 @@ import * as ServerSettings from "../../serverSettings.ts";
 import * as ReaperPolicy from "../ReaperPolicy.ts";
 import * as StorageManifest from "../StorageManifest.ts";
 import { defaultCargoRoots, reapCargo } from "./ReaperCargo.ts";
+import { readReaperCargoRootsSync } from "./ReaperCargoPolicy.ts";
 import { isCheckoutDeleted, isPidDead, reapDocker } from "./ReaperDocker.ts";
+import { readReaperDockerRulesSync } from "./ReaperDockerPolicy.ts";
 import { sweepHost, TMP_MAX_AGE_HOURS } from "./ReaperHostSweep.ts";
 import { findOrphans, signalVerified, type OrphanTarget } from "./ReaperOrphans.ts";
 import { manifestHistoryRoots, PathGuard } from "./ReaperPathGuard.ts";
@@ -111,7 +113,9 @@ const make = Effect.gen(function* () {
 
   const cargo = Effect.fn("ReaperService.cargoStep")(function* (dryRun: boolean) {
     const ctx = yield* context;
-    const roots = yield* Effect.promise(() => defaultCargoRoots(homeDir, env));
+    const roots = yield* Effect.promise(() =>
+      defaultCargoRoots(homeDir, env, readReaperCargoRootsSync()),
+    );
     const result = yield* Effect.promise(() =>
       reapCargo({ roots, uid, platform, homeDir, env, nowMs: ctx.nowMs, dryRun, log }),
     );
@@ -169,6 +173,7 @@ const make = Effect.gen(function* () {
           selfPidNs,
           pidDead: isPidDead,
           checkoutDeleted: isCheckoutDeleted,
+          rules: readReaperDockerRulesSync(),
         },
         { dryRun: false, log },
       ).catch(() => ({ containers: 0, networks: 0 }));

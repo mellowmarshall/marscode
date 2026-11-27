@@ -666,6 +666,40 @@ describe("GitHubSourceControlProvider writes", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("reads repository visibility, and fails rather than guess when GitHub omits it", () => {
+    const requests: Array<string> = [];
+    return Effect.gen(function* () {
+      const gh = yield* makeProvider({
+        rest: (input) =>
+          Effect.sync(() => {
+            requests.push(`${input.host} ${input.path}`);
+            const name = input.path.split("/").at(-1) ?? "";
+            return restResponse({
+              full_name: `acme/${name}`,
+              html_url: `https://${input.host}/acme/${name}`,
+              ssh_url: `git@${input.host}:acme/${name}.git`,
+              ...(name === "open"
+                ? { private: false }
+                : name === "closed"
+                  ? { private: true }
+                  : {}),
+            });
+          }),
+      });
+      const read = (repository: string) =>
+        gh.getRepositoryVisibility!({ cwd: "/repo", repository, host: "github.com" });
+      assert.strictEqual(yield* read("acme/open"), "public");
+      assert.strictEqual(yield* read("acme/closed"), "private");
+      const error = yield* Effect.flip(read("acme/silent"));
+      assert.strictEqual(error._tag, "SourceControlProviderError");
+      assert.deepStrictEqual(requests, [
+        "github.com repos/acme/open",
+        "github.com repos/acme/closed",
+        "github.com repos/acme/silent",
+      ]);
+    });
+  });
+
   it.effect("looks up a bare repository name under the signed-in account on that host", () => {
     const requests: Array<string> = [];
     return Effect.gen(function* () {

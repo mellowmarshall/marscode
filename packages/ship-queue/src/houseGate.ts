@@ -1,11 +1,11 @@
-// @effect-diagnostics nodeBuiltinImport:off - House stages: secret scan, protected-diff grant check, and advisory declaration challenge.
+// @effect-diagnostics nodeBuiltinImport:off - House stages: secret scan, §16 hygiene, protected-diff grant check, and advisory declaration challenge.
 import * as NodeFS from "node:fs";
 
 import { inspectWorktreeBundle } from "@t3tools/guard-protocol/bundle-inspect";
 import { checkGuardGrant } from "@t3tools/guard-protocol/client";
 import { computeBundleKey } from "@t3tools/guard-protocol/digests";
 
-import { appendLog, mark, updateJob } from "./jobStore.ts";
+import { appendLog, jobBodyPath, mark, updateJob } from "./jobStore.ts";
 import type {
   DeclarationChallenger,
   JobRecord,
@@ -122,6 +122,18 @@ export async function houseStages(
     appendLog(deps.root, job.id, findings.map((f) => f.summary).join("\n"));
     return { kind: "fail", reason: "house_secret_scan" };
   }
+
+  const hygiene = await deps.hygieneScan({
+    jobId: job.id,
+    queueRoot: deps.root,
+    worktree: job.worktree,
+    repo: job.repo,
+    baseSha: onto,
+    title: job.title,
+    bodyFile: jobBodyPath(deps.root, job.id),
+  });
+  appendLog(deps.root, job.id, hygiene.log);
+  if (hygiene.kind === "fail") return { kind: "fail", reason: hygiene.reason };
 
   const bundle = deps.guard.inspect({ worktree: job.worktree, branch: job.branch, baseRef: onto });
   if (!bundle) return { kind: "pass" };

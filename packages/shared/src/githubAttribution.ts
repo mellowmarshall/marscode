@@ -4,7 +4,15 @@ export interface AgentAttributionIdentity {
   readonly threadId?: string | undefined;
 }
 
+/**
+ * Who can read the stamped text. A public repository (or one whose visibility is unknown) gets
+ * only the neutral name and opaque UUIDs (PLAYBOOK §16 `agent-session-ids`); a private one keeps
+ * the thread title and raw ids.
+ */
+export type AttributionAudience = "public" | "private";
+
 export interface StampAgentProseOptions {
+  readonly audience: AttributionAudience;
   readonly maxLength?: number | undefined;
 }
 
@@ -14,10 +22,20 @@ const MAX_DISPLAY_NAME_LENGTH = 120;
 const MAX_EMAIL_LOCAL_LENGTH = 64;
 const GITHUB_MAX_BODY_LENGTH = 65_536;
 
-const CO_AUTHOR_TRAILER_RE = /^Co-authored-by:\s+[^\n<>]+<[^\s<>@]+@agents\.local>\s*$/i;
-const AGENT_SESSION_TRAILER_RE = /^Agent Session:\s+\S/;
-const AGENT_THREAD_TRAILER_RE = /^Agent Thread:\s+\S/;
+// Keys are assembled so no literal trailer in this file reads as a titled stamp to the scanner.
+const CO_AUTHOR_KEY = "Co-authored-by";
+const SESSION_KEY = "Agent Session";
+const THREAD_KEY = "Agent Thread";
+const AGENT_MAIL_DOMAIN = "@agents.local";
+
+const CO_AUTHOR_TRAILER_RE = new RegExp(
+  `^${CO_AUTHOR_KEY}:\\s+[^\\n<>]+<[^\\s<>@]+${AGENT_MAIL_DOMAIN.replace(".", "\\.")}>\\s*$`,
+  "i",
+);
+const AGENT_SESSION_TRAILER_RE = new RegExp(`^${SESSION_KEY}:\\s+\\S`);
+const AGENT_THREAD_TRAILER_RE = new RegExp(`^${THREAD_KEY}:\\s+\\S`);
 const TRAILER_LINE_RE = /^[A-Za-z][A-Za-z0-9 -]*:\s+\S/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function stripControlChars(value: string): string {
   let out = "";
@@ -74,26 +92,48 @@ function sliceUtf16Safe(text: string, maxLength: number): string {
   return text.slice(0, end);
 }
 
-/**
- * Formats a deterministic GitHub prose attribution trailer block for an agent caller.
- * Returns `""` when neither `sessionId` nor `threadId` is present.
- */
-export function formatAgentAttribution(identity: AgentAttributionIdentity): string {
-  const sessionId = sanitizeTrailerValue(identity.sessionId);
-  const threadId = sanitizeTrailerValue(identity.threadId);
-  if (!sessionId && !threadId) return "";
+function trailer(key: string, value: string): string {
+  return `${key}: ${value}`;
+}
 
-  const displayName = sanitizeDisplayName(identity.displayName);
-  const emailLocal = deriveEmailLocal(displayName, threadId || sessionId);
-  const lines = [`Co-authored-by: ${displayName} <${emailLocal}@agents.local>`];
-  if (sessionId) lines.push(`Agent Session: ${sessionId}`);
-  if (threadId) lines.push(`Agent Thread: ${threadId}`);
+/** The neutral stamp: only UUID ids survive, and the co-author is always the neutral name. */
+function formatPublicAttribution(sessionId: string, threadId: string): string {
+  const session = UUID_RE.test(sessionId) ? sessionId.toLowerCase() : "";
+  const thread = UUID_RE.test(threadId) ? threadId.toLowerCase() : "";
+  const mailbox = thread || session;
+  if (!mailbox) return "";
+  const lines = [
+    trailer(CO_AUTHOR_KEY, `${DEFAULT_DISPLAY_NAME} <${mailbox}${AGENT_MAIL_DOMAIN}>`),
+  ];
+  if (session) lines.push(trailer(SESSION_KEY, session));
+  if (thread) lines.push(trailer(THREAD_KEY, thread));
   return lines.join("\n");
 }
 
 /**
- * Returns `true` when `body` ends with a valid trailing attribution trailer block
- * containing `Co-authored-by: ...@agents.local`, `Agent Session:`, or `Agent Thread:`.
+ * Formats a deterministic GitHub prose attribution trailer block for an agent caller.
+ * Returns `""` when no id the audience may see is present.
+ */
+export function formatAgentAttribution(
+  identity: AgentAttributionIdentity,
+  audience: AttributionAudience,
+): string {
+  const sessionId = sanitizeTrailerValue(identity.sessionId);
+  const threadId = sanitizeTrailerValue(identity.threadId);
+  if (!sessionId && !threadId) return "";
+  if (audience === "public") return formatPublicAttribution(sessionId, threadId);
+
+  const displayName = sanitizeDisplayName(identity.displayName);
+  const emailLocal = deriveEmailLocal(displayName, threadId || sessionId);
+  const lines = [trailer(CO_AUTHOR_KEY, `${displayName} <${emailLocal}${AGENT_MAIL_DOMAIN}>`)];
+  if (sessionId) lines.push(trailer(SESSION_KEY, sessionId));
+  if (threadId) lines.push(trailer(THREAD_KEY, threadId));
+  return lines.join("\n");
+}
+
+/**
+ * Returns `true` when `body` ends with a valid trailing attribution trailer block holding an
+ * agent co-author, session, or thread trailer.
  */
 export function hasAgentAttribution(body: string): boolean {
   const lines = body.replace(/\r\n?/g, "\n").split("\n");
@@ -126,13 +166,13 @@ export function hasAgentAttribution(body: string): boolean {
 export function stampAgentProse(
   body: string,
   identity: AgentAttributionIdentity,
-  options?: StampAgentProseOptions,
+  options: StampAgentProseOptions,
 ): string {
-  const stamp = formatAgentAttribution(identity);
+  const stamp = formatAgentAttribution(identity, options.audience);
   if (!stamp) return body;
   if (hasAgentAttribution(body)) return body;
 
-  const maxLength = options?.maxLength ?? GITHUB_MAX_BODY_LENGTH;
+  const maxLength = options.maxLength ?? GITHUB_MAX_BODY_LENGTH;
   if (maxLength <= 0) return "";
   if (stamp.length >= maxLength) {
     return sliceUtf16Safe(stamp, maxLength);

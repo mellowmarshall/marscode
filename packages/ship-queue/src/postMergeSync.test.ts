@@ -121,6 +121,7 @@ function makePostMergeFixture(options?: {
       check: async () => ({ ok: true }),
     },
     secretScan: async () => [],
+    hygieneScan: async () => ({ kind: "skip", log: "house hygiene: skipped (fixture)" }),
     clock: makeClock(),
     isProcessAlive,
     self: SELF,

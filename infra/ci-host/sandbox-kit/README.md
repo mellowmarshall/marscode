@@ -1,6 +1,6 @@
 # sandbox-kit
 
-A private sandbox for a repo, from one declaration file (private-repo). The
+A private sandbox for a repo, from one declaration file. The
 sandbox runs the repo's Docker Compose stack on one server. A Cloudflare Tunnel
 carries its traffic, and a Cloudflare Access door stands in front of its
 hostname. Nothing on the server listens on a public port.

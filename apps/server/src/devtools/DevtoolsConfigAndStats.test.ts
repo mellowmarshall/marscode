@@ -233,7 +233,7 @@ describe("ReviewStats aggregation (reviewer + submitter sides)", () => {
       NodePath.join(shipJobDir, "job.json"),
       JSON.stringify({
         id: "10999",
-        repo: "private-repo",
+        repo: "project-a",
         branch: "feat-b",
         thread_id: "thread-opus",
         submitted_at: "2026-11-21T13:00:00Z",
@@ -419,8 +419,10 @@ describe("ReviewStats aggregation (reviewer + submitter sides)", () => {
       true,
     );
     expect(isDelegatedReviewSubagent("Act as the research sub-agent for this task.")).toBe(false);
-    expect(deriveRepoNameFromWorktree("/dataprivate-repo/issue-1281")).toBe("devtools");
-    expect(deriveRepoNameFromWorktree("/home/dev/.t3/worktrees/private-repo/abc123")).toBe("private-repo");
+    expect(deriveRepoNameFromWorktree("/data/Dev/example-repo/issue-1281")).toBe("example-repo");
+    expect(deriveRepoNameFromWorktree("/home/dev/.t3/worktrees/project-a/abc123")).toBe(
+      "project-a",
+    );
 
     const lookup = buildSubmitterLookupFromRows([
       {
@@ -431,7 +433,7 @@ describe("ReviewStats aggregation (reviewer + submitter sides)", () => {
         default_provider: "antigravity",
         options_json: JSON.stringify([{ id: "effort", value: "high" }]),
         branch: "issue-1281",
-        worktree_path: "/dataprivate-repo/issue-1281",
+        worktree_path: "/data/Dev/example-repo/issue-1281",
         is_subagent: 0,
       },
       {
@@ -442,7 +444,7 @@ describe("ReviewStats aggregation (reviewer + submitter sides)", () => {
         default_provider: "claudeAgent",
         options_json: JSON.stringify([{ id: "effort", value: "high" }]),
         branch: "issue-1281",
-        worktree_path: "/dataprivate-repo/issue-1281",
+        worktree_path: "/data/Dev/example-repo/issue-1281",
         is_subagent: 1,
       },
     ]);
@@ -471,7 +473,7 @@ describe("ReviewStats aggregation (reviewer + submitter sides)", () => {
     expect(built).not.toBeNull();
     expect(built?.threadId).toBe("parent-thread-1");
     expect(built?.reviewThreadId).toBe("thread:delegated-task:rev-abc");
-    expect(built?.repo).toBe("devtools");
+    expect(built?.repo).toBe("example-repo");
     expect(built?.durationS).toBe(90);
     expect(built?.submitter.model).toBe("gemini-4-neon");
     expect(built?.reviewer.model).toBe("claude-fable-5-2");
@@ -491,7 +493,7 @@ describe("ReviewStats aggregation (reviewer + submitter sides)", () => {
       NodePath.join(shipJobDir, "job.json"),
       JSON.stringify({
         id: "11001",
-        repo: "devtools",
+        repo: "example-repo",
         branch: "issue-1281",
         thread_id: "parent-thread-1",
         review_thread_id: "thread:delegated-task:rev-abc",
@@ -540,7 +542,7 @@ describe("DevtoolsFleetConfig SSH discovery and sync", () => {
         ],
       }),
     );
-    expect(isValidSshAlias("dev-host-x")).toBe(true);
+    expect(isValidSshAlias("host-b")).toBe(true);
     expect(isValidSshAlias("-oProxyCommand=bad")).toBe(false);
     expect(isValidSshAlias("host;whoami")).toBe(false);
 

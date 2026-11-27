@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The CI hosts' Node, for the toolchain in ci-hosts.json (private-repo).
+# The CI hosts' Node, for the toolchain in ci-hosts.json.
 #
 #   ci-node.sh PLATFORM=SHA256...   install the manifest's Node release in
 #                                   ~/.local/share/ship-queue-ci

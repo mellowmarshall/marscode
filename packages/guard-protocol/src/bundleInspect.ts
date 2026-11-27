@@ -43,6 +43,11 @@ const PROTECTED_RULES: ReadonlyArray<ProtectedRule> = [
     reason: "secret-scanner allowlist modified",
   },
   {
+    test: (p) => p === "hygiene.exceptions.json",
+    gateId: "allowlist",
+    reason: "public-hygiene exceptions modified",
+  },
+  {
     test: (p) =>
       p === "playbook/PLAYBOOK.md" || p === "PLAYBOOK.md" || p === "packages/playbook/PLAYBOOK.md",
     gateId: "playbook-amend",

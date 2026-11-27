@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The CI hosts' WebKit video probe, for the webkit-video tool in ci-hosts.json
-# (private-repo). A repo's browser gate plays video in Playwright's WebKit
+# The CI hosts' WebKit video probe, for the webkit-video tool in ci-hosts.json.
+# A repo's browser gate plays video in Playwright's WebKit
 # and reads the frames WebKit presented (getVideoPlaybackQuality); this says
 # whether headless WebKit on this host presents decoded H.264 frames, and
 # records how.
@@ -45,7 +45,7 @@
 #
 # The browser runs headless in a private D-Bus session and a private runtime
 # directory (no desktop session, no desktop sound server), as the design check
-# runs it (private-repo). It runs without the GST_PLUGIN_FEATURE_RANK a CI step
+# runs it. It runs without the GST_PLUGIN_FEATURE_RANK a CI step
 # has from this record, so the first path measures the host's own selection
 # wherever the probe runs. The whole probe fits the hosts' 30 s probe limit
 # (ship-queue-hosts.sh): each path has PATH_SECONDS, and its run ends before
@@ -82,8 +82,8 @@ trap '[ -z "$d" ] || rm -rf "$d"' EXIT
 video_record() { echo "$CI_ROOT/webkit-video"; }
 
 # The record, whole or not at all, and its text left alone when it would not change; its time is renewed, as
-# a fresh measurement (the age of a record is the age of its last measurement: private-repo).
-# What a record was measured with (private-repo): the WebKit build, and the decoders GStreamer can choose
+# a fresh measurement (the age of a record is the age of its last measurement).
+# What a record was measured with: the WebKit build, and the decoders GStreamer can choose
 # from (its plugin files and WSL's CUDA decoder, which outranks the software one). A change measures again.
 webkit_build() { local b; b=$(ls -d "$CI_ROOT"/ms-playwright/webkit-*/ 2>/dev/null | sed 's|/$||; s|.*/||' | sort -V | tail -1); echo "${b:-none}"; }
 gst_state() { { ls -lL /usr/lib/*/gstreamer-1.0/ /usr/lib/gstreamer-1.0/ /usr/lib/wsl/lib/libnvcuvid* 2>/dev/null || true; } | cksum | cut -d' ' -f1; }

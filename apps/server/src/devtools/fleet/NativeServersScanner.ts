@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off - Native local Docker + listening dev server scanner and controller (no DevDeck daemon needed).
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { parseDockerPsLines, parseSizeBytes, parseSsListeners } from "./DockerPsParser.ts";
@@ -152,8 +153,21 @@ async function readLinuxProcessMeta(pid: number): Promise<{
   }
 }
 
+/** A dev listener started in `/` or the home directory says nothing about its project. */
+export function devListenerServiceLabel(
+  procName: string,
+  cwd: string | undefined,
+  homeDir: string,
+): string {
+  if (!cwd) return procName;
+  const resolved = NodePath.resolve(cwd);
+  if (resolved === "/" || resolved === NodePath.resolve(homeDir)) return procName;
+  return `${NodePath.basename(resolved)} (${procName})`;
+}
+
 export class NativeServersScanner {
   private readonly platform: NodeJS.Platform;
+  private readonly homeDir: string;
   private statsCache: {
     readonly at: number;
     readonly map: ReadonlyMap<string, { readonly cpuPct: number; readonly memBytes: number }>;
@@ -163,8 +177,9 @@ export class NativeServersScanner {
   private devStartTicksByPid = new Map<number, string>();
   private lastScanAt = 0;
 
-  constructor(platform: NodeJS.Platform = "linux") {
+  constructor(platform: NodeJS.Platform = "linux", homeDir: string = NodeOS.homedir()) {
     this.platform = platform;
+    this.homeDir = homeDir;
   }
 
   getLatest(): ReadonlyArray<FleetServerItem> {
@@ -270,11 +285,7 @@ export class NativeServersScanner {
       }
 
       nextTicks.set(item.pid, startTicks);
-      const dirBase = meta.cwd ? NodePath.basename(meta.cwd) : "";
-      const serviceLabel =
-        dirBase && dirBase !== "/" && dirBase !== "dev"
-          ? `${dirBase} (${item.procName})`
-          : item.procName;
+      const serviceLabel = devListenerServiceLabel(item.procName, meta.cwd, this.homeDir);
 
       out.push({
         id: `dev:${item.pid}:${item.port}`,

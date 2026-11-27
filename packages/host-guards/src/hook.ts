@@ -4,6 +4,7 @@ import * as NodePath from "node:path";
 
 import { checkArgvSecrets } from "./argvGuard.ts";
 import { decideCloudCli } from "./cloudCliGuard.ts";
+import { decideForgeText, decideGhText } from "./ghTextGuard.ts";
 import { decideGit } from "./gitGuard.ts";
 import { safeRealpath, type HostGuardsConfig } from "./hostConfig.ts";
 import { decideInstallTokens } from "./installGuard.ts";
@@ -119,6 +120,7 @@ export async function enforceDirectGuard(
   options?: {
     readonly fromHook?: boolean | undefined;
     readonly bypassesPathShim?: boolean | undefined;
+    readonly readStdin?: (() => string) | undefined;
   },
 ): Promise<number> {
   const env = runtime.env ?? process.env;
@@ -133,10 +135,14 @@ export async function enforceDirectGuard(
     return 0;
   }
 
-  const verdict: GuardVerdict =
+  const ruleVerdict: GuardVerdict =
     tool === "git"
       ? decideGit(args, env, cwd, runtime.config, { procFs })
       : decideGh(args, cwd, runtime.config, { procFs, env });
+  const verdict =
+    tool === "gh" && ruleVerdict.verdict === "allow"
+      ? decideGhText(args, cwd, runtime.config, { env, readStdin: options?.readStdin })
+      : ruleVerdict;
   if (verdict.verdict === "allow") return 0;
 
   const state = createOverrideState();
@@ -385,12 +391,15 @@ async function checkLineRecursive(
       }
     }
 
-    // 8. Cloud CLI guard (fly/flyctl/doppler)
-    const cloudVerdict = decideCloudCli(words, cwd, runtime.config, procFs);
+    // 8. Cloud CLI guard (fly/flyctl/doppler), or the §16 text guard for forge CLIs without a shim
+    const forge = program === "glab" || program === "tea";
+    const cloudVerdict = forge
+      ? decideForgeText(program, words.slice(1), cwd, { env: segEnv })
+      : decideCloudCli(words, cwd, runtime.config, procFs);
     if (cloudVerdict.verdict === "deny") {
       const ok = await handleRefusal(
         {
-          guard: "cloud-cli",
+          guard: forge ? "text-guard" : "cloud-cli",
           command: words,
           cwd,
           reason: cloudVerdict.reason,

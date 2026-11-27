@@ -1,3 +1,4 @@
+import { readRepoVisibility } from "./repoVisibility.ts";
 import type { ProcessRunner, ShipForge } from "./types.ts";
 
 const PR_URL_NUMBER_RE = /\/pull\/(\d+)\s*$/;
@@ -9,6 +10,7 @@ async function gh(run: ProcessRunner, cwd: string, args: ReadonlyArray<string>, 
 /** GitHub through the `gh` CLI, for the headless queue. */
 export function ghForge(run: ProcessRunner): ShipForge {
   return {
+    repoVisibility: ({ cwd, repo }) => readRepoVisibility(run, cwd, repo),
     findOpenPullRequest: async ({ cwd, repo, head }) => {
       const res = await gh(run, cwd, [
         "pr",

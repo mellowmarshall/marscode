@@ -245,7 +245,7 @@ describe("UsageLimitsPooled", () => {
       [
         EnvironmentId.make("env-1"),
         {
-          entry: { target: { label: "dev-host-x" } },
+          entry: { target: { label: "host-b" } },
           serverConfig: {
             providers: [
               makeProvider({
@@ -263,7 +263,7 @@ describe("UsageLimitsPooled", () => {
       [
         EnvironmentId.make("env-2"),
         {
-          entry: { target: { label: "host-x-wsl" } },
+          entry: { target: { label: "host-c-wsl" } },
           serverConfig: {
             providers: [
               makeProvider({
@@ -287,7 +287,7 @@ describe("UsageLimitsPooled", () => {
     await expect.element(screen.getByText("2 environments need Codex sign-in")).toBeVisible();
     await expect.element(screen.getByRole("button", { name: "Sign in in T3" })).toBeVisible();
     await expect.element(screen.getByRole("button", { name: "Retry" })).toBeVisible();
-    await expect.element(screen.getByRole("button", { name: "dev-host-x" })).toBeVisible();
-    await expect.element(screen.getByRole("button", { name: "host-x-wsl" })).toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "host-b" })).toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "host-c-wsl" })).toBeVisible();
   });
 });

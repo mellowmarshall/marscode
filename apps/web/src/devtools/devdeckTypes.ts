@@ -340,10 +340,6 @@ export interface PlaybookDeclarationPayload {
 
 export type IconSvgProps = SVGProps<SVGSVGElement>;
 
-function shortHostLabel(name: string): string {
-  return name.replace(/^dev-/, "");
-}
-
 function asTelemetry(host: string | DevdeckHostTelemetry | undefined): DevdeckHostTelemetry | null {
   if (!host || typeof host === "string") return null;
   return host;
@@ -402,7 +398,7 @@ function resolveAlertHostShort(
 /**
  * Deduplicates alerts across local and remote DevDeck hosts while preserving distinct
  * same-name alerts (such as multiple port collisions with different `detail` strings)
- * and attributing host-prefixed alerts (e.g. `dev-host-x:/`) to the owning host.
+ * and attributing host-prefixed alerts (e.g. `host-b:/`) to the owning host.
  */
 export function aggregateFleetAlerts(
   hosts: ReadonlyArray<MergedFleetHost>,
@@ -538,7 +534,7 @@ function classifyHostProblem(input: {
 
 /**
  * Joins local host telemetry, DevDeck remote `nodes`, `hosts.report.hosts` (CI probes),
- * and `ship.hosts` drift/notes via exact name or `node.members` (e.g. host-x ↔ host-x-linux).
+ * and `ship.hosts` drift/notes via exact name or `node.members` (e.g. a laptop and its Linux VM: host-d ↔ host-d-linux).
  */
 export function mergeFleetHosts(input: {
   readonly localHost: DevdeckHostTelemetry | null;
@@ -606,7 +602,7 @@ export function mergeFleetHosts(input: {
     });
     result.push({
       id: localName,
-      shortName: shortHostLabel(localName),
+      shortName: localName,
       probeHostName: probe?.name ?? null,
       isLocal: true,
       hasDevdeckNode: Boolean(localNode),
@@ -662,7 +658,7 @@ export function mergeFleetHosts(input: {
         : "online";
     result.push({
       id: nodeKey,
-      shortName: shortHostLabel(nodeKey),
+      shortName: nodeKey,
       probeHostName: probe?.name ?? null,
       isLocal: Boolean(node.is_local),
       hasDevdeckNode: true,
@@ -708,7 +704,7 @@ export function mergeFleetHosts(input: {
     });
     result.push({
       id: name,
-      shortName: shortHostLabel(name),
+      shortName: name,
       probeHostName: name,
       isLocal: probe.ssh === null,
       hasDevdeckNode: false,

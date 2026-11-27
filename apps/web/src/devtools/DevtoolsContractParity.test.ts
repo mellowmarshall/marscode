@@ -23,8 +23,8 @@ import { groupRowsByModelAndEffort } from "./usageReviewsMerge";
 describe("Devtools web contract parity", () => {
   it("decodes the real DevDeck snapshot fixture, survives numeric/object wire drift, and shows GPU telemetry on all GPU hosts", () => {
     const fixtureCandidates = [
-      "/home/dev/.t3/worktrees/devtools/10d85e80-d5cc5e1cf0080568/devdeck/web/fixtures/snapshot.json",
-      "/home/devprivate-repo/devdeck/web/fixtures/snapshot.json",
+      "/home/dev/.t3/worktrees/example-repo/10d85e80-d5cc5e1cf0080568/devdeck/web/fixtures/snapshot.json",
+      "/home/dev/Dev/example-repo/devdeck/web/fixtures/snapshot.json",
     ];
     const fixturePath = fixtureCandidates.find((p) => NodeFS.existsSync(p));
     if (fixturePath) {
@@ -47,7 +47,7 @@ describe("Devtools web contract parity", () => {
         at: "2026-11-22T00:00:00Z",
         hosts: [
           {
-            name: "host-x",
+            name: "host-c",
             platform: "linux",
             reached: true,
             tools: [{ name: "node", version: 22, state: "ok" }],
@@ -55,7 +55,7 @@ describe("Devtools web contract parity", () => {
             no_grant: ["ship-queue"],
           },
           {
-            name: "dev-host-x",
+            name: "host-b",
             platform: "linux",
             reached: true,
             drift: [],
@@ -74,13 +74,13 @@ describe("Devtools web contract parity", () => {
 
     const decodedShipNumericPr = decodeDevdeckShipPanel({
       daemon_up: true,
-      jobs: [{ id: "10945", private-repo, pr: 4548, state: "running", stage: "deploy" }],
+      jobs: [{ id: "10945", repo: "project-b", pr: 4548, state: "running", stage: "deploy" }],
     });
     expect(decodedShipNumericPr?.jobs?.[0]?.pr).toBe("4548");
 
     const merged = mergeFleetHosts({
       localHost: {
-        name: "dev-host-x",
+        name: "host-a",
         gpu: { busy_pct: 42, vram_used: 4e9, vram_total: 17e9, busy_hist: [10, 42] },
       },
       localServers: [],
@@ -88,15 +88,15 @@ describe("Devtools web contract parity", () => {
       localAlerts: [],
       localWorktrees: null,
       nodes: {
-        "dev-host-x": {
+        "host-b": {
           host: {
-            name: "dev-host-x",
+            name: "host-b",
             gpu: { busy_pct: 0, vram_used: 197e6, vram_total: 17_163_091_968, busy_hist: [0, 0] },
           },
         },
-        "host-x": {
+        "host-d": {
           host: {
-            name: "host-x",
+            name: "host-d",
             gpu: { busy_pct: 2, vram_used: 0, vram_total: 0, busy_hist: [1, 2] },
           },
         },
@@ -104,11 +104,11 @@ describe("Devtools web contract parity", () => {
       hostsReport: decoded,
       shipPanel: null,
     });
-    const host7a34 = merged.find((h) => h.id === "dev-host-x") ?? null;
-    const hostMac = merged.find((h) => h.id === "host-x") ?? null;
-    const host7c56 = merged.find((h) => h.id === "dev-host-x") ?? null;
-    expect(hostHasGpuTelemetry(host7c56)).toBe(true);
-    expect(hostHasGpuTelemetry(host7a34)).toBe(true);
+    const hostB = merged.find((h) => h.id === "host-b") ?? null;
+    const hostMac = merged.find((h) => h.id === "host-d") ?? null;
+    const hostA = merged.find((h) => h.id === "host-a") ?? null;
+    expect(hostHasGpuTelemetry(hostA)).toBe(true);
+    expect(hostHasGpuTelemetry(hostB)).toBe(true);
     expect(hostHasGpuTelemetry(hostMac)).toBe(true);
   });
 
@@ -139,7 +139,7 @@ describe("Devtools web contract parity", () => {
       title: "Old finished run",
       phaseLabel: "Done",
       state: "done" as const,
-      binding: { host: "dev-host-x" },
+      binding: { host: "host-a" },
       timing: { startedAt: "2026-11-22T01:00:00Z", endedAt: "2026-11-22T02:00:00Z" },
       cancellable: false,
     };
@@ -259,7 +259,7 @@ describe("Devtools web contract parity", () => {
     expect(
       resolveShipJobDisplayState({
         id: "10945",
-        private-repo,
+        repo: "project-b",
         state: "running",
         stage: "deploy",
         merge_exit: 0,

@@ -2,7 +2,11 @@
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { stampAgentProse, type AgentAttributionIdentity } from "@t3tools/shared/githubAttribution";
+import {
+  stampAgentProse,
+  type AgentAttributionIdentity,
+  type StampAgentProseOptions,
+} from "@t3tools/shared/githubAttribution";
 import { AGENT_THREAD_ENV } from "@t3tools/shared/procIdentity";
 
 import { normalizeApiPath } from "./ghApiGuard.ts";
@@ -16,6 +20,7 @@ import {
   resolveEnvGhRepoSlug,
   scanGhApiInvocation,
 } from "./ghArgParse.ts";
+import { isPrivateVisibility, resolveRepoVisibility } from "./ghVisibility.ts";
 import type { HostGuardsConfig } from "./hostConfig.ts";
 import { defaultProcFs, type ProcFsReader } from "./procFs.ts";
 import { resolveCallerIdentity } from "./procIdentity.ts";
@@ -132,6 +137,16 @@ function resolveGhAgentIdentity(options?: GhStampOptions): AgentAttributionIdent
   };
 }
 
+/** Unknown visibility stamps the neutral form (fail closed). */
+function stampOptionsFor(
+  slug: string,
+  config: HostGuardsConfig,
+  env: NodeJS.ProcessEnv,
+): StampAgentProseOptions {
+  const visibility = resolveRepoVisibility(slug, config, env);
+  return { audience: isPrivateVisibility(visibility) ? "private" : "public" };
+}
+
 function stampHighLevelGhArgs(
   args: ReadonlyArray<string>,
   cmd: string,
@@ -168,6 +183,7 @@ function stampHighLevelGhArgs(
     }
   }
 
+  const stampOptions = stampOptionsFor(slug, config, env);
   const out = [...args];
   const tempDirs: string[] = [];
   let stamped = false;
@@ -183,7 +199,7 @@ function stampHighLevelGhArgs(
     }
     const bodyMatch = matchGhValueFlag(out, i, "-b", "--body");
     if (bodyMatch) {
-      const next = stampAgentProse(bodyMatch.value, identity);
+      const next = stampAgentProse(bodyMatch.value, identity, stampOptions);
       if (next !== bodyMatch.value) {
         stamped = true;
         bodyMatch.setValue(next);
@@ -198,7 +214,7 @@ function stampHighLevelGhArgs(
           ? ((consumedStdin = true), readStdinSafe(stdinOverride))
           : readRegularFile(fileMatch.value, cwd);
       if (content !== null) {
-        const next = stampAgentProse(content, identity);
+        const next = stampAgentProse(content, identity, stampOptions);
         if (next !== content || fileMatch.value === "-") {
           if (next !== content) stamped = true;
           fileMatch.setValue(writePrivateTempFile(next, "body.txt", tempDirs));
@@ -232,13 +248,14 @@ function isAllowlistedRestProseEndpoint(method: string, rest: string): boolean {
 function stampJsonBodyText(
   rawText: string,
   identity: AgentAttributionIdentity,
+  stampOptions: StampAgentProseOptions,
 ): { text: string; changed: boolean } {
   try {
     const parsed = JSON.parse(rawText) as unknown;
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const obj = parsed as Record<string, unknown>;
       if (typeof obj.body === "string") {
-        const stampedBody = stampAgentProse(obj.body, identity);
+        const stampedBody = stampAgentProse(obj.body, identity, stampOptions);
         if (stampedBody !== obj.body) {
           return { text: JSON.stringify({ ...obj, body: stampedBody }), changed: true };
         }
@@ -286,6 +303,7 @@ function stampGhApiArgs(
     return NO_OP(args);
   }
 
+  const stampOptions = stampOptionsFor(`${owner}/${name}`, config, env);
   const tempDirs: string[] = [];
   let stamped = false;
   let consumedStdin = false;
@@ -306,7 +324,7 @@ function stampGhApiArgs(
           ? ((consumedStdin = true), readStdinSafe(stdinOverride))
           : readRegularFile(inputMatch.value, cwd);
       if (rawText !== null) {
-        const updated = stampJsonBodyText(rawText, identity);
+        const updated = stampJsonBodyText(rawText, identity, stampOptions);
         if (updated.changed) stamped = true;
         if (updated.changed || inputMatch.value === "-") {
           inputMatch.setValue(writePrivateTempFile(updated.text, "payload.json", tempDirs));
@@ -328,14 +346,14 @@ function stampGhApiArgs(
             ? ((consumedStdin = true), readStdinSafe(stdinOverride))
             : readRegularFile(ref, cwd);
         if (content !== null) {
-          const next = stampAgentProse(content, identity);
+          const next = stampAgentProse(content, identity, stampOptions);
           if (next !== content || ref === "-") {
             if (next !== content) stamped = true;
             field.setValue(`body=@${writePrivateTempFile(next, "body.txt", tempDirs)}`);
           }
         }
       } else {
-        const next = stampAgentProse(rawVal, identity);
+        const next = stampAgentProse(rawVal, identity, stampOptions);
         if (next !== rawVal) {
           stamped = true;
           field.setValue(`body=${next}`);

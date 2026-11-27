@@ -1,0 +1,172 @@
+{
+  "exclusions": [
+    {
+      "path": ".repos/",
+      "reason": "Vendored read-only upstream reference repositories; AGENTS.md forbids editing them",
+      "issue": "#67"
+    }
+  ],
+  "upstreamNames": [
+    {
+      "name": "theo",
+      "reason": "Upstream t3code fixture or comment path using an upstream contributor's name; present unchanged in upstream main",
+      "issue": "#67"
+    },
+    {
+      "name": "julius",
+      "reason": "Upstream t3code fixture or comment path using an upstream contributor's name; present unchanged in upstream main",
+      "issue": "#67"
+    },
+    {
+      "name": "matt",
+      "reason": "Upstream t3code fixture or comment path using an upstream contributor's name; present unchanged in upstream main",
+      "issue": "#67"
+    },
+    {
+      "name": "josh",
+      "reason": "Upstream t3code fixture or comment path using an upstream contributor's name; present unchanged in upstream main",
+      "issue": "#67"
+    },
+    {
+      "name": "shawn",
+      "reason": "Upstream t3code fixture or comment path using an upstream contributor's name; present unchanged in upstream main",
+      "issue": "#67"
+    },
+    {
+      "name": "mike",
+      "reason": "Upstream t3code fixture or comment path using an upstream contributor's name; present unchanged in upstream main",
+      "issue": "#67"
+    },
+    {
+      "name": "sebherrerabe",
+      "reason": "Upstream t3code fixture or comment path using an upstream contributor's name; present unchanged in upstream main",
+      "issue": "#67"
+    },
+    {
+      "name": "Ren",
+      "reason": "Upstream t3code fixture or comment path using an upstream contributor's name; present unchanged in upstream main",
+      "issue": "#67"
+    },
+    {
+      "name": "alex",
+      "reason": "Upstream t3code fixture or comment path using an upstream contributor's name; present unchanged in upstream main",
+      "issue": "#67"
+    }
+  ],
+  "exceptions": [
+    {
+      "classId": "agent-session-ids",
+      "file": "packages/hygiene/src/publicRules.test.ts",
+      "reason": "Scanner rule tests must contain the neutral patterns each rule rejects",
+      "issue": "#67"
+    },
+    {
+      "classId": "home-paths",
+      "file": "packages/hygiene/src/publicRules.test.ts",
+      "reason": "Scanner rule tests must contain the neutral patterns each rule rejects",
+      "issue": "#67"
+    },
+    {
+      "classId": "data-layout",
+      "file": "packages/hygiene/src/publicRules.test.ts",
+      "reason": "Scanner rule tests must contain the neutral patterns each rule rejects",
+      "issue": "#67"
+    },
+    {
+      "classId": "ssh-targets",
+      "file": "packages/hygiene/src/publicRules.test.ts",
+      "reason": "Scanner rule tests must contain the neutral patterns each rule rejects",
+      "issue": "#67"
+    },
+    {
+      "classId": "network-identity",
+      "file": "packages/hygiene/src/publicRules.test.ts",
+      "reason": "Scanner rule tests must contain the neutral patterns each rule rejects",
+      "issue": "#67"
+    },
+    {
+      "classId": "agent-session-ids",
+      "file": "packages/hygiene/src/hygieneCli.test.ts",
+      "reason": "Scanner rule tests must contain the neutral patterns each rule rejects",
+      "issue": "#67"
+    },
+    {
+      "classId": "agent-session-ids",
+      "file": "packages/hygiene/src/publicRules.ts",
+      "reason": "Rule source documents the trailer and session-line forms it allows and rejects",
+      "issue": "#67"
+    },
+    {
+      "classId": "agent-session-ids",
+      "file": "packages/hygiene/src/identity.ts",
+      "reason": "Rule source documents the trailer and session-line forms it allows and rejects",
+      "issue": "#67"
+    },
+    {
+      "classId": "data-layout",
+      "file": "packages/hygiene/src/hygieneCli.test.ts",
+      "reason": "Scanner rule tests must contain the neutral patterns each rule rejects",
+      "issue": "#67"
+    },
+    {
+      "classId": "agent-session-ids",
+      "file": "packages/shared/src/githubAttribution.test.ts",
+      "reason": "Private-repo attribution tests assert the titled #56/#72 stamp, which only the private audience emits",
+      "issue": "#67"
+    },
+    {
+      "classId": "agent-session-ids",
+      "file": "packages/host-guards/src/ghAttribution.test.ts",
+      "reason": "Private-repo attribution tests assert the titled #56/#72 stamp, which only the private audience emits",
+      "issue": "#67"
+    },
+    {
+      "classId": "agent-session-ids",
+      "file": "apps/server/src/mcp/toolkits/issues/handlers.test.ts",
+      "reason": "Private-repo attribution tests assert the titled #56/#72 stamp, which only the private audience emits",
+      "issue": "#67"
+    },
+    {
+      "classId": "agent-session-ids",
+      "file": "apps/server/src/mcp/toolkits/pullRequests/handlers.test.ts",
+      "reason": "Private-repo attribution tests assert the titled #56/#72 stamp, which only the private audience emits",
+      "issue": "#67"
+    },
+    {
+      "classId": "agent-session-ids",
+      "file": "packages/ship-queue/src/shipQueue.test.ts",
+      "reason": "Ship-queue stamp tests assert the raw session id a private repo keeps",
+      "issue": "#67"
+    },
+    {
+      "classId": "data-layout",
+      "file": "packages/hygiene/src/denylist.test.ts",
+      "reason": "Path-label test scans a neutral banned placeholder path to prove a private hit hides it on every finding",
+      "issue": "#67"
+    },
+    {
+      "classId": "data-layout",
+      "file": "packages/host-guards/src/ghTextGuard.test.ts",
+      "reason": "Text-guard tests post neutral banned placeholders to prove a public repo refuses them",
+      "issue": "#67"
+    },
+    {
+      "classId": "data-layout",
+      "file": "apps/server/src/mcp/toolkits/issues/handlers.test.ts",
+      "reason": "Text-guard tests post neutral banned placeholders to prove a public repo refuses them",
+      "issue": "#67"
+    },
+    {
+      "classId": "data-layout",
+      "file": "apps/server/src/mcp/toolkits/pullRequests/handlers.test.ts",
+      "reason": "Text-guard tests post neutral banned placeholders to prove a public repo refuses them",
+      "issue": "#67"
+    },
+    {
+      "classId": "data-layout",
+      "file": "packages/ship-queue/src/hygieneGate.test.ts",
+      "reason": "Ship-gate tests commit a neutral banned placeholder to prove the gate fails on it",
+      "issue": "#67"
+    }
+  ]
+}

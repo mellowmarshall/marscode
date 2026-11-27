@@ -10,15 +10,15 @@ const NOW_MS = Date.parse("2026-11-25T07:10:00Z");
 
 function makeHost(overrides: Partial<MergedFleetHost>): MergedFleetHost {
   return {
-    id: "host-x",
-    shortName: "host-x",
-    probeHostName: "host-x",
+    id: "host-c",
+    shortName: "host-c",
+    probeHostName: "host-c",
     isLocal: false,
     hasDevdeckNode: true,
     status: "online",
     problem: null,
     platform: "linux",
-    ssh: "host-x-wsl",
+    ssh: "host-c-wsl",
     note: null,
     telemetry: null,
     power: null,
@@ -70,7 +70,7 @@ const remoteJob: JobSummary = {
   title: "Remote distillation run",
   phaseLabel: "Stage 2",
   state: "running",
-  binding: { host: "host-x" },
+  binding: { host: "host-c" },
   timing: { startedAt: "2026-11-25T07:00:00Z" },
   cancellable: false,
 };

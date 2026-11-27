@@ -1,0 +1,27 @@
+{
+  "name": "@t3tools/hygiene",
+  "private": true,
+  "bin": {
+    "hygiene": "./src/bin.ts"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./catalog": {
+      "types": "./src/hygieneCatalog.ts",
+      "import": "./src/hygieneCatalog.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "effect-tsgo tsrs --noEmit",
+    "test": "vp test run --config ../../vite.config.ts --dir .",
+    "build:bundle": "vp pack"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

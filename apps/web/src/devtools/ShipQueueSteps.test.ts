@@ -80,7 +80,7 @@ describe("deriveShipJobSteps", () => {
         ci_done: 1,
         push_exit: 0,
         pr: 42,
-        pr_repo: "dev/devtools",
+        pr_repo: "example-org/example-repo",
         merge_exit: 75,
         last_marker: "WAITING_CHECKS",
       },
@@ -246,14 +246,14 @@ describe("deriveShipJobSteps", () => {
     expect(steps.find((s) => s.id === "watcher")?.state).toBe("pending");
   });
 
-  it("marks all 7 steps done ONLY when sync_exit=0 ran and omits Deploy completely on repos with no post-merge step (private-repo & #1240)", () => {
+  it("marks all 7 steps done ONLY when sync_exit=0 ran and omits Deploy completely on repos with no post-merge step", () => {
     const withDeploy = {
       id: "j9",
       state: "done",
       ci_done: 1,
       push_exit: 0,
       pr: 108,
-      pr_repo: "dev/devtools",
+      pr_repo: "example-org/example-repo",
       merge_exit: 0,
       sync_exit: 0,
     };
@@ -261,19 +261,19 @@ describe("deriveShipJobSteps", () => {
     expect(withDeploySteps).toHaveLength(7);
     expect(withDeploySteps.every((s) => s.state === "done")).toBe(true);
     expect(withDeploySteps.find((s) => s.id === "pr")?.href).toBe(
-      "https://github.comprivate-repo/pull/108",
+      "https://github.com/example-org/example-repo/pull/108",
     );
     expect(buildSafePrUrl({ id: "bad", pr: 1, pr_repo: "../evil/repo" })).toBeNull();
 
-    // Exact job 10984 shape (private-repo): DONE with MERGE_EXIT=0 -> CLEANED -> DONE, NO POST_MERGE, NO sync_exit.
+    // Exact job 10984 shape (tools): DONE with MERGE_EXIT=0 -> CLEANED -> DONE, NO POST_MERGE, NO sync_exit.
     const noDeployDone = {
       id: "10984",
-      repo: "private-repo",
+      repo: "tools",
       state: "done",
       ci_done: "1",
       push_exit: "0",
       pr: "110",
-      pr_repo: "private-repo",
+      pr_repo: "example-org/tools",
       merge_exit: "0",
       last_marker: "DONE job=10984 pr=110 at=2026-11-22T18:02:18",
     };
@@ -302,7 +302,7 @@ describe("deriveShipJobSteps", () => {
     expect(resolveShipJobDisplayState(cleaningLive)).toBe("running");
     expect(deriveShipJobSteps(cleaningLive, LABELS).find((s) => s.id === "land")).toBeUndefined();
 
-    // Live job that entered POST_MERGE shows Deploy active and display state "deploying" (private-repo).
+    // Live job that entered POST_MERGE shows Deploy active and display state "deploying".
     const deployingLive = {
       id: "202",
       state: "running",
@@ -318,7 +318,7 @@ describe("deriveShipJobSteps", () => {
     expect(deployingSteps.find((s) => s.id === "merge")?.state).toBe("done");
     expect(deployingSteps.find((s) => s.id === "land")?.state).toBe("active");
 
-    // Live job after SYNC_EXIT=0 shows Deploy done and display state "post-merge" (private-repo).
+    // Live job after SYNC_EXIT=0 shows Deploy done and display state "post-merge".
     const deployedLive = {
       id: "204",
       state: "running",
@@ -370,7 +370,7 @@ describe("deriveShipJobSteps", () => {
     // must mark Merge failed instead of rendering 6 green done steps, and L5 must not misclassify pre_cleanup_failed as PR failure.
     const remoteBranchLeft = {
       id: "207",
-      repo: "private-repo",
+      repo: "tools",
       state: "failed",
       ci_done: "1",
       push_exit: "0",
@@ -385,7 +385,7 @@ describe("deriveShipJobSteps", () => {
 
     const preCleanupFailed = {
       id: "208",
-      repo: "private-repo",
+      repo: "tools",
       state: "failed",
       ci_done: "1",
       push_exit: "0",
@@ -400,7 +400,7 @@ describe("deriveShipJobSteps", () => {
 
     const cancelledAfterMerge = {
       id: "209",
-      repo: "private-repo",
+      repo: "tools",
       state: "cancelled",
       ci_done: "1",
       push_exit: "0",
@@ -417,7 +417,7 @@ describe("deriveShipJobSteps", () => {
       {
         id: "j10",
         state: "running",
-        route: { host: "host-x-linux" },
+        route: { host: "host-d-linux" },
         last_marker: "REBASED 6f2a82fbde60 ship-queue: some very long commit title here",
       },
       LABELS,
@@ -428,8 +428,8 @@ describe("deriveShipJobSteps", () => {
       {
         id: "j11",
         state: "running",
-        route: { host: "host-x-linux" },
-        last_marker: "STARTED job=11 host=host-x-linux",
+        route: { host: "host-d-linux" },
+        last_marker: "STARTED job=11 host=host-d-linux",
       },
       LABELS,
     );
@@ -490,21 +490,21 @@ describe("deriveShipJobSteps", () => {
 });
 
 describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {
-  it("merges local host, remote nodes, member-joined probes (host-x <-> host-x-linux), and ship.hosts drift", () => {
+  it("merges local host, remote nodes, member-joined probes (host-d <-> host-d-linux), and ship.hosts drift", () => {
     const merged = mergeFleetHosts({
-      localHost: { name: "dev-host-x", cpu_pct: 12, cpus: 16, load1: 0.7 },
+      localHost: { name: "host-a", cpu_pct: 12, cpus: 16, load1: 0.7 },
       localServers: [{ id: "devdeck", service: "devdeck", state: "up", port: 3210 }],
       localSessions: [],
       localAlerts: [{ source: "alerts", name: "disk", state: "ok" }],
       nodes: {
-        "host-x": {
+        "host-d": {
           status: "up",
-          ssh: "host-x",
-          members: ["host-x", "host-x-linux"],
-          host: { name: "host-x", cpu_pct: 8, load1: 1.2 },
+          ssh: "host-d",
+          members: ["host-d", "host-d-linux"],
+          host: { name: "host-d", cpu_pct: 8, load1: 1.2 },
           sessions: [{ id: "s-air", name: "claude", project: "devtools" }],
         },
-        "dev-host-x": {
+        "host-b": {
           status: "offline",
           error: "ssh timeout",
         },
@@ -513,7 +513,7 @@ describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {
         report: {
           hosts: [
             {
-              name: "dev-host-x",
+              name: "host-a",
               ssh: null,
               reached: true,
               platform: "linux",
@@ -521,8 +521,8 @@ describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {
               drift: [],
             },
             {
-              name: "host-x-linux",
-              ssh: "host-x-linux",
+              name: "host-d-linux",
+              ssh: "host-d-linux",
               reached: true,
               platform: "linux-arm64",
               ci_off: true,
@@ -531,8 +531,8 @@ describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {
               drift: [{ text: "go 1.24 != 1.25", state: "drift" }],
             },
             {
-              name: "host-x",
-              ssh: "host-x-wsl",
+              name: "host-c",
+              ssh: "host-c-wsl",
               reached: true,
               platform: "wsl",
               tools: [{ name: "node", version: "22", state: "ok" }],
@@ -544,7 +544,7 @@ describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {
         hosts: {
           hosts: [
             {
-              name: "host-x-linux",
+              name: "host-d-linux",
               drift: ["go 1.24 != 1.25", "uv missing"],
               notes: ["guest vm"],
             },
@@ -553,20 +553,15 @@ describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {
       },
     });
 
-    expect(merged.map((h) => h.id)).toEqual([
-      "dev-host-x",
-      "host-x",
-      "dev-host-x",
-      "host-x",
-    ]);
+    expect(merged.map((h) => h.id)).toEqual(["host-a", "host-d", "host-b", "host-c"]);
     const local = merged[0]!;
     expect(local.isLocal).toBe(true);
-    expect(local.shortName).toBe("host-x");
+    expect(local.shortName).toBe("host-a");
     expect(local.status).toBe("online");
-    expect(local.probeHostName).toBe("dev-host-x");
+    expect(local.probeHostName).toBe("host-a");
 
     const air = merged[1]!;
-    expect(air.probeHostName).toBe("host-x-linux");
+    expect(air.probeHostName).toBe("host-d-linux");
     expect(air.ciOff).toBe(true);
     expect(air.ciOffReason).toBe("on battery");
     // Routine auto-syncable drift stays online without raising a problem badge on the card.
@@ -581,7 +576,7 @@ describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {
 
     const probeOnly = merged[3]!;
     expect(probeOnly.status).toBe("online");
-    expect(probeOnly.ssh).toBe("host-x-wsl");
+    expect(probeOnly.ssh).toBe("host-c-wsl");
   });
 
   it("classifies live states and status badge variants accurately", () => {
@@ -605,13 +600,13 @@ describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {
       {
         id: "twin-basename-diff-checkout",
         branch: "feat/a",
-        repo: "dev/devtools",
+        repo: "example-org/example-repo",
         primary: "/other/devtools",
       },
       {
         id: "same-repo-branch",
         branch: "feat/a",
-        repo: "dev/devtools",
+        repo: "example-org/example-repo",
         primary: "/data/devtools",
       },
     ];
@@ -635,7 +630,7 @@ describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {
 
   it("normalizes array node.alerts and deduplicates fleet alerts without dropping distinct details", () => {
     const hosts = mergeFleetHosts({
-      localHost: { name: "dev-host-x" },
+      localHost: { name: "host-a" },
       localServers: [],
       localSessions: [],
       localAlerts: [
@@ -644,30 +639,30 @@ describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {
         { source: "local", name: "port collision", state: "firing", detail: "port 9090 collision" },
         {
           source: "disk",
-          name: "dev-host-x:/",
+          name: "host-b:/",
           state: "firing",
           detail: "90.1% full (42.7 GB free)",
         },
       ],
       nodes: {
-        "dev-host-x": {
+        "host-b": {
           status: "online",
           alerts: [
             {
               source: "disk",
-              name: "dev-host-x:/",
+              name: "host-b:/",
               state: "firing",
               detail: "90.1% full (42.7 GB free)",
             },
           ],
         },
-        "host-x": {
+        "host-d": {
           status: "online",
-          members: ["host-x", "host-x-linux"],
+          members: ["host-d", "host-d-linux"],
           alerts: [
             {
               source: "disk",
-              name: "host-x-linux:/",
+              name: "host-d-linux:/",
               state: "ok",
               detail: "5.4% full (731.8 GB free)",
             },
@@ -678,17 +673,17 @@ describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {
       shipPanel: null,
     });
 
-    const remoteA34 = hosts.find((h) => h.id === "dev-host-x");
+    const remoteA34 = hosts.find((h) => h.id === "host-b");
     expect(remoteA34?.alerts).toHaveLength(1);
 
     const aggregated = aggregateFleetAlerts(hosts);
     const firing = aggregated.filter((a) => isAlertFiring(a.alert.state));
     // All 3 distinct port collisions are preserved + 1 deduplicated disk alert = 4 firing (not 2, not 5).
     expect(firing).toHaveLength(4);
-    const diskAlert = firing.find((a) => a.alert.name === "dev-host-x:/");
-    expect(diskAlert?.hostShort).toBe("host-x");
-    const guestDisk = aggregated.find((a) => a.alert.name === "host-x-linux:/");
-    expect(guestDisk?.hostShort).toBe("host-x");
+    const diskAlert = firing.find((a) => a.alert.name === "host-b:/");
+    expect(diskAlert?.hostShort).toBe("host-b");
+    const guestDisk = aggregated.find((a) => a.alert.name === "host-d-linux:/");
+    expect(guestDisk?.hostShort).toBe("host-d");
   });
 
   it("selectVisibleThreadShipJobs shows live jobs, latest failed until retried/dismissed, and done only for 5 minutes", () => {

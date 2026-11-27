@@ -2,7 +2,7 @@
 /**
  * The `runlog` command line: run a test command with its output in a log
  * file and print a short summary, so an agent reads a long suite's log only
- * when it fails (private-repo).
+ * when it fails.
  */
 import * as NodePath from "node:path";
 import * as NodePerfHooks from "node:perf_hooks";

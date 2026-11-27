@@ -1,5 +1,5 @@
-/* util-linux's setsid, for a macOS CI host's GNU bundle (ci-gnu-userland.sh,
- * private-repo): util-linux does not build on macOS, and the Mac had none.
+/* util-linux's setsid, for a macOS CI host's GNU bundle (ci-gnu-userland.sh):
+ * util-linux does not build on macOS, and the Mac had none.
  *
  *   setsid [-f] [-w] PROGRAM [ARGS...]
  *

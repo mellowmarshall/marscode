@@ -423,6 +423,7 @@ const RawRepositorySchema = Schema.Struct({
   html_url: TrimmedNonEmptyString,
   ssh_url: TrimmedNonEmptyString,
   default_branch: Schema.optional(Schema.NullOr(Schema.String)),
+  private: Schema.optional(Schema.Boolean),
 });
 const decodeRawRepository = decodeJsonResult(RawRepositorySchema);
 
@@ -1199,6 +1200,31 @@ export const make = Effect.gen(function* () {
             providerError("getRepositoryCloneUrls", input.cwd, {
               repository: input.repository,
             }),
+          ),
+        ),
+    ),
+    getRepositoryVisibility: Effect.fn("GitHubSourceControlProvider.getRepositoryVisibility")(
+      function* (input) {
+        const host = (input.host ?? environment.GH_HOST ?? "github.com").toLowerCase();
+        const locator = parseGitHubRepositorySelector(input.repository, host);
+        if (locator === null) {
+          const detail = "Repositories are named owner/name.";
+          return yield* failure(
+            detail,
+            new GitHubRepositoryLookupError({ userFacingDetail: detail }),
+          );
+        }
+        const { private: isPrivate } = yield* readRepository(locator);
+        if (isPrivate === undefined) {
+          return yield* failure("GitHub did not report the repository's visibility.");
+        }
+        // GitHub reports `private: true` for internal repositories too.
+        return isPrivate ? ("private" as const) : ("public" as const);
+      },
+      (effect, input) =>
+        effect.pipe(
+          Effect.mapError(
+            providerError("getRepositoryVisibility", input.cwd, { repository: input.repository }),
           ),
         ),
     ),

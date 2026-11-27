@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The CI hosts' Vite+ CLI (vp), for the toolchain in ci-hosts.json
-# (private-repo, #1371): marscode runs workspace install, lint, format,
+# The CI hosts' Vite+ CLI (vp), for the toolchain in ci-hosts.json:
+# marscode runs workspace install, lint, format,
 # typecheck and tests through vp. Every CI host installs the same pinned
 # release from voidzero-dev/vite-plus GitHub Releases, kept current by
 # `ship-queue deps` through sq_pins.json. User-level, no sudo, and never the

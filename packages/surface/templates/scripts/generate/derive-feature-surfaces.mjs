@@ -251,7 +251,7 @@ export function deriveFeatureSurfaces() {
   });
 }
 
-/** The repo's own generators (private-repo), in the declared order; one that fails (a stale copy in check mode) fails the umbrella. */
+/** The repo's own generators, in the declared order; one that fails (a stale copy in check mode) fails the umbrella. */
 function runRepoGenerators(check) {
   let generators;
   try {

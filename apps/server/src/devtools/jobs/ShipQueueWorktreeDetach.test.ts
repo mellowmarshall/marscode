@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ShipQueueWorktreeDetacher } from "./ShipQueueWorktreeDetach.ts";
 import type { ShipQueueBridgeUpdate } from "./ShipQueueBridge.ts";
@@ -11,6 +11,7 @@ function makeShipJob(overrides: Partial<JobSummary> = {}): JobSummary {
     source: "ship-queue",
     kind: "ship",
     title: "fix: demo",
+    phaseLabel: "Done",
     state: "done",
     binding: {
       threadId: "thread-1",
@@ -170,6 +171,7 @@ describe("ShipQueueWorktreeDetacher", () => {
           threadId: "thread-bound",
           branch: "fix/demo",
           worktreePath: "/data/Dev/marscode/fix-demo",
+          host: "devbox",
         },
       }),
     ]);

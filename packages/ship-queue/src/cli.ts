@@ -13,6 +13,7 @@ import {
   runVersionSubcommand,
 } from "./cliSubcommands.ts";
 import { gitleaksScanner, guardProtocolGuard, playbookDeclarationChallenger } from "./houseGate.ts";
+import { scannerHygieneGate } from "./hygieneGate.ts";
 import { isJobId, jobLogPath, listJobIds, readJob, readLog } from "./jobStore.ts";
 import { lastMarker, SHIP_QUEUE_STAGE_AFTER, SHIP_QUEUE_STAGE_MARKERS } from "./markers.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
@@ -60,6 +61,7 @@ export function defaultDeps(root: string): ShipQueueDeps {
     forge: ghForge(nodeProcessRunner),
     guard: guardProtocolGuard,
     secretScan: gitleaksScanner(nodeProcessRunner),
+    hygieneScan: scannerHygieneGate(nodeProcessRunner),
     declarationChallenge: playbookDeclarationChallenger(nodeProcessRunner),
     clock: { now: () => new Date().toISOString() },
     isProcessAlive,

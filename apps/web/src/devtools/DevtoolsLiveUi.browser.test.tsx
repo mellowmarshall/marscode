@@ -125,7 +125,7 @@ function defaultMockFetch(
         manifest: null,
         storageCleanupReport: null,
         hostScan: {
-          host: "dev-host-x",
+          host: "host-a",
           scanned_at: "2026-11-22T01:03:43-0500",
           high_pressure: false,
           mounts: [
@@ -153,7 +153,7 @@ function defaultMockFetch(
       status: 200,
       data: {
         policyPath: "/home/dev/.config/reaper/policy.toml",
-        rules: [{ path: "/data/private-repo/results", maxAgeDays: 14, keepLatest: 3, enabled: false }],
+        rules: [{ path: "/srv/results", maxAgeDays: 14, keepLatest: 3, enabled: false }],
         protectedHistoryRoots: ["/home/dev/.t3/userdata/statev2.sqlite"],
       },
     });
@@ -161,7 +161,7 @@ function defaultMockFetch(
   if (subPath === "/review-stats") {
     const isMac = envId === "remote-mac";
     const hostFilter = options?.query?.host;
-    const myHost = isMac ? "mac-studio" : "dev-host-x";
+    const myHost = isMac ? "mac-studio" : "host-a";
     const matches = !hostFilter || hostFilter === myHost;
     return Promise.resolve({
       ok: true,
@@ -242,7 +242,7 @@ function defaultMockFetch(
       status: 200,
       data: {
         enabled: true,
-        host: envId === "remote-mac" ? "mac-studio" : "dev-host-x",
+        host: envId === "remote-mac" ? "mac-studio" : "host-a",
         configPath: "/home/dev/.config/cerno/telemetry.json",
         captureDir: "/home/dev/.local/share/cerno",
         localCapture: true,
@@ -272,7 +272,7 @@ function defaultMockFetch(
         byMode: [],
         recentFindings: [],
         facets: {
-          hosts: [envId === "remote-mac" ? "mac-studio" : "dev-host-x"],
+          hosts: [envId === "remote-mac" ? "mac-studio" : "host-a"],
           harnesses: ["claude"],
         },
       },
@@ -293,7 +293,7 @@ describe("Devtools live browser UI", () => {
     await using _screen = await render(
       <FleetReaperTab
         environmentId={EnvironmentId.make("local-host")}
-        localHostName="dev-host-x"
+        localHostName="host-a"
         mergedWorktreesCount={3}
         onFeedback={feedback}
       />,
@@ -303,13 +303,13 @@ describe("Devtools live browser UI", () => {
     await expect.element(page.getByText("91 sessions · 211 worktrees")).toBeVisible();
     await expect.element(page.getByText("/data", { exact: true })).toBeVisible();
     const pathInput = page.getByLabelText("Cleanup directory path");
-    await expect.element(pathInput).toHaveValue("/data/private-repo/results");
+    await expect.element(pathInput).toHaveValue("/srv/results");
 
     // Edit rule path & max days (decimal 1.5), then click Refresh scan — unsaved edits must stay intact!
-    await pathInput.fill("/data/private-repo/results-edited");
+    await pathInput.fill("/srv/results-edited");
     await page.getByLabelText("Max days").fill("1.5");
     await page.getByRole("button", { name: "Refresh scan" }).click();
-    await expect.element(pathInput).toHaveValue("/data/private-repo/results-edited");
+    await expect.element(pathInput).toHaveValue("/srv/results-edited");
     await expect.element(page.getByLabelText("Max days")).toHaveValue("1.5");
 
     // Cargo dry-run renders reclaimed bytes cleanly
@@ -323,7 +323,7 @@ describe("Devtools live browser UI", () => {
     await using _screen = await render(
       <FleetReaperTab
         environmentId={EnvironmentId.make("local-host")}
-        localHostName="dev-host-x"
+        localHostName="host-a"
         selectedHostName="mac-studio"
         isSelectedHostLocal={false}
         mergedWorktreesCount={3}
@@ -399,7 +399,7 @@ describe("Devtools live browser UI", () => {
     resetDefaultFetch();
     const hosts = mergeFleetHosts({
       localHost: {
-        name: "dev-host-x",
+        name: "host-a",
         uptime_s: 3_134_249,
         load1: 2.22,
         cpus: 16,
@@ -421,33 +421,33 @@ describe("Devtools live browser UI", () => {
       localSessions: [],
       localAlerts: [],
       nodes: {
-        host-x: {
+        "host-c": {
           status: "online",
-          host: { name: "host-x", uptime_s: 470_897, load1: 0.15, cpus: 20, cpu_pct: 5 },
+          host: { name: "host-c", uptime_s: 470_897, load1: 0.15, cpus: 20, cpu_pct: 5 },
         },
-        "host-x": {
+        "host-d": {
           status: "online",
-          host: { name: "host-x", uptime_s: 289_660, load1: 0.9, cpus: 10, cpu_pct: 9 },
+          host: { name: "host-d", uptime_s: 289_660, load1: 0.9, cpus: 10, cpu_pct: 9 },
         },
-        "dev-host-x": {
+        "host-b": {
           status: "online",
-          host: { name: "dev-host-x", uptime_s: 481_290, load1: 0.09, cpus: 8, cpu_pct: 93 },
+          host: { name: "host-b", uptime_s: 481_290, load1: 0.09, cpus: 8, cpu_pct: 93 },
         },
       },
       hostsReport: {
         report: {
           hosts: [
             {
-              name: "dev-host-x",
+              name: "host-a",
               reached: true,
               drift: [
                 { text: "lacks ship-queue current files (host-config.json)", state: "update" },
               ],
             },
-            { name: "host-x", reached: true, drift: [] },
-            { name: "host-x", reached: true, drift: [] },
+            { name: "host-c", reached: true, drift: [] },
+            { name: "host-d", reached: true, drift: [] },
             {
-              name: "dev-host-x",
+              name: "host-b",
               reached: true,
               drift: [],
               grant_error: "sudo grant expired for docker-ce",
@@ -458,7 +458,7 @@ describe("Devtools live browser UI", () => {
       shipPanel: null,
     });
 
-    // Routine drift on host-x must NOT produce an "updates" tag or problem banner
+    // Routine drift on host-a must NOT produce an "updates" tag or problem banner
     const localHost = hosts[0]!;
     expect(localHost.problem).toBeNull();
     await using screen = await render(
@@ -476,8 +476,8 @@ describe("Devtools live browser UI", () => {
       </div>,
     );
 
-    await expect.element(page.getByText("host-x", { exact: true })).toBeVisible();
-    await expect.element(page.getByText("host-x", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("host-a", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("host-b", { exact: true })).toBeVisible();
     await expect.element(page.getByText("2.22", { exact: true })).toBeVisible();
     await expect.element(page.getByText("0.15", { exact: true })).toBeVisible();
     await expect.element(page.getByText("0.90", { exact: true })).toBeVisible();
@@ -493,8 +493,8 @@ describe("Devtools live browser UI", () => {
     const totalGaugeWidth = gauges.reduce((s, el) => s + el.getBoundingClientRect().width, 0);
     expect(totalGaugeWidth).toBeGreaterThan(1000);
 
-    // Real needs-root problem on host-x shows matching badge on card AND problem banner on its tab
-    const problemHost = hosts.find((h) => h.id === "dev-host-x")!;
+    // Real needs-root problem on host-b shows matching badge on card AND problem banner on its tab
+    const problemHost = hosts.find((h) => h.id === "host-b")!;
     expect(problemHost.problem?.kind).toBe("needs-root");
     await screen.rerender(
       <div data-fd="root" style={{ width: "1200px" }}>
@@ -561,7 +561,7 @@ describe("Devtools live browser UI", () => {
 
   it("shows a tooltip on mouseover for truncated job titles and omits inline log tails", async () => {
     const longTitle =
-      "SeamPackedReader-L6-v4.2-Extended-Multi-Domain-Curriculum-Pretraining-And-Validation-Run-Checkpoint";
+      "ModelReader-L6-v4.2-Extended-Multi-Domain-Curriculum-Pretraining-And-Validation-Run-Checkpoint";
     const longTailLine =
       "epoch=14/20 step=18400/25000 loss=0.4123 val_acc=0.9482 grad_norm=0.812 throughput=41820 tok/s";
     let inspectCalls = 0;
@@ -578,7 +578,7 @@ describe("Devtools live browser UI", () => {
               phaseLabel: "Running",
               state: "running",
               cancellable: true,
-              binding: { host: "dev-host-x" },
+              binding: { host: "host-a" },
               timing: { startedAt: "2026-11-22T03:00:00Z" },
               recentTail: [longTailLine],
             }}
@@ -620,11 +620,11 @@ describe("Devtools live browser UI", () => {
               kind: "train",
               title: "MicroCortex-F6-6L Distillation & DEV Eval",
               subtitle:
-                "6L x d256, max_len=256, Block AttnRes + PLE + Bigram private-repo + Q8 (pure Rust)",
+                "6L x d256, max_len=256, Block AttnRes + PLE + Bigram Embedding + Q8 (pure Rust)",
               phaseLabel: "Stage 1: Teacher Cache + F6-6L G",
               state: "running",
               cancellable: true,
-              binding: { host: "dev-host-x" },
+              binding: { host: "host-a" },
               timing: { startedAt: "2026-11-22T03:00:00Z", etaSeconds: 185 },
               progress: {
                 current: 19200,
@@ -664,11 +664,11 @@ describe("Devtools live browser UI", () => {
               revision: 1,
               source: "background",
               kind: "render",
-              title: "Rise test v2 on 3080",
+              title: "Render test A",
               phaseLabel: "Rendering",
               state: "running",
               cancellable: true,
-              binding: { host: "host-x" },
+              binding: { host: "host-c" },
               timing: { startedAt: "2026-11-22T03:00:00Z" },
             }}
             nowMs={Date.parse("2026-11-22T03:02:00Z")}
@@ -684,7 +684,7 @@ describe("Devtools live browser UI", () => {
       </TooltipProvider>,
     );
 
-    await expect.element(page.getByText("Rise test v2 on 3080", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Render test A", { exact: true })).toBeVisible();
     await expect.element(page.getByTestId("job-elapsed")).toHaveTextContent("2m");
 
     // First click arms thread-stop confirmation instead of stopping sibling jobs immediately
@@ -706,12 +706,12 @@ describe("Devtools live browser UI", () => {
               revision: 2,
               source: "background",
               kind: "render",
-              title: "Rise test v2 on 3080",
+              title: "Render test A",
               phaseLabel: "Rendering",
               state: "running",
               anomaly: "No output for 16m",
               cancellable: true,
-              binding: { host: "host-x" },
+              binding: { host: "host-c" },
               timing: { startedAt: "2026-11-22T03:00:00Z" },
             }}
             nowMs={Date.parse("2026-11-22T03:18:00Z")}
@@ -739,24 +739,24 @@ describe("Devtools live browser UI", () => {
     });
 
     const hosts = mergeFleetHosts({
-      localHost: { name: "dev-host-x", cpu_pct: 12 },
+      localHost: { name: "host-a", cpu_pct: 12 },
       localServers: [],
       localSessions: [],
       localAlerts: [],
       localWorktrees: null,
       nodes: {
-        host-x: {
+        "host-c": {
           status: "online",
           host: {
-            name: "host-x",
+            name: "host-c",
             cpu_pct: 45,
             gpu: { busy_pct: 99, vram_used: 5.4e9, vram_total: 10e9, busy_hist: [10, 99] },
           },
         },
-        "dev-host-x": {
+        "host-b": {
           status: "online",
           host: {
-            name: "dev-host-x",
+            name: "host-b",
             cpu_pct: 24,
             gpu: { busy_pct: 88, vram_used: 4.1e9, vram_total: 16e9, busy_hist: [5, 88] },
           },
@@ -769,9 +769,9 @@ describe("Devtools live browser UI", () => {
       },
       shipPanel: null,
     });
-    const msiHost = hosts.find((h) => h.id === "host-x")!;
+    const hostC = hosts.find((h) => h.id === "host-c")!;
     const probeOnlyHost = hosts.find((h) => h.id === "probe-only-box")!;
-    expect(msiHost.hasDevdeckNode).toBe(true);
+    expect(hostC.hasDevdeckNode).toBe(true);
     expect(probeOnlyHost.hasDevdeckNode).toBe(false);
 
     const sampleJobs = [
@@ -780,11 +780,11 @@ describe("Devtools live browser UI", () => {
         revision: 1,
         source: "background" as const,
         kind: "render",
-        title: "Rise test v2 on 3080",
+        title: "Render test A",
         phaseLabel: "Rendering",
         state: "running" as const,
         cancellable: true,
-        binding: { host: "host-x" },
+        binding: { host: "host-c" },
         timing: { startedAt: "2026-11-22T03:00:00Z" },
       },
       {
@@ -792,11 +792,11 @@ describe("Devtools live browser UI", () => {
         revision: 1,
         source: "background" as const,
         kind: "render",
-        title: "Rise test v2 on 6800 XT",
+        title: "Render test B",
         phaseLabel: "Rendering",
         state: "running" as const,
         cancellable: true,
-        binding: { host: "dev-host-x" },
+        binding: { host: "host-b" },
         timing: { startedAt: "2026-11-22T03:00:00Z" },
       },
     ];
@@ -806,7 +806,7 @@ describe("Devtools live browser UI", () => {
         <FleetMachinesView
           environmentId={"env-local" as EnvironmentId}
           hosts={hosts}
-          selectedHost={msiHost}
+          selectedHost={hostC}
           hostJobs={sampleJobs}
           selectedJobId={null}
           onFeedback={() => {}}
@@ -814,9 +814,9 @@ describe("Devtools live browser UI", () => {
       </TooltipProvider>,
     );
 
-    await expect.element(page.getByText("Rise test v2 on 3080")).toBeVisible();
-    expect(document.body.textContent).not.toContain("Rise test v2 on 6800 XT");
-    await expect.poll(() => kickedPaths).toContain("/devdeck/nodes/host-x/kick");
+    await expect.element(page.getByText("Render test A")).toBeVisible();
+    expect(document.body.textContent).not.toContain("Render test B");
+    await expect.poll(() => kickedPaths).toContain("/devdeck/nodes/host-c/kick");
 
     // Switching to a probe-only host must NOT fire /kick (avoids 404 spam)
     kickedPaths.length = 0;
@@ -850,11 +850,11 @@ describe("Devtools live browser UI", () => {
               revision: 1,
               source: "background",
               kind: "eval",
-              title: "[1/4] Re-exporting SeamPackedReader-v5-68m",
+              title: "[1/4] Re-exporting ModelReader-v5",
               phaseLabel: "Evaluating",
               state: "running",
               cancellable: true,
-              binding: { host: "dev-host-x" },
+              binding: { host: "host-a" },
               timing: { startedAt: "2026-11-22T03:00:00Z" },
             },
           ]}
@@ -866,14 +866,12 @@ describe("Devtools live browser UI", () => {
 
     await expect.element(page.getByTestId("fleet-telemetry-offline")).toBeVisible();
     await expect.element(page.getByText("Fleet telemetry is offline on this host")).toBeVisible();
-    await expect
-      .element(page.getByText("[1/4] Re-exporting SeamPackedReader-v5-68m"))
-      .toBeVisible();
+    await expect.element(page.getByText("[1/4] Re-exporting ModelReader-v5")).toBeVisible();
     expect(page.getByRole("button", { name: "Start DevDeck" }).elements()).toHaveLength(0);
 
     // Offline banner still appears above host grid when DevDeck stops after hosts already loaded
     const cachedHosts = mergeFleetHosts({
-      localHost: { name: "dev-host-x", cpu_pct: 12 },
+      localHost: { name: "host-a", cpu_pct: 12 },
       localServers: [],
       localSessions: [],
       localAlerts: [],
@@ -946,7 +944,7 @@ describe("Devtools live browser UI", () => {
     // CPU 84% normal, GPU 85% warn, Mem 80% warn, Disk 95% bad
     const probeHosts = mergeFleetHosts({
       localHost: {
-        name: "dev-host-x",
+        name: "host-a",
         cpu_pct: 84,
         mem: { used: 80, total: 100 },
         gpu: { busy_pct: 85, vram_used: 79, vram_total: 100, busy_hist: [40, 85] },
@@ -1032,7 +1030,7 @@ describe("Devtools live browser UI", () => {
             revision: 3,
             command: "python scripts/train_v5.py --epochs 3",
             logState: "attached",
-            logPath: "/data/cache/private-repo/logs/v5.log",
+            logPath: "/data/cache/models/logs/v5.log",
             linesParsed: 12,
             logTail: ["step=1/3 loss=1.42", "step=2/3 loss=1.18", "step=3/3 loss=0.95"],
             series: [
@@ -1066,7 +1064,7 @@ describe("Devtools live browser UI", () => {
     });
 
     const hosts = mergeFleetHosts({
-      localHost: { name: "dev-host-x", cpu_pct: 20 },
+      localHost: { name: "host-a", cpu_pct: 20 },
       localServers: [],
       localSessions: [],
       localAlerts: [],
@@ -1080,13 +1078,13 @@ describe("Devtools live browser UI", () => {
       revision: 3,
       source: "background" as const,
       kind: "train",
-      title: "Train SeamReader v5",
+      title: "Train ModelReader v5",
       phaseLabel: "Training",
       state: "running" as const,
       binding: {
-        host: "dev-host-x",
+        host: "host-a",
         threadId: "thread-ml-1",
-        worktreePath: "/data/Dev/private-repo",
+        worktreePath: "/data/Dev/project-d",
       },
       timing: { startedAt: "2026-11-22T15:00:00Z" },
       cancellable: true,

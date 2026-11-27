@@ -28,6 +28,7 @@ import * as Tool from "effect/ai/Tool";
 import * as Toolkit from "effect/ai/Toolkit";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { GitHubTextRejectedError } from "../githubProse.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as GitManager from "../../../git/GitManager.ts";
@@ -177,6 +178,7 @@ export class PullRequestNothingToDoError extends Schema.TaggedError<PullRequestN
 
 export const PullRequestToolError = Schema.Union([
   OrchestratorMcpFailure,
+  GitHubTextRejectedError,
   McpCapabilityUnavailableError,
   PullRequestUrlInvalidError,
   PullRequestTargetIncompleteError,

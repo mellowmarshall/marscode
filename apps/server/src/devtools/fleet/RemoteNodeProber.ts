@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off globalFetch:off - Multi-host fleet prober: T3 PeerLinks first (zero SSH), standard-Unix SSH fallback for unlinked CI hosts.
 import * as NodeChildProcess from "node:child_process";
+import * as NodeOS from "node:os";
 
 import {
   NODE_HIST_LEN,
@@ -30,13 +31,21 @@ export interface RemoteNodeProberDeps {
     | ((url: string, token: string, timeoutMs: number) => Promise<unknown | null>)
     | undefined;
   readonly runSshProbe?: ((sshAlias: string, script: string) => Promise<string | null>) | undefined;
+  readonly localUsername?: string | undefined;
 }
 
-function normalizeToken(raw: string): string {
-  return raw
-    .trim()
-    .toLowerCase()
-    .replace(/^dev-/, "")
+function defaultLocalUsername(): string {
+  try {
+    return NodeOS.userInfo().username;
+  } catch {
+    return "";
+  }
+}
+
+// Installers commonly name a machine `<user>-<model>`, while peer labels often omit the user.
+function normalizeToken(raw: string, userPrefix: string): string {
+  const lower = raw.trim().toLowerCase();
+  return (userPrefix && lower.startsWith(userPrefix) ? lower.slice(userPrefix.length) : lower)
     .replace(/\.local$/, "")
     .replace(/(?:[\s_-]+wsl)+$/, "")
     .replace(/[^a-z0-9]+/g, "");
@@ -228,6 +237,7 @@ export class RemoteNodeProber {
     timeoutMs: number,
   ) => Promise<unknown | null>;
   private readonly runSshProbe: (sshAlias: string, script: string) => Promise<string | null>;
+  private readonly hostUserPrefix: string;
 
   private readonly cpuHistByHost = new Map<string, number[]>();
   private readonly routeCpuHistByHost = new Map<
@@ -242,6 +252,8 @@ export class RemoteNodeProber {
     this.listPeerLinks = deps.listPeerLinks;
     this.fetchJson = deps.fetchJson ?? defaultFetchJson;
     this.runSshProbe = deps.runSshProbe ?? defaultRunSshProbe;
+    const username = (deps.localUsername ?? defaultLocalUsername()).trim().toLowerCase();
+    this.hostUserPrefix = username ? `${username}-` : "";
   }
 
   getCachedNodes(forRouting = false): Readonly<Record<string, FleetNodeState>> {
@@ -312,9 +324,10 @@ export class RemoteNodeProber {
     entry: { readonly name: string; readonly ssh: string; readonly note?: string | undefined },
     peers: ReadonlyArray<PeerLinkCandidate>,
   ): Promise<FleetNodeState | null> {
-    const wantedTokens = new Set([entry.name, entry.ssh].map(normalizeToken).filter(Boolean));
+    const normalize = (raw: string) => normalizeToken(raw, this.hostUserPrefix);
+    const wantedTokens = new Set([entry.name, entry.ssh].map(normalize).filter(Boolean));
     const matched = peers.find((p) => {
-      const lbl = normalizeToken(p.label);
+      const lbl = normalize(p.label);
       return lbl && wantedTokens.has(lbl);
     });
     if (!matched) return null;

@@ -133,7 +133,7 @@ describe("devtoolsEventMux", () => {
 
     es1.emit("guards:event", { type: "snapshot", pending: [] });
     es1.emit("jobs:snapshot", { jobs: [] });
-    es1.emit("devdeck:host", { name: "host-x" });
+    es1.emit("devdeck:host", { name: "host-a" });
     expect(guardEvents).toEqual(["event"]);
     expect(jobEvents).toEqual(["snapshot"]);
     expect(devdeckEvents).toEqual(["host"]);

@@ -22,6 +22,7 @@ import * as ThreadIssueService from "../../../orchestration-v2/ThreadIssueServic
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { GitHubTextRejectedError } from "../githubProse.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -118,6 +119,7 @@ export class IssueLinkFailedError extends Schema.TaggedError<IssueLinkFailedErro
 
 export const IssueToolError = Schema.Union([
   OrchestratorMcpFailure,
+  GitHubTextRejectedError,
   McpCapabilityUnavailableError,
   IssueUnavailableError,
   IssueOperationError,

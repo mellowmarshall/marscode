@@ -1,7 +1,7 @@
 /**
  * DevDeck-style top instrument strip for Fleet Console:
  *   - 4-host top strip (status dot, uptime/load, devtools state, clickable CI on/off switch)
- *   - Selected-host single-row telemetry gauges (CPU 5m graph, Mem, GPU 5m graph + VRAM on EVERY GPU host incl. 7A34, disks, Check hosts)
+ *   - Selected-host single-row telemetry gauges (CPU 5m graph, Mem, GPU 5m graph + VRAM on every GPU host, disks, Check hosts)
  *   - Disk-pressure action bar directly below the selected host (Run storage report / Agent cleanup review)
  */
 import { T, Var, useGT } from "gt-react";
