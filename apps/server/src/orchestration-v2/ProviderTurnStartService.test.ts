@@ -582,9 +582,24 @@ function makeLocalCommandHarness(input: {
       id: threadId,
       activeProviderThreadId: providerThreadId,
       projectId: ProjectId.make("project-native-account-command"),
+      title: "Native account command",
+      providerInstanceId: newInstanceId,
+      modelSelection: run.modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
       branch: input.worktreePath === undefined ? null : "feature/restore",
       worktreePath: input.worktreePath ?? null,
       lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+      forkedFrom: null,
+      createdBy: "user",
+      creationSource: "web",
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      lastVisitedAt: null,
+      deletedAt: null,
     } as OrchestrationV2ThreadProjection["thread"],
     runs: [
       ...(input.previousNativeSession
@@ -1270,7 +1285,7 @@ function makeLocalCommandHarness(input: {
   const resolveRuntimePolicy = vi.fn(
     ({ thread }: Parameters<RuntimePolicy.RuntimePolicyV2Shape["resolve"]>[0]) =>
       Effect.succeed({
-        cwd: thread.worktreePath ?? "/tmp/native-account-command",
+        cwd: thread.worktreePath ?? input.workspaceRoot ?? "/tmp/native-account-command",
         runtimeMode: thread.runtimeMode,
       } as never),
   );
@@ -1384,6 +1399,8 @@ function makeLocalCommandHarness(input: {
         }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
           open,
+          isLive: () => Effect.succeed(false),
+          detach: () => Effect.void,
           get: () =>
             Effect.succeed(
               input.previousTurn?.liveSession === false
@@ -1910,7 +1927,7 @@ effectIt.effect("preserves a replacement committed before exhausted start settle
 );
 
 effectIt.effect(
-  "recovers the local or pushed thread tip, else the current branch, remote default, or detached HEAD",
+  "recovers the local or pushed thread tip, else detaches the thread to workspaceRoot",
   () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1936,7 +1953,6 @@ effectIt.effect(
       yield* git(workspaceRoot, ["config", "user.name", "Test"]);
       yield* git(workspaceRoot, ["config", "user.email", "test@example.com"]);
       yield* git(workspaceRoot, ["commit", "--allow-empty", "-m", "base"]);
-      const baseTip = yield* git(workspaceRoot, ["rev-parse", "HEAD"]);
       yield* git(workspaceRoot, ["remote", "add", "origin", originRoot]);
       yield* git(workspaceRoot, ["push", "origin", "main"]);
       yield* git(workspaceRoot, ["remote", "set-head", "origin", "main"]);
@@ -1959,35 +1975,52 @@ effectIt.effect(
       yield* git(workspaceRoot, ["tag", "project-current", threadTip]);
       yield* git(workspaceRoot, ["tag", "origin/feature/restore", threadTip]);
 
-      const expectedTips = {
-        retained: { tip: threadTip, file: "thread.txt", upstream: null, base: "" },
+      const expectedScenarios = {
+        retained: {
+          outcome: "restored",
+          tip: threadTip,
+          file: "thread.txt",
+          upstream: null,
+          base: "",
+        },
         // A failed removal can leave the folder behind with only dependencies inside.
-        leftover: { tip: threadTip, file: "thread.txt", upstream: null, base: "" },
-        deleted: { tip: projectTip, file: "project.txt", upstream: null, base: "project-current" },
+        leftover: {
+          outcome: "restored",
+          tip: threadTip,
+          file: "thread.txt",
+          upstream: null,
+          base: "",
+        },
+        deleted: { outcome: "detached" },
         pushed: {
+          outcome: "restored",
           tip: threadTip,
           file: "thread.txt",
           upstream: "refs/remotes/origin/feature/restore",
           base: "",
         },
         "pushed-detached": {
+          outcome: "restored",
           tip: threadTip,
           file: "thread.txt",
           upstream: "refs/remotes/origin/feature/restore",
           base: "",
         },
         "pushed-sole-remote": {
+          outcome: "restored",
           tip: threadTip,
           file: "thread.txt",
           upstream: "refs/remotes/upstream/feature/restore",
           base: "",
         },
-        detached: { tip: baseTip, file: null, upstream: null, base: "main" },
-        "detached-no-remote": { tip: projectTip, file: "project.txt", upstream: null, base: "" },
+        detached: { outcome: "detached" },
+        "detached-no-remote": { outcome: "detached" },
       } as const;
       // Reuse the workflow across turns so recovery cannot select a cached project branch.
-      for (const scenario of Object.keys(expectedTips) as Array<keyof typeof expectedTips>) {
-        const expected = expectedTips[scenario];
+      for (const scenario of Object.keys(expectedScenarios) as Array<
+        keyof typeof expectedScenarios
+      >) {
+        const expected = expectedScenarios[scenario];
         if (scenario === "pushed") {
           yield* git(workspaceRoot, ["push", "origin", `${threadTip}:refs/heads/feature/restore`]);
           yield* git(workspaceRoot, ["fetch", "origin"]);
@@ -2006,7 +2039,9 @@ effectIt.effect(
         if (scenario === "detached-no-remote") {
           yield* git(workspaceRoot, ["remote", "remove", "origin"]);
         }
-        yield* fileSystem.remove(worktreePath, { recursive: true });
+        if (yield* fileSystem.exists(worktreePath)) {
+          yield* fileSystem.remove(worktreePath, { recursive: true });
+        }
         if (scenario === "leftover") {
           yield* fileSystem.makeDirectory(path.join(worktreePath, "node_modules"), {
             recursive: true,
@@ -2014,7 +2049,9 @@ effectIt.effect(
         }
         if (scenario !== "retained" && scenario !== "leftover") {
           yield* git(workspaceRoot, ["worktree", "prune"]);
-          yield* git(workspaceRoot, ["branch", "-D", "feature/restore"]);
+          yield* git(workspaceRoot, ["branch", "-D", "feature/restore"]).pipe(
+            Effect.catch(() => Effect.void),
+          );
         }
         const harness = makeLocalCommandHarness({
           text: "Continue",
@@ -2028,22 +2065,29 @@ effectIt.effect(
         const open = harness.open.getMockImplementation()!;
         harness.open.mockImplementation(() =>
           Effect.gen(function* () {
-            expect(yield* git(worktreePath, ["branch", "--show-current"])).toBe("feature/restore");
-            expect(yield* git(worktreePath, ["rev-parse", "HEAD"])).toBe(expected.tip);
-            for (const file of ["thread.txt", "project.txt"]) {
-              expect(yield* fileSystem.exists(path.join(worktreePath, file))).toBe(
-                file === expected.file,
+            if (expected.outcome === "restored") {
+              expect(yield* git(worktreePath, ["branch", "--show-current"])).toBe(
+                "feature/restore",
               );
+              expect(yield* git(worktreePath, ["rev-parse", "HEAD"])).toBe(expected.tip);
+              for (const file of ["thread.txt", "project.txt"]) {
+                expect(yield* fileSystem.exists(path.join(worktreePath, file))).toBe(
+                  file === expected.file,
+                );
+              }
+              expect(yield* branchConfig("merge")).toBe(
+                expected.upstream === null ? "" : "refs/heads/feature/restore",
+              );
+              if (expected.upstream !== null) {
+                expect(
+                  yield* git(worktreePath, ["rev-parse", "--symbolic-full-name", "@{upstream}"]),
+                ).toBe(expected.upstream);
+              }
+              expect(yield* branchConfig("t3-merge-base")).toBe(expected.base);
+            } else {
+              expect(yield* fileSystem.exists(worktreePath)).toBe(false);
+              expect(yield* git(workspaceRoot, ["branch", "--list", "feature/restore"])).toBe("");
             }
-            expect(yield* branchConfig("merge")).toBe(
-              expected.upstream === null ? "" : "refs/heads/feature/restore",
-            );
-            if (expected.upstream !== null) {
-              expect(
-                yield* git(worktreePath, ["rev-parse", "--symbolic-full-name", "@{upstream}"]),
-              ).toBe(expected.upstream);
-            }
-            expect(yield* branchConfig("t3-merge-base")).toBe(expected.base);
             return yield* open();
           }).pipe(Effect.orDie),
         );
@@ -2053,10 +2097,24 @@ effectIt.effect(
         expect(harness.open).toHaveBeenCalledOnce();
         expect(harness.startRootRun).toHaveBeenCalledWith(
           expect.objectContaining({
-            runtimePolicy: expect.objectContaining({ cwd: worktreePath }),
+            runtimePolicy: expect.objectContaining({
+              cwd: expected.outcome === "restored" ? worktreePath : workspaceRoot,
+            }),
           }),
         );
         expect(harness.projection().runs.at(-1)?.status).toBe("running");
+        if (expected.outcome === "detached") {
+          expect(harness.projection().thread.worktreePath).toBeNull();
+          expect(harness.projection().thread.branch).toBeNull();
+          expect(
+            harness.events.some(
+              (event) =>
+                event.type === "thread.metadata-updated" &&
+                event.payload.worktreePath === null &&
+                event.payload.branch === null,
+            ),
+          ).toBe(true);
+        }
       }
     }).pipe(Effect.scoped, Effect.provide(layerRealGit)),
 );

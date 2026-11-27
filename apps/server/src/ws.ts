@@ -1558,6 +1558,20 @@ export const layerWsRpc = (
       const terminalManager = yield* TerminalManager.TerminalManager;
       const prepareTerminalLaunch = yield* makePrepareTerminalLaunch(
         threadManagement.getThreadShell,
+        (thread) =>
+          thread.worktreePath === null
+            ? Effect.void
+            : threadManagement
+                .dispatch({
+                  type: "thread.metadata.update",
+                  commandId: CommandId.make(`terminal-worktree-detach:${crypto.randomUUID()}`),
+                  threadId: thread.id,
+                  worktreePath: null,
+                  branch: null,
+                  expectedWorktreePath: thread.worktreePath,
+                  expectedBranch: thread.branch,
+                })
+                .pipe(Effect.ignore),
       );
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;

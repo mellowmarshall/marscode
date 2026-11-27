@@ -675,6 +675,69 @@ it.layer(
       }),
   );
 
+  it.effect(
+    "detaches and opens in workspaceRoot when a managed worktree and its branch were removed",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { manager, ptyAdapter, baseDir } = yield* createManager();
+        const worktreesDir = path.join(baseDir, "worktrees");
+        const worktreePath = path.join(worktreesDir, "project", "merged");
+        const detachedThreads: Array<string> = [];
+        let creations = 0;
+        const prepareLaunch = yield* makePrepareTerminalLaunch(
+          () =>
+            Effect.succeed({
+              id: ThreadId.make("thread-merged"),
+              projectId: ProjectId.make("project-1"),
+              worktreePath,
+              branch: "feat/merged",
+            }),
+          (thread) =>
+            Effect.sync(() => {
+              detachedThreads.push(thread.id);
+            }),
+        ).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.mock(ServerConfig.ServerConfig)({
+                worktreesDir,
+              } as ServerConfig.ServerConfig["Service"]),
+              ServerSettings.layerTest(),
+              Layer.mock(ProjectService.ProjectService)({
+                getById: () => Effect.succeedSome({ workspaceRoot: baseDir } as never),
+              }),
+              layerNoTaskFolders,
+              Layer.mock(GitWorkflowService.GitWorkflowService)({
+                listLocalBranchNames: () => Effect.succeed(["main"]),
+                resolvePrimaryRemoteName: () => Effect.succeed("origin"),
+                hasCommit: () => Effect.succeed(false),
+                createWorktree: () =>
+                  Effect.sync(() => {
+                    creations++;
+                    return {} as never;
+                  }),
+              }),
+            ),
+          ),
+        );
+        const input = openInput({ cwd: worktreePath, worktreePath });
+        yield* prepareLaunch(input).pipe(
+          Effect.flatMap(({ input: prepared, recover }) =>
+            manager
+              .open(prepared)
+              .pipe(Effect.provideService(TerminalManager.TerminalCwdRecovery, recover)),
+          ),
+        );
+        assert.equal(creations, 0);
+        assert.deepEqual(detachedThreads, ["thread-merged"]);
+        assert.equal(ptyAdapter.spawnInputs.length, 1);
+        assert.equal(ptyAdapter.spawnInputs[0]?.cwd, baseDir);
+        assert.isFalse(yield* fs.exists(worktreePath));
+      }),
+  );
+
   it.effect("spawns lazily and reuses running terminal per thread", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();

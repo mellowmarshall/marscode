@@ -2,16 +2,20 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 
-import { CommandId, ThreadId } from "@t3tools/contracts";
+import { CommandId, ProjectId, ThreadId } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
+import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
 import * as CommandOutputHub from "../../orchestration-v2/CommandOutputHub.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../../project/ProjectService.ts";
 import * as KnownWorkspaces from "../../workspace/KnownWorkspaces.ts";
+import { findBranchRestoreSource } from "../../workspace/restoreMissingWorktree.ts";
 import { cancelShipQueueJob } from "../ShipQueueEventStream.ts";
 import { BackgroundTaskBridge, type BackgroundTaskBridgeOptions } from "./BackgroundTaskBridge.ts";
 import type { CommandExecutionTurnItem } from "./BackgroundTaskLifecycle.ts";
@@ -20,6 +24,10 @@ import { CernoProcessBridge, type CernoProcessBridgeOptions } from "./CernoProce
 import { JobEventBroadcaster } from "./JobEventStream.ts";
 import { stripJobSummaryCmdline } from "./managedJobHelpers.ts";
 import { ShipQueueBridge } from "./ShipQueueBridge.ts";
+import {
+  ShipQueueWorktreeDetacher,
+  type ShipQueueWorktreeDetacherOptions,
+} from "./ShipQueueWorktreeDetach.ts";
 import type { JobDetail, JobSummary, JobsQueueMeta } from "./types.ts";
 
 const SHIP_UNSUBSCRIBED_REFRESH_TTL_MS = 1_500;
@@ -36,6 +44,7 @@ export interface JobRegistryOptions {
   readonly enableCernoBridge?: boolean | undefined;
   readonly cernoBridge?: CernoProcessBridgeOptions | null | undefined;
   readonly backgroundBridge?: BackgroundBridgeConfig | null | undefined;
+  readonly shipWorktreeDetacher?: ShipQueueWorktreeDetacherOptions | null | undefined;
 }
 
 export interface JobRegistryService {
@@ -74,6 +83,10 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
   let queueMeta: JobsQueueMeta = {};
   let lastShipRefreshAtMs = 0;
 
+  const worktreeDetacher = options.shipWorktreeDetacher
+    ? new ShipQueueWorktreeDetacher(options.shipWorktreeDetacher)
+    : null;
+
   const shipBridge =
     options.enableShipBridge === false
       ? null
@@ -85,6 +98,7 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
           for (const id of update.changedIds) broadcaster.markDirty(id, true);
           for (const id of update.removedIds) broadcaster.markRemoved(id);
           if (update.queueMetaChanged) broadcaster.markMetaDirty();
+          void worktreeDetacher?.handleUpdate(update);
         });
 
   const backgroundBridge = options.backgroundBridge
@@ -320,6 +334,7 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
 
     async dispose() {
       shipBridge?.stop();
+      worktreeDetacher?.dispose();
       cernoBridge?.dispose();
       broadcaster.closeAll();
       await backgroundBridge?.dispose();
@@ -335,6 +350,8 @@ export const layer = Layer.effect(
     const knownWorkspaces = yield* KnownWorkspaces.KnownWorkspaces;
     const threadMgmt = yield* ThreadManagementService.ThreadManagementService;
     const commandOutputHub = yield* CommandOutputHub.CommandOutputHub;
+    const projects = yield* ProjectService.ProjectService;
+    const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
     const platform = yield* HostProcess.Platform;
 
     const isWorkspaceAllowed = (realPath: string) =>
@@ -343,6 +360,53 @@ export const layer = Layer.effect(
     const registry = makeJobRegistry({
       enableShipBridge: true,
       cernoBridge: { platform, isWorkspaceAllowed },
+      shipWorktreeDetacher: {
+        findThreadsByWorktreePath: (worktreePath) =>
+          runPromise(
+            threadMgmt.getShellSnapshot({ worktreePath }).pipe(
+              Effect.map((snapshot) => snapshot.threads),
+              Effect.orElseSucceed(() => []),
+            ),
+          ),
+        getThreadById: (threadId) =>
+          runPromise(
+            threadMgmt
+              .getThreadShell(ThreadId.make(threadId))
+              .pipe(Effect.orElseSucceed(() => null)),
+          ),
+        isBranchRemoved: ({ projectId, branch }) =>
+          projectId
+            ? runPromise(
+                Effect.gen(function* () {
+                  const project = Option.getOrUndefined(
+                    yield* projects.getById(ProjectId.make(projectId)),
+                  );
+                  if (project === undefined) return false;
+                  const source = yield* findBranchRestoreSource(
+                    gitWorkflow,
+                    project.workspaceRoot,
+                    branch,
+                  );
+                  return source.kind === "missing";
+                }).pipe(Effect.orElseSucceed(() => false)),
+              )
+            : Promise.resolve(false),
+        detachThread: async ({ threadId, expectedWorktreePath, expectedBranch }) => {
+          await runPromise(
+            threadMgmt
+              .dispatch({
+                type: "thread.metadata.update",
+                commandId: CommandId.make(`ship-queue-worktree-detach:${NodeCrypto.randomUUID()}`),
+                threadId: ThreadId.make(threadId),
+                worktreePath: null,
+                branch: null,
+                expectedWorktreePath,
+                expectedBranch,
+              })
+              .pipe(Effect.ignore),
+          );
+        },
+      },
       backgroundBridge: {
         isWorkspaceAllowed,
         getShellSnapshot: () => runPromise(threadMgmt.getShellSnapshot({ location: "active" })),

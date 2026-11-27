@@ -843,6 +843,49 @@ export const layer: Layer.Layer<
         });
         return;
       }
+      let activeThread = projection.thread;
+      let worktreeDetached = false;
+      if (recreateResult.success.outcome === "detached" && activeThread.worktreePath !== null) {
+        // Re-read before writing so concurrent metadata updates (e.g. PR merge sync or rename) are preserved.
+        const latestThread = yield* projectionStore.getThreadRecords(activeThread.id, []).pipe(
+          Effect.map((records) => records.thread),
+          Effect.orElseSucceed(() => activeThread),
+        );
+        if (
+          latestThread.worktreePath === activeThread.worktreePath &&
+          latestThread.branch === activeThread.branch
+        ) {
+          const detachedAt = yield* DateTime.now;
+          const detachedThread = {
+            ...latestThread,
+            worktreePath: null,
+            branch: null,
+            updatedAt: detachedAt,
+          };
+          const detached = yield* eventSink.writeIfRunCurrent({
+            threadId: activeThread.id,
+            runId: run.id,
+            activeAttemptId: attempt.id,
+            expectedStatus: "starting",
+            events: [
+              {
+                id: yield* idAllocator.allocate.event({ threadId: activeThread.id }),
+                type: "thread.metadata-updated",
+                threadId: activeThread.id,
+                providerInstanceId: latestThread.providerInstanceId,
+                occurredAt: detachedAt,
+                payload: detachedThread,
+              },
+            ],
+          });
+          if (!detached.committed) return;
+          activeThread = detachedThread;
+          worktreeDetached = true;
+        } else {
+          activeThread = latestThread;
+          worktreeDetached = latestThread.worktreePath === null;
+        }
+      }
       const selectInheritedBackgroundItems = (
         current: ProjectionStore.ProjectionRuntimeRecoveryState,
       ): ReturnType<typeof RunExecutionService.selectInheritedBackgroundTurnItems> =>
@@ -867,20 +910,30 @@ export const layer: Layer.Layer<
       }
       const inheritedBackgroundTurnItems = selectInheritedBackgroundItems(recoveryResult.success);
       const providerSessionId = providerThread.providerSessionId;
+      // A live session bound to the deleted worktree cwd cannot survive; release it before reopening in workspaceRoot.
+      if (worktreeDetached && (yield* providerSessions.isLive(providerSessionId))) {
+        yield* providerSessions
+          .detach({
+            providerSessionId,
+            threadId: activeThread.id,
+            detail: "Detached thread from removed worktree.",
+          })
+          .pipe(Effect.ignore);
+      }
       const runControls = makeRunControls({
-        threadId: projection.thread.id,
+        threadId: activeThread.id,
         runId: run.id,
         attemptId: attempt.id,
         providerThreadId: providerThread.id,
         runOrdinal: run.ordinal,
-        worktreePath: projection.thread.worktreePath,
+        worktreePath: activeThread.worktreePath,
         inheritedBackgroundTurnItems,
       });
       const { isCurrentAttemptInStatus } = runControls;
 
       const resolvedPolicy = yield* runtimePolicy
         .resolve({
-          thread: projection.thread,
+          thread: activeThread,
           modelSelection: run.modelSelection,
         })
         .pipe(Effect.result);
@@ -954,7 +1007,7 @@ export const layer: Layer.Layer<
       }
       // Opening a session does not prompt the provider, so the workspace is still unchanged.
       const baseline = yield* runExecution.forkBaseline({
-        appThread: projection.thread,
+        appThread: activeThread,
         run,
         checkpointScope,
       });
@@ -1332,7 +1385,7 @@ export const layer: Layer.Layer<
               ...(boundary === 0
                 ? yield* ContextHandoffService.readInheritedHandoffItems(
                     projectionStore,
-                    projection.thread,
+                    activeThread,
                   )
                 : []),
               ...history.filter((item) =>
@@ -2243,7 +2296,7 @@ export const layer: Layer.Layer<
         : session;
       return runExecution.startRootRun({
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
-        appThread: projection.thread,
+        appThread: activeThread,
         providerSessionId,
         session: deliverySession,
         run: runningRun,

@@ -314,6 +314,83 @@ it.effect.each([
   }).pipe(Effect.provide(layerTest));
 });
 
+it.effect("sendToThread detaches a thread whose worktree and branch were removed", () => {
+  const projectId = ProjectId.make("project:thread-management:worktree-detached");
+  const threadId = ThreadId.make("thread:thread-management:worktree-detached");
+  const dispatched: Array<Record<string, unknown>> = [];
+  const layerTest = ThreadManagementService.layerWithLegacyImporter.pipe(
+    Layer.provide(
+      Layer.succeed(ThreadWorktreeRestore, {
+        restore: () => Effect.succeed({ outcome: "detached" as const, fallbackCwd: "/repo/root" }),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(LegacyV1ThreadImporter.LegacyV1ThreadImporter)({
+        ensureTranscript: () => Effect.succeed({ importedThreadCount: 0, importedMessageCount: 0 }),
+      }),
+    ),
+    Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+    Layer.provide(
+      Layer.mock(Orchestrator.OrchestratorV2)({
+        getThreadRecords: () =>
+          Effect.succeed({
+            thread: {
+              id: threadId,
+              projectId,
+              deletedAt: null,
+              archivedAt: null,
+              worktreePath: "/worktrees/merged",
+              branch: "feat/merged",
+              modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
+            },
+            runs: [],
+            providerTurns: [],
+            messages: [],
+            turnItems: [],
+          } as unknown as OrchestrationV2ThreadProjection),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            dispatched.push(command as unknown as Record<string, unknown>);
+            return { sequence: 1, storedEvents: [] } as never;
+          }),
+      }),
+    ),
+    Layer.provide(ServerSettings.layerTest()),
+    Layer.provideMerge(layerReceiptsTest),
+  );
+
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagementService.ThreadManagementService;
+    yield* Effect.flip(
+      threads.sendToThread({
+        projectId,
+        threadId,
+        commandId: CommandId.make("command:thread-management:worktree-detached"),
+        messageId: MessageId.make("message:thread-management:worktree-detached"),
+        text: "Continue on main.",
+        attachments: [],
+        mode: "auto",
+        createdBy: "agent",
+        creationSource: "mcp",
+      }),
+    );
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        type: "thread.metadata.update",
+        threadId,
+        worktreePath: null,
+        branch: null,
+        expectedWorktreePath: "/worktrees/merged",
+        expectedBranch: "feat/merged",
+      }),
+      expect.objectContaining({
+        type: "message.dispatch",
+        threadId,
+      }),
+    ]);
+  }).pipe(Effect.provide(layerTest));
+});
+
 it.effect("waitForThread follows a restart continuation instead of the cut run", () =>
   Effect.gen(function* () {
     const projectId = ProjectId.make("project:thread-management:wait-restart");

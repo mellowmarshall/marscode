@@ -950,14 +950,14 @@ const make = Effect.gen(function* () {
     // Turn start would fail on its own after the send reported success; a replay keeps its answer.
     // A live steer and a receipt replay without a target turn need no workspace.
     if (!missingSteeringTarget && dispatchMode.type !== "steer_active") {
-      yield* worktreeRestore
+      const restoreResult = yield* worktreeRestore
         .restore(target.thread)
         .pipe(
           Effect.catch((cause) =>
             hasReceipt(input.commandId).pipe(
               Effect.flatMap((replay) =>
                 replay
-                  ? Effect.void
+                  ? Effect.succeed({ outcome: "unchanged" as const })
                   : Effect.fail(
                       new ThreadManagementWorktreeRestoreError({ threadId: input.threadId, cause }),
                     ),
@@ -965,6 +965,25 @@ const make = Effect.gen(function* () {
             ),
           ),
         );
+      if (restoreResult.outcome === "detached" && target.thread.worktreePath !== null) {
+        yield* dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make(`worktree-detach:${input.commandId}`),
+          threadId: input.threadId,
+          worktreePath: null,
+          branch: null,
+          expectedWorktreePath: target.thread.worktreePath,
+          expectedBranch: target.thread.branch,
+        }).pipe(
+          Effect.tapError((cause) =>
+            Effect.logWarning("Failed to pre-detach thread after worktree removal", {
+              threadId: input.threadId,
+              cause,
+            }),
+          ),
+          Effect.ignore,
+        );
+      }
     }
 
     const dispatched = yield* dispatch({
@@ -1926,7 +1945,7 @@ const make = Effect.gen(function* () {
 
 const layerThreadWorktreeRestoreNoop = Layer.succeed(ThreadWorktreeRestore, {
   restore: Effect.fn("ThreadWorktreeRestore.restore")(function () {
-    return Effect.void;
+    return Effect.succeed({ outcome: "unchanged" as const });
   }),
 });
 
