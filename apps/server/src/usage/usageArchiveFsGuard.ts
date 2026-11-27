@@ -25,7 +25,7 @@ let globalArchiveFsActive = 0;
 let lastArchiveSlotProgressMs = 0;
 const globalArchiveFsWaiting: Array<() => void> = [];
 
-function releaseArchiveFsSlot(): void {
+export function releaseArchiveFsSlot(): void {
   // @effect-diagnostics-next-line globalDate:off
   lastArchiveSlotProgressMs = Date.now();
   const next = globalArchiveFsWaiting.shift();
@@ -33,7 +33,21 @@ function releaseArchiveFsSlot(): void {
   else next();
 }
 
-function acquireArchiveFsSlot(timeoutMs: number, label: string): Promise<void> {
+/** Slots in use and callers queued for one; tests check that none leak. */
+export function archiveFsSlotUsage(): { readonly active: number; readonly waiting: number } {
+  return { active: globalArchiveFsActive, waiting: globalArchiveFsWaiting.length };
+}
+
+/**
+ * Waits for an archive FS slot. An abort before the slot is granted leaves the queue at once,
+ * so a release never hands a slot to a caller that is gone.
+ */
+export function acquireArchiveFsSlot(
+  timeoutMs: number,
+  label: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted === true) return Promise.reject(new Error(`${label} aborted`));
   if (globalArchiveFsActive < MAX_GLOBAL_ARCHIVE_FS_CONCURRENCY) {
     globalArchiveFsActive += 1;
     // @effect-diagnostics-next-line globalDate:off
@@ -69,6 +83,18 @@ function acquireArchiveFsSlot(timeoutMs: number, label: string): Promise<void> {
       }, delayMs);
       timer.unref?.();
     };
+    signal?.addEventListener(
+      "abort",
+      () => {
+        if (settled) return;
+        settled = true;
+        if (timer !== undefined) clearTimeout(timer);
+        const idx = globalArchiveFsWaiting.indexOf(entry);
+        if (idx !== -1) globalArchiveFsWaiting.splice(idx, 1);
+        reject(new Error(`${label} aborted`));
+      },
+      { once: true },
+    );
     scheduleTimeout(timeoutMs);
     globalArchiveFsWaiting.push(entry);
   });

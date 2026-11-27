@@ -44,6 +44,8 @@ import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { piHome, resolvePiSessionsDir } from "@t3tools/provider-pi/server/usage";
 import * as ServerSettings from "../serverSettings.ts";
+import { boundedArchiveRead } from "../usage/ArchiveReadGuard.ts";
+import { archivedTranscriptInfo } from "./ArchivedTranscriptStat.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import {
   createTranscriptJsonReader,
@@ -957,6 +959,36 @@ export const make = Effect.gen(function* () {
   const statOption = (target: string) =>
     fileSystem.stat(target).pipe(Effect.asSome, Effect.orElseSucceed(Option.none));
 
+  // A session the archive pass moved is a link into the archive: stat it there under the
+  // archive FS cap, so an offline or slow share skips it instead of holding the scan.
+  const transcriptStatOption = (target: string) =>
+    fileSystem.lstat(target).pipe(
+      Effect.flatMap((info) =>
+        info.type !== "SymbolicLink"
+          ? statOption(target)
+          : Clock.currentTimeMillis.pipe(
+              Effect.flatMap((nowMs) =>
+                Effect.promise(() => archivedTranscriptInfo(target, nowMs)),
+              ),
+            ),
+      ),
+      Effect.orElseSucceed(Option.none),
+    );
+
+  // Reading a linked transcript goes to the archive share: bound its open and reads too.
+  const boundArchived = <A, E, R>(filePath: string, bytes: number, read: Effect.Effect<A, E, R>) =>
+    fileSystem.readLink(filePath).pipe(
+      Effect.map((linked) => Option.some(path.resolve(path.dirname(filePath), linked))),
+      Effect.orElseSucceed(() => Option.none<string>()),
+      Effect.flatMap((target) =>
+        Option.isNone(target)
+          ? read
+          : boundedArchiveRead(target.value, bytes, read).pipe(
+              Effect.provideService(Path.Path, path),
+            ),
+      ),
+    );
+
   const transcriptChunkReader = Effect.fn("AgentSessionScanner.transcriptChunkReader")(function* (
     file: FileSystem.File,
     filePath: string,
@@ -1217,116 +1249,120 @@ export const make = Effect.gen(function* () {
       return null;
     }
     budget.operationsRemaining -= 1;
-    return yield* Effect.scoped(
-      fileSystem.open(transcript.filePath, { flag: "r" }).pipe(
-        Effect.flatMap((file) =>
-          Effect.gen(function* () {
-            const readChunk = yield* transcriptChunkReader(file, transcript.filePath);
-            const size = isCompressedTranscript(transcript.filePath)
-              ? Number.POSITIVE_INFINITY
-              : transcript.identity.size;
-            let bytesRead = 0;
-            let recordsRead = 0;
-            let selectedBytes = 0;
-            const reserveSelected = (bytes: number) => {
-              selectedBytes += bytes;
-              if (selectedBytes > MAX_TRANSCRIPT_SCAN_BYTES) {
-                throw new TranscriptJsonLimitError({
-                  message: "Transcript cwd fields exceed the scan limit",
-                });
-              }
-            };
-            // Claude writes cwd before message, so a record with a large image need not be read to its end.
-            let topLevelCwd: string | null = null;
-            const createReader = () =>
-              createTranscriptJsonReader(reserveSelected, selectCwdPath, {
-                onTopLevelString: (key, value) => {
-                  if (key === "cwd" && value.trim().length > 0) topLevelCwd ??= value;
-                },
-              });
-            let reader = createReader();
-            let decoder = new TextDecoder();
-            let recordStarted = false;
-            const reserveRecord = () => {
-              if (
-                recordsRead === MAX_METADATA_RECORDS_PER_TRANSCRIPT ||
-                budget.recordsRemaining === 0
-              ) {
-                budget.truncated = true;
-                return false;
-              }
-              recordsRead += 1;
-              budget.recordsRemaining -= 1;
-              return true;
-            };
-            const finishRecord = () => {
-              reader.write(decoder.decode());
-              const value = reader.finish();
-              reader = createReader();
-              decoder = new TextDecoder();
-              recordStarted = false;
-              selectedBytes = 0;
-              return extractCwd(value, source);
-            };
-            const scanChunk = (chunk: Uint8Array): string | false | null | undefined => {
-              let start = 0;
-              while (start < chunk.byteLength) {
-                const newline = chunk.indexOf(10, start);
-                const end = newline === -1 ? chunk.byteLength : newline;
-                if (end > start) {
-                  recordStarted = true;
-                  reader.write(decoder.decode(chunk.subarray(start, end), { stream: true }));
-                  if (topLevelCwd !== null) return reserveRecord() ? topLevelCwd : null;
+    return yield* boundArchived(
+      transcript.filePath,
+      transcript.identity.size,
+      Effect.scoped(
+        fileSystem.open(transcript.filePath, { flag: "r" }).pipe(
+          Effect.flatMap((file) =>
+            Effect.gen(function* () {
+              const readChunk = yield* transcriptChunkReader(file, transcript.filePath);
+              const size = isCompressedTranscript(transcript.filePath)
+                ? Number.POSITIVE_INFINITY
+                : transcript.identity.size;
+              let bytesRead = 0;
+              let recordsRead = 0;
+              let selectedBytes = 0;
+              const reserveSelected = (bytes: number) => {
+                selectedBytes += bytes;
+                if (selectedBytes > MAX_TRANSCRIPT_SCAN_BYTES) {
+                  throw new TranscriptJsonLimitError({
+                    message: "Transcript cwd fields exceed the scan limit",
+                  });
                 }
-                if (newline === -1) return undefined;
-                if (!reserveRecord()) return null;
-                const cwd = finishRecord();
-                if (cwd !== null) return cwd;
-                start = newline + 1;
-              }
-              return undefined;
-            };
-            const parse = <A>(f: () => A) =>
-              Effect.try({
-                try: f,
-                catch: (cause) =>
-                  new TranscriptParseError({ filePath: transcript.filePath, cause }),
-              });
-            const readLastRecord = () =>
-              !recordStarted || !reserveRecord() ? null : finishRecord();
+              };
+              // Claude writes cwd before message, so a record with a large image need not be read to its end.
+              let topLevelCwd: string | null = null;
+              const createReader = () =>
+                createTranscriptJsonReader(reserveSelected, selectCwdPath, {
+                  onTopLevelString: (key, value) => {
+                    if (key === "cwd" && value.trim().length > 0) topLevelCwd ??= value;
+                  },
+                });
+              let reader = createReader();
+              let decoder = new TextDecoder();
+              let recordStarted = false;
+              const reserveRecord = () => {
+                if (
+                  recordsRead === MAX_METADATA_RECORDS_PER_TRANSCRIPT ||
+                  budget.recordsRemaining === 0
+                ) {
+                  budget.truncated = true;
+                  return false;
+                }
+                recordsRead += 1;
+                budget.recordsRemaining -= 1;
+                return true;
+              };
+              const finishRecord = () => {
+                reader.write(decoder.decode());
+                const value = reader.finish();
+                reader = createReader();
+                decoder = new TextDecoder();
+                recordStarted = false;
+                selectedBytes = 0;
+                return extractCwd(value, source);
+              };
+              const scanChunk = (chunk: Uint8Array): string | false | null | undefined => {
+                let start = 0;
+                while (start < chunk.byteLength) {
+                  const newline = chunk.indexOf(10, start);
+                  const end = newline === -1 ? chunk.byteLength : newline;
+                  if (end > start) {
+                    recordStarted = true;
+                    reader.write(decoder.decode(chunk.subarray(start, end), { stream: true }));
+                    if (topLevelCwd !== null) return reserveRecord() ? topLevelCwd : null;
+                  }
+                  if (newline === -1) return undefined;
+                  if (!reserveRecord()) return null;
+                  const cwd = finishRecord();
+                  if (cwd !== null) return cwd;
+                  start = newline + 1;
+                }
+                return undefined;
+              };
+              const parse = <A>(f: () => A) =>
+                Effect.try({
+                  try: f,
+                  catch: (cause) =>
+                    new TranscriptParseError({ filePath: transcript.filePath, cause }),
+                });
+              const readLastRecord = () =>
+                !recordStarted || !reserveRecord() ? null : finishRecord();
 
-            const maxBytes = Math.min(MAX_TRANSCRIPT_SCAN_BYTES, size);
-            while (bytesRead < maxBytes) {
-              if (budget.bytesRemaining === 0 || budget.operationsRemaining === 0) {
+              const maxBytes = Math.min(MAX_TRANSCRIPT_SCAN_BYTES, size);
+              while (bytesRead < maxBytes) {
+                if (budget.bytesRemaining === 0 || budget.operationsRemaining === 0) {
+                  budget.truncated = true;
+                  return null;
+                }
+                const readSize = Math.min(
+                  METADATA_READ_BYTES,
+                  maxBytes - bytesRead,
+                  budget.bytesRemaining,
+                );
+                budget.operationsRemaining -= 1;
+                budget.bytesRemaining -= readSize;
+                const next = yield* readChunk(readSize);
+                if (Option.isNone(next)) {
+                  return yield* parse(readLastRecord);
+                }
+
+                bytesRead += next.value.byteLength;
+                const result = yield* parse(() => scanChunk(next.value));
+                if (result !== undefined) return result;
+              }
+
+              if (bytesRead < size) {
                 budget.truncated = true;
                 return null;
               }
-              const readSize = Math.min(
-                METADATA_READ_BYTES,
-                maxBytes - bytesRead,
-                budget.bytesRemaining,
-              );
-              budget.operationsRemaining -= 1;
-              budget.bytesRemaining -= readSize;
-              const next = yield* readChunk(readSize);
-              if (Option.isNone(next)) {
-                return yield* parse(readLastRecord);
-              }
-
-              bytesRead += next.value.byteLength;
-              const result = yield* parse(() => scanChunk(next.value));
-              if (result !== undefined) return result;
-            }
-
-            if (bytesRead < size) {
-              budget.truncated = true;
-              return null;
-            }
-            return yield* parse(readLastRecord);
-          }),
+              return yield* parse(readLastRecord);
+            }),
+          ),
         ),
-      ),
-    ).pipe(Effect.orElseSucceed(() => null));
+      ).pipe(Effect.orElseSucceed(() => null)),
+    );
   });
 
   const readTranscript = Effect.fn("AgentSessionScanner.readTranscript")(function* (
@@ -1342,123 +1378,134 @@ export const make = Effect.gen(function* () {
       return null;
     }
 
-    return yield* Effect.scoped(
-      fileSystem.open(filePath, { flag: "r" }).pipe(
-        Effect.flatMap((file) =>
-          Effect.gen(function* () {
-            if (!sameTranscriptIdentity(expected, transcriptIdentity(filePath, yield* file.stat))) {
-              return null;
-            }
-            const readChunk = yield* transcriptChunkReader(file, filePath);
-            const records: Array<DecodedTranscriptRecord> = [];
-            const claudeHistory = createClaudeHistoryWindow();
-            let cwd = Option.none<string>();
-            let claudeFields = emptyClaudeFields;
-            let historyBytes = prefix?.historyBytes ?? 0;
-            let recordBytes = 0;
-            let bytesRead = 0;
-            const reserve = (bytes: number) => {
-              recordBytes += bytes;
-              if (historyBytes + recordBytes > MAX_IMPORT_HISTORY_BYTES) {
-                throw new TranscriptJsonLimitError({
-                  message: "Transcript selected history exceeds the 32 MiB memory budget",
-                });
-              }
-            };
-            let reader = createTranscriptJsonReader(reserve, selectTranscriptPath);
-            let decoder = new TextDecoder();
-            let recordStarted = false;
-
-            const finishRecord = () => {
-              reader.write(decoder.decode());
-              const value = reader.finish();
-              const decoded = decodeTranscriptValue(value);
-              if (Option.isNone(decoded) && source === "pi") {
-                // Pi accepts messages this schema rejects, such as null content; keep their tree links.
-                records.push(...Option.toArray(decodePiEntryLinks(value)));
-              } else if (Option.isSome(decoded)) {
-                if (Option.isNone(cwd)) cwd = Option.fromNullOr(extractDecodedCwd(decoded.value));
-                if (source === "claudeAgent") {
-                  claudeFields = foldClaudeFields(claudeFields, decoded.value);
-                }
-                if (shouldRetainDecodedRecord(source, decoded.value)) {
-                  if (source === "claudeAgent") {
-                    historyBytes += recordBytes - claudeHistory.push(decoded.value, recordBytes);
-                  } else if (
-                    source === "pi" &&
-                    decoded.value.type === "message" &&
-                    !isPiConversationRecord(decoded.value)
-                  ) {
-                    // Tool output can dwarf the conversation; keep only the tree links.
-                    const { message: _message, ...links } = decoded.value;
-                    records.push(links);
-                  } else {
-                    records.push(decoded.value);
-                    historyBytes += recordBytes;
-                  }
-                }
-              }
-              recordBytes = 0;
-              reader = createTranscriptJsonReader(reserve, selectTranscriptPath);
-              decoder = new TextDecoder();
-              recordStarted = false;
-              return records.length <= MAX_IMPORT_RECORDS;
-            };
-
-            while (bytesRead < readBytes) {
-              const next = yield* readChunk(
-                Math.min(TRANSCRIPT_PREFIX_BYTES, readBytes - bytesRead),
-              );
-              if (Option.isNone(next)) {
-                // A compressed rollout's decompressed length is only known at its end.
-                if (compressed && prefix === undefined) break;
+    return yield* boundArchived(
+      filePath,
+      readBytes,
+      Effect.scoped(
+        fileSystem.open(filePath, { flag: "r" }).pipe(
+          Effect.flatMap((file) =>
+            Effect.gen(function* () {
+              if (
+                !sameTranscriptIdentity(expected, transcriptIdentity(filePath, yield* file.stat))
+              ) {
                 return null;
               }
-
-              bytesRead += next.value.byteLength;
-              const withinBudget = yield* Effect.try({
-                try: () => {
-                  let start = 0;
-                  while (start < next.value.byteLength) {
-                    const newline = next.value.indexOf(10, start);
-                    const end = newline === -1 ? next.value.byteLength : newline;
-                    recordStarted = true;
-                    reader.write(decoder.decode(next.value.subarray(start, end), { stream: true }));
-                    if (newline === -1) break;
-                    if (!finishRecord()) return false;
-                    start = newline + 1;
-                  }
-                  return true;
-                },
-                catch: (cause) => new TranscriptParseError({ filePath, cause }),
-              });
-              if (!withinBudget) return null;
-            }
-
-            if (
-              recordStarted &&
-              !(yield* Effect.try({
-                try: finishRecord,
-                catch: (cause) => new TranscriptParseError({ filePath, cause }),
-              }))
-            )
-              return null;
-            return sameTranscriptIdentity(expected, transcriptIdentity(filePath, yield* file.stat))
-              ? {
-                  records: source === "claudeAgent" ? claudeHistory.records() : records,
-                  droppedMessageCount: claudeHistory.droppedMessageCount(),
-                  cwd,
-                  claudeFields,
-                  historyBytes,
+              const readChunk = yield* transcriptChunkReader(file, filePath);
+              const records: Array<DecodedTranscriptRecord> = [];
+              const claudeHistory = createClaudeHistoryWindow();
+              let cwd = Option.none<string>();
+              let claudeFields = emptyClaudeFields;
+              let historyBytes = prefix?.historyBytes ?? 0;
+              let recordBytes = 0;
+              let bytesRead = 0;
+              const reserve = (bytes: number) => {
+                recordBytes += bytes;
+                if (historyBytes + recordBytes > MAX_IMPORT_HISTORY_BYTES) {
+                  throw new TranscriptJsonLimitError({
+                    message: "Transcript selected history exceeds the 32 MiB memory budget",
+                  });
                 }
-              : null;
-          }),
+              };
+              let reader = createTranscriptJsonReader(reserve, selectTranscriptPath);
+              let decoder = new TextDecoder();
+              let recordStarted = false;
+
+              const finishRecord = () => {
+                reader.write(decoder.decode());
+                const value = reader.finish();
+                const decoded = decodeTranscriptValue(value);
+                if (Option.isNone(decoded) && source === "pi") {
+                  // Pi accepts messages this schema rejects, such as null content; keep their tree links.
+                  records.push(...Option.toArray(decodePiEntryLinks(value)));
+                } else if (Option.isSome(decoded)) {
+                  if (Option.isNone(cwd)) cwd = Option.fromNullOr(extractDecodedCwd(decoded.value));
+                  if (source === "claudeAgent") {
+                    claudeFields = foldClaudeFields(claudeFields, decoded.value);
+                  }
+                  if (shouldRetainDecodedRecord(source, decoded.value)) {
+                    if (source === "claudeAgent") {
+                      historyBytes += recordBytes - claudeHistory.push(decoded.value, recordBytes);
+                    } else if (
+                      source === "pi" &&
+                      decoded.value.type === "message" &&
+                      !isPiConversationRecord(decoded.value)
+                    ) {
+                      // Tool output can dwarf the conversation; keep only the tree links.
+                      const { message: _message, ...links } = decoded.value;
+                      records.push(links);
+                    } else {
+                      records.push(decoded.value);
+                      historyBytes += recordBytes;
+                    }
+                  }
+                }
+                recordBytes = 0;
+                reader = createTranscriptJsonReader(reserve, selectTranscriptPath);
+                decoder = new TextDecoder();
+                recordStarted = false;
+                return records.length <= MAX_IMPORT_RECORDS;
+              };
+
+              while (bytesRead < readBytes) {
+                const next = yield* readChunk(
+                  Math.min(TRANSCRIPT_PREFIX_BYTES, readBytes - bytesRead),
+                );
+                if (Option.isNone(next)) {
+                  // A compressed rollout's decompressed length is only known at its end.
+                  if (compressed && prefix === undefined) break;
+                  return null;
+                }
+
+                bytesRead += next.value.byteLength;
+                const withinBudget = yield* Effect.try({
+                  try: () => {
+                    let start = 0;
+                    while (start < next.value.byteLength) {
+                      const newline = next.value.indexOf(10, start);
+                      const end = newline === -1 ? next.value.byteLength : newline;
+                      recordStarted = true;
+                      reader.write(
+                        decoder.decode(next.value.subarray(start, end), { stream: true }),
+                      );
+                      if (newline === -1) break;
+                      if (!finishRecord()) return false;
+                      start = newline + 1;
+                    }
+                    return true;
+                  },
+                  catch: (cause) => new TranscriptParseError({ filePath, cause }),
+                });
+                if (!withinBudget) return null;
+              }
+
+              if (
+                recordStarted &&
+                !(yield* Effect.try({
+                  try: finishRecord,
+                  catch: (cause) => new TranscriptParseError({ filePath, cause }),
+                }))
+              )
+                return null;
+              return sameTranscriptIdentity(
+                expected,
+                transcriptIdentity(filePath, yield* file.stat),
+              )
+                ? {
+                    records: source === "claudeAgent" ? claudeHistory.records() : records,
+                    droppedMessageCount: claudeHistory.droppedMessageCount(),
+                    cwd,
+                    claudeFields,
+                    historyBytes,
+                  }
+                : null;
+            }),
+          ),
         ),
-      ),
-    ).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Could not read imported transcript", { filePath, cause }).pipe(
-          Effect.as(null),
+      ).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not read imported transcript", { filePath, cause }).pipe(
+            Effect.as(null),
+          ),
         ),
       ),
     );
@@ -1559,7 +1606,7 @@ export const make = Effect.gen(function* () {
             break;
           }
           operationsRemaining -= 1;
-          const stats = yield* statOption(filePath);
+          const stats = yield* transcriptStatOption(filePath);
           if (
             Option.isNone(stats) ||
             stats.value.type !== "File" ||
@@ -1669,7 +1716,7 @@ export const make = Effect.gen(function* () {
               }
               const filePath = path.join(directory, entry);
               operationsRemaining -= 1;
-              const stats = yield* statOption(filePath);
+              const stats = yield* transcriptStatOption(filePath);
               if (
                 Option.isSome(stats) &&
                 stats.value.type === "File" &&
@@ -2221,7 +2268,7 @@ export const make = Effect.gen(function* () {
           : codexRolloutPath(providerInstanceId, base.thread_id);
         if (filePath === undefined || base.end_byte_offset > bytesRemaining) return null;
         visited.add(base.thread_id);
-        const stats = yield* statOption(filePath);
+        const stats = yield* transcriptStatOption(filePath);
         if (Option.isNone(stats) || stats.value.type !== "File") return null;
         bytesRemaining -= base.end_byte_offset;
         const inherited = yield* readTranscript(
@@ -2247,7 +2294,7 @@ export const make = Effect.gen(function* () {
           if (completed === undefined && (transcriptsRemaining === 0 || bytesRemaining === 0)) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
-          const stats = yield* statOption(transcript.filePath);
+          const stats = yield* transcriptStatOption(transcript.filePath);
           if (Option.isNone(stats) || stats.value.type !== "File") {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }

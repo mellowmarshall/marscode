@@ -11080,6 +11080,7 @@
   "568556fb7ba81f65": "Öka {label}",
   "4889f7885396c26b": "Worktrees",
   "2d96fe39105aae8f": "Roterade loggar",
+  "c92200bed91df628": "Arkiv för agentsessioner",
   "1214c77f4bf1ee81": "Webbläsarartefakter",
   "9831e9c703b3bdd0": "{omitted, plural, one {{environment}: {count} resultat till.} other {{environment}: {count} resultat till.}}",
   "c8192b219451a0d0": "{removed} borttagna, {kept} behållna, {failed} misslyckades",

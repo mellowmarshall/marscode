@@ -50,7 +50,6 @@ export interface ToolAvailabilityFlags {
   readonly devdeck: boolean;
   readonly shipQueue: boolean;
   readonly playbook: boolean;
-  readonly reaper: boolean;
 }
 
 export interface ExecJsonResult {
@@ -103,18 +102,11 @@ function resolveToolPath(name: string): string | null {
   return resolved;
 }
 
-function resolveReaperToolName(): "agent-tmp-reap.py" | "agent-tmp-reap" {
-  if (resolveToolPath("agent-tmp-reap.py") !== null) return "agent-tmp-reap.py";
-  return "agent-tmp-reap";
-}
-
 export function discoverTools(nativeFleetAvailable: boolean): ToolAvailabilityFlags {
   return {
     devdeck: nativeFleetAvailable,
     shipQueue: resolveToolPath("ship-queue") !== null,
     playbook: resolveToolPath("playbook") !== null,
-    reaper:
-      resolveToolPath("agent-tmp-reap.py") !== null || resolveToolPath("agent-tmp-reap") !== null,
   };
 }
 
@@ -404,7 +396,6 @@ async function execTextTool(
 
 // Single-flight coalescing for read-only snapshots
 let inFlightShipStatus: Promise<ExecJsonResult> | null = null;
-let inFlightReaperStatus: Promise<ExecJsonResult> | null = null;
 
 export function getShipQueueStatus(): Promise<ExecJsonResult> {
   if (inFlightShipStatus) return inFlightShipStatus;
@@ -994,39 +985,4 @@ export function createShipQueueEventStream(signal: AbortSignal): ReadableStream<
     },
     { highWaterMark: 2 },
   );
-}
-
-export function getReaperStatus(): Promise<ExecJsonResult> {
-  if (inFlightReaperStatus) return inFlightReaperStatus;
-  inFlightReaperStatus = execJsonTool(resolveReaperToolName(), ["--status", "--json"], {
-    timeoutMs: 15_000,
-  }).finally(() => {
-    inFlightReaperStatus = null;
-  });
-  return inFlightReaperStatus;
-}
-
-export async function runReaperScan(signal?: AbortSignal): Promise<ExecJsonResult> {
-  return await execJsonTool(resolveReaperToolName(), ["--scan", "--json"], {
-    timeoutMs: 30_000,
-    signal,
-  });
-}
-
-export async function getReaperCargoDryRun(signal?: AbortSignal): Promise<ExecJsonResult> {
-  return await execJsonTool(resolveReaperToolName(), ["--cargo", "--dry-run", "--json"], {
-    timeoutMs: 30_000,
-    signal,
-  });
-}
-
-export async function runReaper(cargoOnly: boolean, signal?: AbortSignal): Promise<ExecJsonResult> {
-  const reaperTool = resolveReaperToolName();
-  if (cargoOnly) {
-    return await execJsonTool(reaperTool, ["--cargo", "--json"], {
-      timeoutMs: 60_000,
-      signal,
-    });
-  }
-  return await execTextTool(reaperTool, [], { timeoutMs: 60_000, signal });
 }

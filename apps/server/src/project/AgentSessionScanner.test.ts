@@ -35,6 +35,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { clearArchiveProbeCache, markArchiveOffline } from "../usage/usageArchiveFsGuard.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 
 const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => ({
@@ -433,6 +434,38 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
           },
         ]);
       }),
+    );
+
+    it.effect.skipIf(!symlinksSupported)(
+      "reads a session the archive pass moved, and skips it while the archive is offline",
+      () =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
+          const codexHomePath = yield* makeTempDir("t3code-codex-home-");
+          const archiveRoot = yield* makeTempDir("t3code-session-archive-");
+          const workspace = yield* makeTempDir("t3code-workspace-archived-");
+          const archived = path.join(archiveRoot, "host", "claudeAgent", "-slug", "a.jsonl");
+          yield* writeTranscript({
+            filePath: archived,
+            contents: claudeSessionLine(workspace),
+            mtimeMs: Date.parse("2026-01-01T00:00:00.000Z"),
+          });
+          const local = path.join(claudeHomePath, "projects", "-slug", "a.jsonl");
+          yield* fileSystem.makeDirectory(path.dirname(local), { recursive: true });
+          yield* fileSystem.symlink(archived, local);
+
+          const online = yield* runScan({ claudeHomePath, codexHomePath });
+          expect(online.candidates.map((candidate) => candidate.path)).toEqual([workspace]);
+
+          // An offline share answers from the negative cache at once instead of statting it.
+          markArchiveOffline(path.dirname(archived), 0, "timeout");
+          const offline = yield* runScan({ claudeHomePath, codexHomePath }).pipe(
+            Effect.ensuring(Effect.sync(clearArchiveProbeCache)),
+          );
+          expect(offline.candidates).toEqual([]);
+        }),
     );
 
     it.effect("merges the same cwd seen by both agents and flags imported projects", () =>

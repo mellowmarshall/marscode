@@ -1323,7 +1323,7 @@ export function databaseReclaimMinutes(status: DatabaseStorageStatus): number {
 }
 
 export const StorageCleanupReportEntry = Schema.Struct({
-  kind: Schema.Literals(["worktree", "browser-artifacts", "logs"]),
+  kind: Schema.Literals(["worktree", "browser-artifacts", "logs", "session-archive"]),
   outcome: Schema.Literals(["removed", "kept", "failed"]),
   reason: Schema.String,
   path: Schema.NullOr(Schema.String),
@@ -1345,6 +1345,22 @@ export const StorageCleanupReport = Schema.Struct({
 });
 export type StorageCleanupReport = typeof StorageCleanupReport.Type;
 
+const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
+/** `move` takes a verified session off local disk; `mirror` keeps both copies. */
+export const SessionArchiveMode = Schema.Literals(["off", "mirror", "move"]);
+export type SessionArchiveMode = typeof SessionArchiveMode.Type;
+export const SessionArchiveSettings = Schema.Struct({
+  mode: SessionArchiveMode.pipe(Schema.withDecodingDefault(Effect.succeed("move" as const))),
+  /** This host's archive folder (an SMB mount); empty turns the pass off. */
+  archiveRoot: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  localKeepDays: PositiveInt.pipe(Schema.withDecodingDefault(Effect.succeed(90))),
+  codexTmpAfterHours: PositiveInt.pipe(Schema.withDecodingDefault(Effect.succeed(24))),
+  shellSnapshotsAfterDays: PositiveInt.pipe(Schema.withDecodingDefault(Effect.succeed(7))),
+  /** In `move` mode, leave a link to the archive copy where the session was. */
+  symlinkTiered: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+});
+export type SessionArchiveSettings = typeof SessionArchiveSettings.Type;
+
 export const StorageCleanupSettings = Schema.Struct({
   worktreeKeepWhen: WorktreeKeepWhen.pipe(
     Schema.withDecodingDefault(Effect.succeed("uncommitted-changes")),
@@ -1360,6 +1376,11 @@ export const StorageCleanupSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   logsAfterDays: StorageRetentionDays.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  /** Runs the host reaper every 4 hours: orphaned helpers, stale temp, Cargo and Docker exhaust. */
+  hostReaperEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  sessionArchive: SessionArchiveSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed(Schema.decodeSync(SessionArchiveSettings)({}))),
+  ),
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
@@ -1869,6 +1890,17 @@ export const ServerSettingsPatch = Schema.Struct({
       worktreeUnchanged: Schema.optionalKey(Schema.Boolean),
       browserArtifactsAfterDays: Schema.optionalKey(StorageRetentionDays),
       logsAfterDays: Schema.optionalKey(StorageRetentionDays),
+      hostReaperEnabled: Schema.optionalKey(Schema.Boolean),
+      sessionArchive: Schema.optionalKey(
+        Schema.Struct({
+          mode: Schema.optionalKey(SessionArchiveMode),
+          archiveRoot: Schema.optionalKey(TrimmedString),
+          localKeepDays: Schema.optionalKey(PositiveInt),
+          codexTmpAfterHours: Schema.optionalKey(PositiveInt),
+          shellSnapshotsAfterDays: Schema.optionalKey(PositiveInt),
+          symlinkTiered: Schema.optionalKey(Schema.Boolean),
+        }),
+      ),
     }),
   ),
   worktreesDirectory: Schema.optionalKey(TrimmedString),

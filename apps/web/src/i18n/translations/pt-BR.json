@@ -11072,6 +11072,7 @@
   "568556fb7ba81f65": "Aumentar {label}",
   "4889f7885396c26b": "Worktrees",
   "2d96fe39105aae8f": "Logs rotacionados",
+  "c92200bed91df628": "Arquivo de sessões de agentes",
   "1214c77f4bf1ee81": "Artefatos do navegador",
   "9831e9c703b3bdd0": "{omitted, plural, one {{environment}: mais {count} resultado.} other {{environment}: mais {count} resultados.}}",
   "c8192b219451a0d0": "{removed} removidos, {kept} mantidos, {failed} falharam",

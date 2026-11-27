@@ -33,6 +33,11 @@ export function ownedAgentSlice(stateDir: string): string {
   return `app-t3code-agents-${hash}.slice`;
 }
 
+/** True when /proc/<pid>/cgroup text places a process in a T3 agent slice: a thread's scope owns it. */
+export function inAgentScope(cgroupText: string): boolean {
+  return /\/app-t3code-agents(?:-[0-9a-f]{12})?\.slice\//.test(cgroupText);
+}
+
 const GiB = 1024 ** 3;
 
 /**

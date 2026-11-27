@@ -118,6 +118,25 @@ describe("serverSettings helpers", () => {
       worktreeKeepWhen: "uncommitted-changes",
       browserArtifactsAfterDays: null,
       logsAfterDays: 30,
+      hostReaperEnabled: false,
+      sessionArchive: DEFAULT_SERVER_SETTINGS.storageCleanup.sessionArchive,
+    });
+  });
+  it("changes one session archive field and keeps this host's others", () => {
+    const configured = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      storageCleanup: { sessionArchive: { archiveRoot: "/mnt/share/sessions", localKeepDays: 30 } },
+    });
+    expect(
+      applyServerSettingsPatch(configured, {
+        storageCleanup: { sessionArchive: { mode: "mirror" } },
+      }).storageCleanup.sessionArchive,
+    ).toEqual({
+      mode: "mirror",
+      archiveRoot: "/mnt/share/sessions",
+      localKeepDays: 30,
+      codexTmpAfterHours: 24,
+      shellSnapshotsAfterDays: 7,
+      symlinkTiered: false,
     });
   });
   it("replaces a source control host's patched field so a cleared account pin does not survive", () => {

@@ -11094,6 +11094,7 @@
   "568556fb7ba81f65": "增加 {label}",
   "4889f7885396c26b": "工作树",
   "2d96fe39105aae8f": "轮转日志",
+  "c92200bed91df628": "代理会话归档",
   "1214c77f4bf1ee81": "浏览器产物",
   "9831e9c703b3bdd0": "{omitted, plural, other {{environment}：另有 {count} 个结果。}}",
   "c8192b219451a0d0": "已移除 {removed} 项，保留 {kept} 项，失败 {failed} 项",

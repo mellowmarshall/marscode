@@ -67,7 +67,27 @@ describe("storage cleanup settings", () => {
       worktreeKeepWhen: "uncommitted-changes",
       browserArtifactsAfterDays: null,
       logsAfterDays: null,
+      hostReaperEnabled: false,
+      sessionArchive: {
+        mode: "move",
+        archiveRoot: "",
+        localKeepDays: 90,
+        codexTmpAfterHours: 24,
+        shellSnapshotsAfterDays: 7,
+        symlinkTiered: false,
+      },
     });
+  });
+
+  it("accepts a partial session archive patch and rejects a zero keep window", () => {
+    expect(
+      decodeServerSettingsPatch({
+        storageCleanup: { sessionArchive: { archiveRoot: " /mnt/share/agent-sessions " } },
+      }),
+    ).toEqual({ storageCleanup: { sessionArchive: { archiveRoot: "/mnt/share/agent-sessions" } } });
+    expect(() =>
+      decodeServerSettingsPatch({ storageCleanup: { sessionArchive: { localKeepDays: 0 } } }),
+    ).toThrow();
   });
 
   it("accepts partial custom patches but requires complete stored project rules", () => {

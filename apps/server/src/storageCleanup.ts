@@ -43,6 +43,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { parse as parseYaml } from "yaml";
 
 import * as ServerConfig from "./config.ts";
+import * as StorageManifest from "./devtools/StorageManifest.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
@@ -56,6 +57,7 @@ import { MAX_OVERDUE_ARM_MS } from "./orchestration-v2/UsageLimitRecoveryWorker.
 import * as WorktreeBranchSync from "./orchestration-v2/WorktreeBranchSync.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as Settings from "./serverSettings.ts";
+import * as SessionArchiveTiering from "./storage/SessionArchiveTiering.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -1990,6 +1992,48 @@ const make = Effect.gen(function* () {
     return removed;
   });
 
+  const hostPlatform = yield* HostProcess.Platform;
+  const homeDir = yield* HostProcess.HomeDirectory;
+  const hostName = (yield* HostProcess.Hostname).split(".")[0] ?? "localhost";
+  const archiveSessions = Effect.fn("StorageCleanup.archiveSessions")(function* (
+    serverSettings: ServerSettings,
+    now: number,
+    entries: StorageCleanupReportEntry[],
+  ) {
+    const archived = yield* Effect.tryPromise({
+      try: () =>
+        SessionArchiveTiering.runSessionArchivePass({
+          settings: serverSettings.storageCleanup.sessionArchive,
+          manifest: StorageManifest.buildStorageManifestFromSettings(config, serverSettings),
+          host: hostName,
+          homeDir,
+          uid: typeof process.getuid === "function" ? process.getuid() : -1,
+          platform: hostPlatform,
+          nowMs: now,
+        }),
+      catch: (cause) => new SessionArchiveTiering.SessionArchivePassError({ cause }),
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("session archive pass failed", { error }).pipe(
+          Effect.as([
+            {
+              kind: "session-archive" as const,
+              outcome: "failed" as const,
+              reason: cleanupFailureReason(error),
+              path: null,
+              projectPath: null,
+              threadId: null,
+              threadTitle: null,
+              bytes: null,
+              files: null,
+            },
+          ]),
+        ),
+      ),
+    );
+    entries.push(...archived);
+  });
+
   const reportRef = yield* SubscriptionRef.make<StorageCleanupReport | null>(null);
   const cleanCheckpointRefs = Effect.fn("StorageCleanup.cleanCheckpointRefs")(function* () {
     // Forks display their source history even after its thread is deleted. Keep
@@ -2207,6 +2251,7 @@ const make = Effect.gen(function* () {
         ),
       );
     }
+    yield* archiveSessions(serverSettings, now, entries);
     const counts = { removed: 0, kept: 0, failed: 0 };
     let bytesFreed = 0;
     for (const entry of entries) {

@@ -5,6 +5,7 @@ import * as EnvironmentKeys from "./cloud/environmentKeys.ts";
 import * as AssetSigner from "./assets/AssetSigner.ts";
 import * as WorkspacePreviewRevisions from "./assets/WorkspacePreviewRevisions.ts";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
+import * as Scheduler from "./scheduling/Scheduler.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
@@ -109,6 +110,7 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as DevtoolsHttp from "./devtools/DevtoolsHttp.ts";
+import * as ReaperService from "./devtools/reaper/ReaperService.ts";
 import * as JobRegistry from "./devtools/jobs/JobRegistry.ts";
 import * as TrustedProviderRegistry from "./devtools/TrustedProviderRegistry.ts";
 import { ExternalBackgroundWorkProbeLive } from "./devtools/jobs/cernoThreadProbe.ts";
@@ -737,6 +739,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerThreadSettlementWorker,
   layerIdleCompactionWorker,
   StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+  ReaperService.layer.pipe(Layer.provide(Scheduler.layer)),
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),
     Layer.provide(layerServerRestart),

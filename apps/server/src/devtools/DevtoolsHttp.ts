@@ -66,7 +66,7 @@ import { GuardGrantBroker, type GuardBrokerEvent } from "./GuardGrantBroker.ts";
 import * as JobRegistry from "./jobs/JobRegistry.ts";
 import { handlePlaybookRoute } from "./DevtoolsPlaybookRoutes.ts";
 import * as ReaperPolicy from "./ReaperPolicy.ts";
-import * as ReaperScan from "./ReaperScan.ts";
+import * as Reaper from "./reaper/ReaperService.ts";
 import * as ReviewStats from "./ReviewStats.ts";
 import * as ReviewStatsThreads from "./ReviewStatsThreads.ts";
 import * as StorageManifest from "./StorageManifest.ts";
@@ -161,6 +161,7 @@ function requiredScopesForJsonRoute(
     (/^\/jobs\/[^/?#]+\/cancel$/.test(subPath) ||
       subPath === "/playbook/run" ||
       subPath === "/playbook/challenge" ||
+      subPath === "/reaper/run" ||
       /^\/devdeck\/sessions\/[^/?#]+\/close$/.test(subPath) ||
       /^\/devdeck\/servers\/[^/?#]+(?:\/[^/?#]+)?\/stop$/.test(subPath) ||
       /^\/devdeck\/hosts\/[^/?#]+\/(?:provision|ci)$/.test(subPath))
@@ -633,7 +634,10 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
       !isPeerOrMcpSubject(session.subject);
     const useNativeFleet = Boolean(nativeFleet);
     const devdeckHealth = { reachable: useNativeFleet, passiveSupported: useNativeFleet };
-    const tools = CliRunners.discoverTools(useNativeFleet);
+    const tools = {
+      ...CliRunners.discoverTools(useNativeFleet),
+      reaper: Option.isSome(yield* Effect.serviceOption(Reaper.ReaperService)),
+    };
     const services = DevtoolsErrors.buildServiceHealth({
       devdeckInstalled: tools.devdeck,
       devdeckReachable: devdeckHealth.reachable,
@@ -803,22 +807,25 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
     return jsonResponse(res, res.ok ? 200 : 400);
   }
 
-  if (method === "GET" && subPath === "/reaper/status") {
-    const res = yield* Effect.promise(() => CliRunners.getReaperStatus());
-    return jsonResponse(res, res.ok ? 200 : 503);
-  }
-
-  if (method === "GET" && subPath === "/reaper/cargo-dry-run") {
-    const res = yield* Effect.promise((signal) => CliRunners.getReaperCargoDryRun(signal));
-    return jsonResponse(res, res.ok ? 200 : 503);
-  }
-
-  if (method === "POST" && subPath === "/reaper/run") {
-    const parsed = yield* readJsonBody;
-    if (!parsed.ok) return jsonResponse({ error: parsed.error }, parsed.status);
-    const cargoOnly = parsed.value.cargoOnly === true;
-    const res = yield* Effect.promise((signal) => CliRunners.runReaper(cargoOnly, signal));
-    return jsonResponse(res, res.ok ? 200 : 503);
+  if (
+    (method === "GET" && (subPath === "/reaper/status" || subPath === "/reaper/cargo-dry-run")) ||
+    (method === "POST" && subPath === "/reaper/run")
+  ) {
+    const reaper = yield* Effect.serviceOption(Reaper.ReaperService);
+    if (Option.isNone(reaper)) {
+      return jsonResponse({ ok: false, exitCode: 1, data: null, error: "Reaper unavailable" }, 503);
+    }
+    let data: unknown;
+    if (subPath === "/reaper/status") {
+      data = yield* reaper.value.status;
+    } else if (subPath === "/reaper/cargo-dry-run") {
+      data = yield* reaper.value.cargo(true);
+    } else {
+      const parsed = yield* readJsonBody;
+      if (!parsed.ok) return jsonResponse({ error: parsed.error }, parsed.status);
+      data = yield* reaper.value.run({ cargoOnly: parsed.value.cargoOnly === true });
+    }
+    return jsonResponse({ ok: true, exitCode: 0, data }, 200);
   }
 
   if (method === "GET" && subPath === "/config/fleet") {
@@ -1216,6 +1223,7 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
         )
       : { providerInstances: {}, defaultModelSelection: null as ModelSelection | null };
     const manifest = StorageManifest.buildStorageManifestFromSettings(serverConfig.value, settings);
+    // Until the external reaper timers are retired, they read this file for history roots.
     yield* Effect.tryPromise({
       try: () => StorageManifest.writeStorageManifestIfChanged(manifest),
       catch: (err) => String(err),
@@ -1223,17 +1231,16 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
     if (subPath === "/storage/manifest") {
       return jsonResponse(manifest, 200);
     }
-    if (subPath === "/storage/scan/refresh") {
-      const scanRes = yield* Effect.promise((signal) => CliRunners.runReaperScan(signal));
-      if (!scanRes.ok) {
-        return jsonResponse({ error: scanRes.error ?? "Reaper scan failed" }, 502);
-      }
-    }
+    const reaper = yield* Effect.serviceOption(Reaper.ReaperService);
     const storageCleanup = yield* Effect.serviceOption(StorageCleanup.StorageCleanup);
     const storageCleanupReport = Option.isSome(storageCleanup)
       ? yield* storageCleanup.value.latestReport.pipe(Effect.orElseSucceed(() => null))
       : null;
-    const hostScan = ReaperScan.readLastReaperScanSync();
+    const hostScan = Option.isNone(reaper)
+      ? null
+      : subPath === "/storage/scan/refresh"
+        ? yield* reaper.value.refreshScan
+        : ((yield* reaper.value.latestScan) ?? (yield* reaper.value.refreshScan));
     if (subPath === "/storage/review") {
       const parsed = yield* readJsonBody;
       if (!parsed.ok) return jsonResponse({ error: parsed.error }, parsed.status);

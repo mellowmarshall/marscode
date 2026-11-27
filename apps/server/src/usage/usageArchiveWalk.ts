@@ -170,6 +170,29 @@ export async function probeArchiveRoot(
   return probe;
 }
 
+/**
+ * Stats one path inside an archive (a tiered session link's target) under the process-wide
+ * archive FS cap; undefined when it is missing, offline or slower than timeoutMs, so a stalled
+ * SMB mount never holds a caller.
+ */
+export async function boundedArchiveStat(
+  target: string,
+  options: { readonly nowMs: number; readonly timeoutMs?: number },
+): Promise<NodeFS.BigIntStats | undefined> {
+  const dir = NodePath.dirname(NodePath.resolve(target));
+  if (isArchivePathCachedOffline(dir, options.nowMs)) return undefined;
+  try {
+    return await runArchiveFsOp(
+      () => NodeFSP.stat(target, { bigint: true }),
+      options.timeoutMs ?? ARCHIVE_PROBE_TIMEOUT_MS,
+      "archive stat",
+    );
+  } catch (error) {
+    if (isTimeoutError(error)) markArchiveOffline(dir, options.nowMs, "timeout");
+    return undefined;
+  }
+}
+
 export interface ArchiveWalkResult {
   readonly files: readonly TranscriptFile[];
   readonly updatedDirs: readonly ArchiveDirState[];

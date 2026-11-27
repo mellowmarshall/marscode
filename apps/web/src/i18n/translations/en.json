@@ -11082,6 +11082,7 @@
   "568556fb7ba81f65": "Increase {label}",
   "4889f7885396c26b": "Worktrees",
   "2d96fe39105aae8f": "Rotated logs",
+  "c92200bed91df628": "Agent session archive",
   "1214c77f4bf1ee81": "Browser artifacts",
   "9831e9c703b3bdd0": "{omitted, plural, one {{environment}: {count} more results.} other {{environment}: {count} more results.}}",
   "c8192b219451a0d0": "{removed} removed, {kept} kept, {failed} failed",

@@ -93,7 +93,8 @@ export function parsePsOutput(output: string): ReadonlyArray<ParsedPsProcess> {
   return out;
 }
 
-function runUserPs(): Promise<string> {
+/** `ps` for this user's processes in the format parsePsOutput reads; empty on failure. */
+export function runUserPs(): Promise<string> {
   const uid = typeof process.getuid === "function" ? String(process.getuid()) : "";
   const args = uid
     ? ["-u", uid, "-o", "pid=,ppid=,pcpu=,rss=,etime=,stat=,args=", "-ww"]

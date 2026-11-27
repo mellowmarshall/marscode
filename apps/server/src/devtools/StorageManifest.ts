@@ -1,5 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off
-/** Emits T3 Code's live history/ephemeral storage manifest for agent-tmp-reap and session-archive. */
+/**
+ * T3 Code's live history/ephemeral storage map: the in-process contract for ReaperService and
+ * the session archive. It is also written to storage-manifest.json while hosts still run the
+ * external agent-tmp-reap timer, which reads it to protect history roots.
+ */
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";

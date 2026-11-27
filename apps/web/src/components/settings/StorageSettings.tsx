@@ -304,7 +304,9 @@ function CleanupResults({
                 : entry.path?.split(/[\\/]/).findLast(Boolean)) ?? gt("Worktrees"))
             : entry.kind === "logs"
               ? gt("Rotated logs")
-              : gt("Browser artifacts");
+              : entry.kind === "session-archive"
+                ? gt("Agent session archive")
+                : gt("Browser artifacts");
         return (
           <SettingsRow
             key={`${entry.path ?? entry.kind}:${entry.threadId ?? index}`}
