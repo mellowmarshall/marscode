@@ -22,6 +22,9 @@ const DENIED_PATH_SEGMENTS = [
   "/.config/gh/",
   "/.config/gcloud/",
   "/.claude/",
+  "/.gemini/",
+  "/.cargo/",
+  "/.terraform.d/",
   "/.docker/",
   "/.kube/",
   "/.system_generated/",
@@ -36,14 +39,23 @@ const DENIED_EXACT_BASENAMES = new Set([
   ".pgpass",
   ".my.cnf",
   ".env",
+  ".envrc",
   ".env.local",
   ".env.production",
+  ".vault-token",
+  ".bash_history",
+  ".zsh_history",
   "id_rsa",
   "id_ed25519",
   "kubeconfig",
   "auth.json",
+  "oauth_creds.json",
   "credentials",
   "credentials.json",
+  "credentials.toml",
+  "credentials.tfrc.json",
+  "cookies",
+  "login data",
   "server-owner.sqlite",
   "state.sqlite",
   "statev2.sqlite",
@@ -220,6 +232,14 @@ export async function openValidatedLogFile(input: {
         ok: false,
         kind: "restricted",
         error: "log path must be a regular file (FIFOs/devices are rejected)",
+      };
+    }
+    if (fstat.nlink > 1) {
+      await handle.close();
+      return {
+        ok: false,
+        kind: "restricted",
+        error: "log path must not be hardlinked",
       };
     }
     const lstat = await NodeFS.promises.lstat(candidatePath);

@@ -110,6 +110,7 @@ import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as DevtoolsHttp from "./devtools/DevtoolsHttp.ts";
 import * as JobRegistry from "./devtools/jobs/JobRegistry.ts";
 import * as TrustedProviderRegistry from "./devtools/TrustedProviderRegistry.ts";
+import { ExternalBackgroundWorkProbeLive } from "./devtools/jobs/cernoThreadProbe.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as PreviewTunnel from "./preview/PreviewTunnel.ts";
@@ -801,8 +802,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     ProviderInstanceRegistryHydration.layer.pipe(Layer.provide(SqlitePersistence.layerConfig)),
   ),
   // One gate for the server, below hydration so the Claude adapter sees it: layers memoize by
-  // reference, so the runtime layer shares it.
-  Layer.provideMerge(ProviderInstallationGate.layer),
+  // reference, so the runtime layer shares it. Merged with ExternalBackgroundWorkProbeLive so
+  // Antigravity sessions stay alive while verified OS-level cerno watchers run for the thread.
+  Layer.provideMerge(Layer.merge(ProviderInstallationGate.layer, ExternalBackgroundWorkProbeLive)),
   // Provider hydration builds the Claude and Codex runners, which share the port scanner and
   // trusted provider registry with the terminal, preview, and devtools layers.
   Layer.provideMerge(Layer.merge(layerPortScanner, TrustedProviderRegistry.layer)),

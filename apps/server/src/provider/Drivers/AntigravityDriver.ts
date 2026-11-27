@@ -68,6 +68,7 @@ import {
   makeAntigravityAdapterV2,
   type AntigravityAdapterV2RuntimeInput,
 } from "../../orchestration-v2/Adapters/AntigravityAdapterV2.ts";
+import { ExternalBackgroundWorkProbe } from "../../orchestration-v2/ExternalBackgroundWorkProbe.ts";
 import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeAntigravityProvider } from "../AntigravityProvider.ts";
@@ -619,6 +620,7 @@ export const AntigravityDriver: ProviderDriver<
       ),
     );
     const defaultModel = currentCatalog.pipe(Effect.map((catalog) => catalog?.defaultChatModel));
+    const externalBackgroundWorkProbe = yield* Effect.serviceOption(ExternalBackgroundWorkProbe);
     const orchestrationAdapter = yield* makeAntigravityAdapterV2({
       instanceId,
       selfInvocation,
@@ -631,6 +633,11 @@ export const AntigravityDriver: ProviderDriver<
         ),
       ),
       profileDirectory,
+      ...(Option.isSome(externalBackgroundWorkProbe)
+        ? {
+            hasLiveExternalBackgroundWork: externalBackgroundWorkProbe.value.hasLiveWorkForThread,
+          }
+        : {}),
       onSessionStarted: (started, cwd) =>
         provider.onSessionStarted(started, cwd).pipe(Effect.andThen(authFlow.onSignedInElsewhere)),
       onSessionEvent: (event, cwd) => {

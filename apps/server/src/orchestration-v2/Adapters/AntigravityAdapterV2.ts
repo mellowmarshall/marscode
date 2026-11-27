@@ -4,6 +4,7 @@ import {
   ProviderInstanceId,
   type OrchestrationV2ProviderCapabilities,
   type ProviderSetupError,
+  type ThreadId,
 } from "@t3tools/contracts";
 import type { SelfInvocation } from "@t3tools/shared/nodeRuntime";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -104,6 +105,8 @@ export interface AntigravityAdapterV2Options {
   readonly continuationRequests?: Parameters<typeof makeAcpAdapterV2>[0]["continuationRequests"];
   /** The agent's GEMINI_HOME. Its session logs show turns that ended on an upstream error. */
   readonly profileDirectory?: string;
+  /** Optional OS-level probe (for example live `cerno` watchers) keeping an idle session alive. */
+  readonly hasLiveExternalBackgroundWork?: (threadId: ThreadId) => Effect.Effect<boolean>;
 }
 
 /**
@@ -330,7 +333,7 @@ export const makeAntigravityAdapterV2 = Effect.fn("makeAntigravityAdapterV2")(fu
     path: yield* Path.Path,
     host: yield* ProviderHost.ProviderHost,
   };
-  return yield* makeAcpAdapterV2({
+  const adapter = yield* makeAcpAdapterV2({
     instanceId: options.instanceId,
     flavor: makeAntigravityAcpAdapterFlavor({ ...options, ...services }),
     selfInvocation: options.selfInvocation,
@@ -339,4 +342,20 @@ export const makeAntigravityAdapterV2 = Effect.fn("makeAntigravityAdapterV2")(fu
       ? {}
       : { continuationRequests: options.continuationRequests }),
   });
+  const checkExternalBackgroundWork = options.hasLiveExternalBackgroundWork;
+  if (checkExternalBackgroundWork === undefined) {
+    return adapter;
+  }
+  return {
+    ...adapter,
+    openSession: (input) =>
+      adapter.openSession(input).pipe(
+        Effect.map((runtime) => ({
+          ...runtime,
+          hasExternalKeepAlive: checkExternalBackgroundWork(input.threadId).pipe(
+            Effect.catchCause(() => Effect.succeed(false)),
+          ),
+        })),
+      ),
+  };
 });

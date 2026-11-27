@@ -2951,4 +2951,63 @@ describe("AntigravityAdapterV2 session system prompt", () => {
         assert.include(sent, "<pull_request_linking>");
       }).pipe(Effect.provide(layerSession)),
   );
+
+  it.effect(
+    "reports pending background work while external thread watcher probe returns true",
+    () =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const crypto = yield* SecureRandom.SecureRandom;
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+        );
+        const externalAlive = yield* Ref.make(true);
+        const seenThreadIds: Array<ThreadId> = [];
+        const instanceId = ProviderInstanceId.make("antigravity-external-probe");
+        const adapter = yield* makeAntigravityAdapterV2({
+          instanceId,
+          selfInvocation: yield* resolveSelfInvocation(),
+          makeRuntime: (input) =>
+            makeAntigravityAcpRuntime({
+              ...input,
+              childProcessSpawner,
+              spawn: {
+                command: process.execPath,
+                args: [mockAgentPath],
+                cwd: input.cwd,
+                env: {
+                  T3_ACP_ANTIGRAVITY: "1",
+                  T3_ACP_AGENT_VERSION: "1.5.0",
+                },
+              },
+            }).pipe(Effect.provideService(SecureRandom.SecureRandom, crypto)),
+          withProcess: (_stop, task) => task,
+          defaultModel: Effect.undefined,
+          hasLiveExternalBackgroundWork: (threadId) =>
+            Effect.sync(() => {
+              seenThreadIds.push(threadId);
+            }).pipe(Effect.andThen(Ref.get(externalAlive))),
+        });
+        const workspace = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-ag-cerno-" });
+        const threadId = ThreadId.make("thread-antigravity-cerno-alive");
+        const session = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-antigravity-cerno-alive"),
+          modelSelection: { instanceId, model: "gemini-test-low" },
+          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            cwd: workspace,
+          }),
+        });
+        assert.isDefined(session.hasExternalKeepAlive);
+        assert.isTrue(yield* session.hasExternalKeepAlive!);
+        assert.isFalse(yield* session.hasPendingBackgroundWork ?? Effect.succeed(false));
+        yield* Ref.set(externalAlive, false);
+        assert.isFalse(yield* session.hasExternalKeepAlive!);
+        assert.deepEqual(seenThreadIds, [threadId, threadId]);
+      }).pipe(Effect.provide(layerSession), Effect.scoped),
+  );
 });

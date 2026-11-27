@@ -52,6 +52,12 @@ function tryRealpathSync(p: string): string {
   }
 }
 
+function isPathInsideOrEqual(childPath: string, parentPath: string): boolean {
+  const realChild = tryRealpathSync(childPath);
+  const realParent = tryRealpathSync(parentPath);
+  return realChild === realParent || realChild.startsWith(realParent + NodePath.sep);
+}
+
 export function cernoMatchesBackgroundJob(
   cerno: {
     readonly threadId?: string | undefined;
@@ -78,7 +84,19 @@ export function cernoMatchesBackgroundJob(
     : null;
   const bgRawLog =
     bg.logPath ?? (bg.command ? extractCommandLogPath(bg.command, bg.worktreePath ?? null) : null);
-  if (cernoAbsLog && bgRawLog && tryRealpathSync(cernoAbsLog) === tryRealpathSync(bgRawLog)) {
+  const bgSubdirLog =
+    !bg.logPath &&
+    bg.command &&
+    cerno.cwd &&
+    bg.worktreePath &&
+    isPathInsideOrEqual(cerno.cwd, bg.worktreePath)
+      ? extractCommandLogPath(bg.command, cerno.cwd)
+      : null;
+  if (
+    cernoAbsLog &&
+    ((bgRawLog && tryRealpathSync(cernoAbsLog) === tryRealpathSync(bgRawLog)) ||
+      (bgSubdirLog && tryRealpathSync(cernoAbsLog) === tryRealpathSync(bgSubdirLog)))
+  ) {
     return true;
   }
 

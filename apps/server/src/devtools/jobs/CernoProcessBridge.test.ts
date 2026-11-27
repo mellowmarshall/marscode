@@ -691,4 +691,98 @@ describe("CernoProcessBridge", () => {
       bridge.dispose();
     }
   });
+
+  it("rejects hardlinked logs and expanded sensitive paths while matching relative subdir logs", async () => {
+    const snapDir = mkTempDir("cerno-harden-");
+    const workDir = mkTempDir("cerno-harden-work-");
+    const original = NodePath.join(workDir, "orig.log");
+    const hardlink = NodePath.join(workDir, "link.log");
+    NodeFS.writeFileSync(original, "SECRET_HARDLINK_CONTENT\n", "utf8");
+    NodeFS.linkSync(original, hardlink);
+
+    const geminiDir = NodePath.join(workDir, ".gemini");
+    NodeFS.mkdirSync(geminiDir, { recursive: true });
+    const oauthCreds = NodePath.join(geminiDir, "oauth_creds.json");
+    NodeFS.writeFileSync(oauthCreds, '{"access_token":"secret"}\n', "utf8");
+
+    const envrc = NodePath.join(workDir, ".envrc");
+    NodeFS.writeFileSync(envrc, "export SECRET=1\n", "utf8");
+
+    writeSnapshot(snapDir, "4101.json", {
+      pid: 4101,
+      proc_start_ticks: 41010,
+      log_path: hardlink,
+      tail: "snapshot-only-line",
+    });
+    writeSnapshot(snapDir, "4102.json", {
+      pid: 4102,
+      proc_start_ticks: 41020,
+      log_path: oauthCreds,
+      tail: "snapshot-only-line",
+    });
+    writeSnapshot(snapDir, "4103.json", {
+      pid: 4103,
+      proc_start_ticks: 41030,
+      log_path: envrc,
+      tail: "snapshot-only-line",
+    });
+
+    const bridge = new CernoProcessBridge({
+      snapshotDirs: [snapDir],
+      platform: "linux",
+      ciHostsPath: null,
+      expectedUid: null,
+      nowMs: () => FIXED_NOW_MS,
+      isPidAlive: () => true,
+      readProcStartTicks: async (pid) => pid * 10,
+      resolveThreadId: async () => "thread-harden",
+      isWorkspaceAllowed: async () => true,
+    });
+
+    try {
+      await bridge.refresh();
+      expect(bridge.getDetail("cerno:4101:41010")?.logTail.join("\n")).not.toContain(
+        "SECRET_HARDLINK_CONTENT",
+      );
+      expect(bridge.getDetail("cerno:4102:41020")?.logTail.join("\n")).not.toContain(
+        "access_token",
+      );
+      expect(bridge.getDetail("cerno:4103:41030")?.logTail.join("\n")).not.toContain("SECRET=1");
+    } finally {
+      bridge.dispose();
+    }
+
+    // Subdirectory `cd sub && cerno watch --log run.log` matches when cerno.cwd is inside bg.worktreePath
+    expect(
+      cernoMatchesBackgroundJob(
+        {
+          threadId: "thread-sub",
+          cwd: "/repo/wt-a/sub",
+          command: "pytest",
+          logPath: "/repo/wt-a/sub/run.log",
+        },
+        {
+          threadId: "thread-sub",
+          worktreePath: "/repo/wt-a",
+          command: "cd sub && cerno watch --log run.log -- pytest",
+        },
+      ),
+    ).toBe(true);
+
+    // Unrelated repo subdir with the same relative log basename must NOT match when outside bg.worktreePath
+    expect(
+      cernoMatchesBackgroundJob(
+        {
+          cwd: "/other/repo/sub",
+          command: "pytest",
+          logPath: "/other/repo/sub/run.log",
+        },
+        {
+          threadId: "thread-sub",
+          worktreePath: "/repo/wt-a",
+          command: "cd sub && cerno watch --log run.log -- pytest",
+        },
+      ),
+    ).toBe(false);
+  });
 });
