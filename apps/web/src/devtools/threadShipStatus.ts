@@ -1,7 +1,7 @@
 /**
  * Resolves live ship-queue status ("shipping" vs "deploying") for a single T3 thread.
  */
-import type { DevdeckSessionItem, DevleaseLease, ShipQueueJob } from "./devtoolsClient";
+import type { DevdeckSessionItem, ShipQueueJob } from "./devtoolsClient";
 import { isJobLive, type JobSummary } from "./jobs/jobTypes";
 import { isShipQueueJobLive } from "./ShipQueueSteps";
 
@@ -283,22 +283,8 @@ export function isActionableDevdeckSession(s: DevdeckSessionItem): boolean {
   return true;
 }
 
-export function matchThreadLeases(
-  leases: ReadonlyArray<DevleaseLease>,
-  threadId: string,
-  dedicatedWorktree: string,
-): ReadonlyArray<DevleaseLease> {
-  return leases.filter((lease) => {
-    if (lease.thread_id) return lease.thread_id === threadId;
-    if (dedicatedWorktree && lease.repo)
-      return isPathInside(normPath(lease.repo), dedicatedWorktree);
-    return false;
-  });
-}
-
 export function matchThreadSessions(
   sessions: ReadonlyArray<DevdeckSessionItem>,
-  leaseIds: ReadonlySet<string>,
   branch: string | null,
   dedicatedWorktree: string,
   gitCwd: string,
@@ -306,7 +292,6 @@ export function matchThreadSessions(
   const repoHint = repoHintFromPaths(gitCwd, dedicatedWorktree);
   return sessions.filter((s) => {
     if (!isActionableDevdeckSession(s)) return false;
-    if (s.lease_id && leaseIds.has(s.lease_id)) return true;
     if (dedicatedWorktree && s.cwd && isPathInside(s.cwd, dedicatedWorktree)) return true;
     if (branch && !DEFAULT_BRANCHES.has(branch) && s.branch === branch) {
       if (s.cwd && gitCwd) return isPathInside(s.cwd, gitCwd);

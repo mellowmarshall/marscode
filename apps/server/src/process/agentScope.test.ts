@@ -19,7 +19,14 @@ import * as ServerConfig from "../config.ts";
 import { makeCodexAppServerSpawnCommand } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ProviderProcesses from "./providerProcesses.ts";
-import { classifyScope, make, ownedAgentSlice, type ScopeState } from "./agentScope.ts";
+import {
+  classifyScope,
+  make,
+  ownedAgentSlice,
+  type ScopeState,
+  scopeThreadDescription,
+  threadIdFromScopeDescription,
+} from "./agentScope.ts";
 
 const GiB = 1024 ** 3;
 const memory = vi.hoisted(() => ({ total: 16 * 1024 ** 3, swapKb: 2 * 1024 ** 2 }));
@@ -244,6 +251,8 @@ describe("AgentScope service", () => {
           expect(codex.args).not.toContain("--property=OOMPolicy=stop");
           expect(codex.args).toContain("--property=TimeoutStopSec=10s");
           expect(codex.args).toContain("--collect");
+          expect(agent.args).toContain("--description=t3code thread a");
+          expect(codex.args.some((arg) => String(arg).startsWith("--description="))).toBe(false);
           units.set(unitOf(codex), { activeState: "active", result: "success" });
           expect(yield* scope.oomKilled("a")).toBe(false);
           units.set(unitOf(codex), { activeState: "failed", result: "oom-kill" });
@@ -523,6 +532,37 @@ describe("AgentScope service", () => {
       Effect.gen(function* () {
         yield* scope.wrap({ command: "agent", args: [], name: "t", threadId: "a" });
         expect(calls.filter(([, verb]) => verb === "stop")).toEqual([]);
+      }),
+    ),
+  );
+});
+
+describe("scope thread ownership", () => {
+  it("round-trips a thread id through the unit description", () => {
+    expect(threadIdFromScopeDescription(scopeThreadDescription("thread-42") ?? "")).toBe(
+      "thread-42",
+    );
+    expect(threadIdFromScopeDescription("/bin/sh -c exec agent")).toBeUndefined();
+    expect(threadIdFromScopeDescription("t3code thread   ")).toBeUndefined();
+  });
+
+  it("refuses thread ids that could add lines to systemctl show output", () => {
+    for (const threadId of ["a\nDescription=forged", "a\rb", "a\u0000b", "a b", ""])
+      expect(scopeThreadDescription(threadId)).toBeUndefined();
+    expect(scopeThreadDescription("thread:1.a_b-c")).toBe("t3code thread thread:1.a_b-c");
+  });
+
+  it.effect("omits the description for an unsafe thread id but still scopes the agent", () =>
+    withFakeSystemd(({ scope }) =>
+      Effect.gen(function* () {
+        const agent = yield* scope.wrap({
+          command: "agent",
+          args: [],
+          name: "t",
+          threadId: "a\nDescription=forged",
+        });
+        expect(agent.args.some((arg) => String(arg).startsWith("--description="))).toBe(false);
+        expect(agent.args).toContain("--property=OOMPolicy=stop");
       }),
     ),
   );

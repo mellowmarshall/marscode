@@ -426,6 +426,14 @@ const bootedSimulatorReady: DeviceHost.DeviceHostAgentReady = {
           booted: true,
           physical: false,
         },
+        {
+          id: "tablet",
+          name: "iPad",
+          platform: "ios",
+          version: "26",
+          booted: true,
+          physical: false,
+        },
       ],
       detail: undefined,
     }),
@@ -671,7 +679,9 @@ it.layer(layerProjectDeletionTest)("project deletion during thread commands", (i
             branch: null,
             worktreePath: null,
           });
-          yield* devices.open({ threadId: id, deviceId: "phone", platform: "ios" });
+          // Each thread leases its own simulator; a thread cannot open one another thread holds.
+          const deviceId = id === threadId ? "phone" : "tablet";
+          yield* devices.open({ threadId: id, deviceId, platform: "ios" });
         }
         const otherSessions = yield* devices.sessionsForThread(otherThreadId);
 
@@ -690,6 +700,9 @@ it.layer(layerProjectDeletionTest)("project deletion during thread commands", (i
         assert.deepEqual(yield* devices.sessionsForThread(threadId), []);
         assert.deepEqual(yield* devices.sessionsForThread(otherThreadId), otherSessions);
         assert.isTrue((yield* devices.state).devices[0]?.booted);
+        // The cleanup released the thread's lease, so another thread can take its simulator.
+        yield* devices.open({ threadId: otherThreadId, deviceId: "phone", platform: "ios" });
+        yield* devices.close({ threadId: otherThreadId });
       }),
   );
 

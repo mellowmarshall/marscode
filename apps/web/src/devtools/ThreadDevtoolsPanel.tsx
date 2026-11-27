@@ -1,7 +1,8 @@
 /**
  * Thread-scoped right-rail inspector sections rendered inside `ThreadDetailsPanel`.
  * Shows active thread Ship Queue jobs (plus latest failed until dismissed or done for linger window),
- * active thread MCP jobs (with live tail + non-occluded elapsed timer), and actionable Leases & Sessions.
+ * active thread MCP jobs (with live tail + non-occluded elapsed timer), and the thread's device leases
+ * (its DeviceService sessions) and actionable devdeck sessions.
  */
 import { useEffect, useState } from "react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -25,7 +26,8 @@ import { runTrackedDevdeckAction, type ShipQueueJob } from "./devtoolsClient";
 import { DevtoolsErrorBoundary } from "./DevtoolsErrorBoundary";
 import { useCompletedShipLingerMinutes } from "./devtoolsPreferences";
 import { openFleetConsole } from "./devtoolsStore";
-import { refreshSharedDevdeck, useSharedDevdeck, useSharedDevlease } from "./devtoolsStreams";
+import { useDeviceState } from "../state/device";
+import { refreshSharedDevdeck, useSharedDevdeck } from "./devtoolsStreams";
 import {
   cancelTrackedJob,
   matchJobToThread,
@@ -42,7 +44,6 @@ import {
   addBoundedDismiss,
   formatCompactMem,
   matchThreadJobs,
-  matchThreadLeases,
   matchThreadSessions,
   normalizeDirectoryPath,
   selectVisibleThreadManagedJobs,
@@ -73,7 +74,7 @@ function ThreadDevtoolsPanelInner({
 
   const jobsState = useSharedJobs(environmentId);
   const devdeckState = useSharedDevdeck(environmentId, "passive");
-  const devleaseState = useSharedDevlease(environmentId, false);
+  const deviceState = useDeviceState(environmentId).state;
 
   const [jobIndex, setJobIndex] = useState(0);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
@@ -137,17 +138,20 @@ function ThreadDevtoolsPanelInner({
     return () => clearTimeout(timer);
   }, [nextLingerUntilMs]);
 
-  const allLeases = devleaseState.overview?.list?.leases ?? [];
-  const threadLeases = matchThreadLeases(allLeases, threadId, dedicatedWorktree);
-  const leaseIds = new Set(threadLeases.map((l) => l.id));
+  // DeviceService leases each device to one thread, so its sessions are this thread's leases.
+  const threadLeases = deviceState.sessions
+    .filter((session) => session.threadId === threadId)
+    .map((session) => ({
+      ...session,
+      key: `${session.hostId}\u0000${session.deviceId}`,
+      name:
+        deviceState.devices.find(
+          (device) => device.hostId === session.hostId && device.id === session.deviceId,
+        )?.name ?? session.deviceId,
+      host: deviceState.hosts.find((host) => host.id === session.hostId)?.label ?? session.hostId,
+    }));
   const allSessions = devdeckState.panels?.sessions ?? [];
-  const threadSessions = matchThreadSessions(
-    allSessions,
-    leaseIds,
-    branch,
-    dedicatedWorktree,
-    normGitCwd,
-  );
+  const threadSessions = matchThreadSessions(allSessions, branch, dedicatedWorktree, normGitCwd);
 
   const openShipQueuePage = () => {
     void navigate({
@@ -322,23 +326,25 @@ function ThreadDevtoolsPanelInner({
             ) : null}
 
             {threadLeases.map((lease) => (
-              <div key={lease.id} className="space-y-0.5 rounded-md border bg-muted/20 px-2 py-1.5">
+              <div
+                key={lease.key}
+                className="space-y-0.5 rounded-md border bg-muted/20 px-2 py-1.5"
+              >
                 <div className="flex items-center justify-between gap-1.5">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <SmartphoneIcon className="size-3 shrink-0 text-muted-foreground" />
                     <TruncatedText
                       as="span"
-                      text={lease.avd || lease.id}
+                      text={lease.name}
                       variant="code"
                       className="min-w-0 truncate font-mono font-medium"
                     />
                   </div>
-                  {lease.serial ? <Badge variant="secondary">{lease.serial}</Badge> : null}
+                  <Badge variant="secondary">{lease.platform}</Badge>
                 </div>
                 <div className="flex flex-wrap gap-x-2 font-mono text-3xs text-muted-foreground tabular-nums">
-                  {lease.adb_port !== null ? <span>{`adb:${lease.adb_port}`}</span> : null}
-                  {lease.metro_port !== null ? <span>{`metro:${lease.metro_port}`}</span> : null}
-                  {lease.adopted ? <T>adopted</T> : null}
+                  <span>{lease.deviceId}</span>
+                  <span>{lease.host}</span>
                 </div>
               </div>
             ))}

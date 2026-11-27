@@ -38,12 +38,7 @@ import {
   type ConsoleActionFeedback,
   type FleetConsoleSection,
 } from "./devtoolsStore";
-import {
-  refreshSharedDevdeck,
-  refreshSharedDevlease,
-  useSharedCapabilities,
-  useSharedDevdeck,
-} from "./devtoolsStreams";
+import { refreshSharedDevdeck, useSharedCapabilities, useSharedDevdeck } from "./devtoolsStreams";
 import { FleetMachinesView } from "./FleetMachinesView";
 import { FleetReaperTab } from "./FleetReaperTab";
 import { refreshSharedJobs, useSharedJobs } from "./jobs/jobsStore";
@@ -126,11 +121,7 @@ function FleetConsoleBody({ environmentId }: { readonly environmentId: Environme
   const handleGlobalRefresh = async () => {
     setRefreshing(true);
     setFeedback({ tone: "busy", text: gt("Refreshing fleet telemetry…") });
-    await Promise.all([
-      refreshSharedDevdeck(environmentId),
-      refreshSharedDevlease(environmentId, { force: true, includeBoots: false }),
-      refreshSharedJobs(environmentId),
-    ]);
+    await Promise.all([refreshSharedDevdeck(environmentId), refreshSharedJobs(environmentId)]);
     setRefreshing(false);
     setFeedback({ tone: "ok", text: gt("Fleet telemetry refreshed") });
   };

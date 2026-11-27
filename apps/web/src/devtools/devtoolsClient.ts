@@ -63,7 +63,6 @@ export interface DevtoolsCapabilities {
     readonly devdeck: boolean;
     readonly shipQueue: boolean;
     readonly playbook: boolean;
-    readonly devlease: boolean;
     readonly reaper: boolean;
   };
   readonly services?: DevtoolsServiceHealth;
@@ -177,51 +176,6 @@ export interface ShipQueueDepRepoSummary {
 export interface ShipQueueDepsPayload {
   readonly queueRoot?: string;
   readonly repos: ReadonlyArray<ShipQueueDepRepoSummary>;
-}
-
-export interface DevleaseLease {
-  readonly id: string;
-  readonly project: string;
-  readonly slot: number | null;
-  readonly serial: string;
-  readonly console_port: number | null;
-  readonly metro_port: number | null;
-  readonly web_port: number | null;
-  readonly adb_port: number | null;
-  readonly avd: string;
-  readonly maestro: boolean;
-  readonly windowed: boolean;
-  readonly adopted: boolean;
-  readonly repo: string;
-  readonly owner: string;
-  readonly thread_id: string;
-  readonly created: string;
-}
-
-export interface DevleaseBoot {
-  readonly when: string;
-  readonly lease: string;
-  readonly avd: string;
-  readonly gpu: string;
-  readonly display: string;
-  readonly ram_mb: number | null;
-  readonly seconds: number | null;
-  readonly result: string;
-}
-
-export interface DevleaseOverview {
-  readonly available: boolean;
-  readonly list: {
-    readonly active_count: number;
-    readonly active_limit: number;
-    readonly max_slots: number;
-    readonly leases: ReadonlyArray<DevleaseLease>;
-  } | null;
-  readonly boots: {
-    readonly count: number;
-    readonly boots: ReadonlyArray<DevleaseBoot>;
-  } | null;
-  readonly error?: string | undefined;
 }
 
 export interface ReaperStatus {

@@ -84,6 +84,12 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { makeExpoApi } from "./ExpoApi.ts";
 import * as Exit from "effect/Exit";
 import * as LocalDeviceHost from "./LocalDeviceHost.ts";
+import {
+  type DeviceLease,
+  type DeviceLeaseOptions,
+  deviceLeaseOptions,
+  makeDeviceLeases,
+} from "./DeviceLeases.ts";
 
 export const DEVICE_HUB_ROUTE_PREFIX = "/api/device-hub";
 
@@ -291,7 +297,9 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     ),
   installTool?: (tool: "hub" | "agent") => Effect.Effect<unknown, DeviceError>,
   launchers?: AgentDeviceLaunchers,
+  leaseOptions?: DeviceLeaseOptions,
 ) {
+  const leases = makeDeviceLeases(leaseOptions);
   const settings = yield* ServerSettings.ServerSettingsService;
   const digest = yield* Digest.Digest;
   const lifecycleLock = yield* Semaphore.make(1);
@@ -384,6 +392,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   const publish = (update: (state: DeviceServiceState) => DeviceServiceState) =>
     SynchronizedRef.modifyEffect(stateRef, ({ state }) => {
       const next = { ...update(state), revision: state.revision + 1 };
+      leases.retain(next.sessions);
       const retired = state.sessions.some((session) => !next.sessions.includes(session));
       return PubSub.publish(statePubSub, next).pipe(
         Effect.as([{ next, retired }, { state: next }] as const),
@@ -775,94 +784,138 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
       const host = yield* resolveHost(input.hostId);
       yield* ensurePlatform(host, input.platform);
       const ready = yield* readiness(host.id);
-      let state = yield* refresh(ready);
-      let device = findDevice(state, host.id, input.deviceId);
-      if (!device) {
+      const found = findDevice(yield* refresh(ready), host.id, input.deviceId);
+      if (!found) {
         return yield* new DeviceNotFoundError({ hostId: host.id, deviceId: input.deviceId });
       }
-      // Hosts that route their own streams never encode emulator video with serve-emu's ffmpeg.
-      if (device.platform === "android" && !device.physical && !ready.upstream) {
-        // Resolve the override on the device host the way its hub does.
-        const encoders = yield* ready.run(ready.nodePath, [
-          "-e",
-          `const { spawnSync } = require("node:child_process");
+      // Pooled hosts (Expo, Simlock) lease devices themselves; hosts we drive lease them here.
+      const { kind } = yield* host.summary;
+      if (kind !== "local" && kind !== "ssh")
+        return yield* openFound(input, context, host, ready, found, undefined);
+      const request = {
+        threadId: input.threadId,
+        hostId: host.id,
+        deviceId: found.id,
+        emulator: !found.physical,
+      };
+      // An expired holder keeps its lease until its session has ended, so a failed close leaves
+      // the device with it rather than with no one.
+      for (const stale of yield* leases.expiredBlockers(request)) {
+        yield* close({ threadId: stale.threadId, hostId: stale.hostId, deviceId: stale.deviceId });
+        yield* leases.release(stale);
+      }
+      // Taking the lease and arming its release cannot be split by an interruption.
+      return yield* Effect.uninterruptibleMask((restore) =>
+        leases
+          .acquire(request)
+          .pipe(
+            Effect.flatMap((grant) =>
+              restore(openFound(input, context, host, ready, found, grant.lease)).pipe(
+                Effect.onExit((exit) =>
+                  grant.fresh && Exit.isFailure(exit) ? leases.release(grant.lease) : Effect.void,
+                ),
+              ),
+            ),
+          ),
+      );
+    },
+  );
+
+  const openFound = Effect.fn("DeviceService.openFound")(function* (
+    input: DeviceOpenInput,
+    context: DeviceHost.DeviceOpenContext | undefined,
+    host: DeviceHost.DeviceHost["Service"],
+    ready: DeviceReadiness,
+    found: DeviceSummary,
+    lease: DeviceLease | undefined,
+  ) {
+    let device: DeviceSummary | undefined = found;
+    // Hosts that route their own streams never encode emulator video with serve-emu's ffmpeg.
+    if (device.platform === "android" && !device.physical && !ready.upstream) {
+      // Resolve the override on the device host the way its hub does.
+      const encoders = yield* ready.run(ready.nodePath, [
+        "-e",
+        `const { spawnSync } = require("node:child_process");
   const result = spawnSync(process.env.SERVE_EMU_FFMPEG?.trim() || "ffmpeg", ["-hide_banner", "-encoders"], {
     stdio: "inherit", timeout: 10000, killSignal: "SIGKILL",
   });
   process.exitCode = result.error ? 1 : (result.status ?? 1);`,
-        ]);
-        if (encoders.code !== 0) {
-          return yield* new DevicePlatformUnavailableError({
-            hostId: host.id,
-            platform: "android",
-            reason:
-              "Android emulator video needs working ffmpeg with the libx264 encoder. Install it on the device host's PATH or set SERVE_EMU_FFMPEG there, then retry opening the emulator. After changing PATH or SERVE_EMU_FFMPEG, turn device support off and on for SSH hosts, or restart the local environment server.",
-          });
-        }
-        if (!/^\s*V\S*[ \t]+libx264(?:[ \t]|$)/m.test(`${encoders.stdout}\n${encoders.stderr}`)) {
-          return yield* new DevicePlatformUnavailableError({
-            hostId: host.id,
-            platform: "android",
-            reason:
-              "Android emulator video needs the libx264 encoder. Install an ffmpeg build that includes libx264 on the device host, then retry opening the emulator. After changing PATH or SERVE_EMU_FFMPEG, turn device support off and on for SSH hosts, or restart the local environment server.",
-          });
-        }
+      ]);
+      if (encoders.code !== 0) {
+        return yield* new DevicePlatformUnavailableError({
+          hostId: host.id,
+          platform: "android",
+          reason:
+            "Android emulator video needs working ffmpeg with the libx264 encoder. Install it on the device host's PATH or set SERVE_EMU_FFMPEG there, then retry opening the emulator. After changing PATH or SERVE_EMU_FFMPEG, turn device support off and on for SSH hosts, or restart the local environment server.",
+        });
       }
-      if (!device.booted && input.boot !== false) {
-        const booting = { ...device, threadId: input.threadId };
-        yield* publish((current) => ({
-          ...current,
-          bootingDevices: [
-            ...(current.bootingDevices ?? []).filter(
+      if (!/^\s*V\S*[ \t]+libx264(?:[ \t]|$)/m.test(`${encoders.stdout}\n${encoders.stderr}`)) {
+        return yield* new DevicePlatformUnavailableError({
+          hostId: host.id,
+          platform: "android",
+          reason:
+            "Android emulator video needs the libx264 encoder. Install an ffmpeg build that includes libx264 on the device host, then retry opening the emulator. After changing PATH or SERVE_EMU_FFMPEG, turn device support off and on for SSH hosts, or restart the local environment server.",
+        });
+      }
+    }
+    if (!device.booted && input.boot !== false) {
+      const booting = { ...device, threadId: input.threadId };
+      yield* publish((current) => ({
+        ...current,
+        bootingDevices: [
+          ...(current.bootingDevices ?? []).filter(
+            (entry) => entry.hostId !== booting.hostId || entry.id !== booting.id,
+          ),
+          booting,
+        ],
+      }));
+      const bootedId = yield* ready.devices.boot(device, context).pipe(
+        Effect.ensuring(
+          publish((current) => ({
+            ...current,
+            bootingDevices: (current.bootingDevices ?? []).filter(
               (entry) => entry.hostId !== booting.hostId || entry.id !== booting.id,
             ),
-            booting,
-          ],
-        }));
-        const bootedId = yield* ready.devices.boot(device, context).pipe(
-          Effect.ensuring(
-            publish((current) => ({
-              ...current,
-              bootingDevices: (current.bootingDevices ?? []).filter(
-                (entry) => entry.hostId !== booting.hostId || entry.id !== booting.id,
-              ),
-            })),
-          ),
-        );
-        state = yield* refresh(ready);
-        // Retained entries predate the boot, so only a complete listing confirms the booted device.
-        device = state.hostStatuses[host.id]?.incompletePlatforms?.includes(device.platform)
-          ? undefined
-          : (findDevice(state, host.id, bootedId) ?? findDevice(state, host.id, device.id));
-        if (!device) {
-          return yield* new DeviceNotFoundError({ hostId: host.id, deviceId: bootedId });
-        }
-      } else if (device.booted) {
-        yield* ready.devices.attach(device);
+          })),
+        ),
+      );
+      const state = yield* refresh(ready);
+      // Retained entries predate the boot, so only a complete listing confirms the booted device.
+      device = state.hostStatuses[host.id]?.incompletePlatforms?.includes(device.platform)
+        ? undefined
+        : (findDevice(state, host.id, bootedId) ?? findDevice(state, host.id, device.id));
+      if (!device) {
+        return yield* new DeviceNotFoundError({ hostId: host.id, deviceId: bootedId });
       }
-      if (hosts.get(host.id) !== host)
-        return yield* new DeviceHostUnavailableError({
-          hostId: host.id,
-          hostLabel: host.label,
-          reason: "Host configuration changed. Retry the operation.",
-        });
-      const openedAt = DateTime.formatIso(yield* DateTime.now);
-      const session: DeviceSession = {
-        threadId: input.threadId,
+    } else if (device.booted) {
+      yield* ready.devices.attach(device);
+    }
+    if (hosts.get(host.id) !== host)
+      return yield* new DeviceHostUnavailableError({
         hostId: host.id,
-        deviceId: device.id,
-        platform: device.platform,
-        openedAt,
-      };
-      yield* lifecycleLock.withPermit(
-        Effect.gen(function* () {
-          if (!(yield* readDeviceSettings).enabled)
-            return yield* new DeviceHostUnavailableError({
-              hostId: host.id,
-              hostLabel: host.label,
-              reason: "Device support was turned off while the device was opening.",
-            });
-          yield* publish((current) => ({
+        hostLabel: host.label,
+        reason: "Host configuration changed. Retry the operation.",
+      });
+    const openedAt = DateTime.formatIso(yield* DateTime.now);
+    const session: DeviceSession = {
+      threadId: input.threadId,
+      hostId: host.id,
+      deviceId: device.id,
+      platform: device.platform,
+      openedAt,
+    };
+    yield* lifecycleLock.withPermit(
+      Effect.gen(function* () {
+        if (!(yield* readDeviceSettings).enabled)
+          return yield* new DeviceHostUnavailableError({
+            hostId: host.id,
+            hostLabel: host.label,
+            reason: "Device support was turned off while the device was opening.",
+          });
+        if (lease) yield* leases.bind(lease, session.deviceId);
+        yield* publish((current) => {
+          if (lease) leases.activate(lease);
+          return {
             ...current,
             sessions: [
               ...current.sessions.filter(
@@ -875,12 +928,12 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
               ),
               session,
             ],
-          }));
-        }),
-      );
-      return session;
-    },
-  );
+          };
+        });
+      }),
+    );
+    return session;
+  });
 
   const refreshAfterShutdown = (ready: DeviceReadiness) =>
     refresh(ready).pipe(
@@ -1140,6 +1193,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
         );
       }),
       agentTarget: Effect.fn("DeviceService.agentTarget")(function* (input) {
+        yield* leases.renew(input);
         const host = yield* resolveHost(input.hostId);
         const ready = yield* agentReadinessIfSupported(input.hostId);
         if (!ready)
@@ -1199,6 +1253,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
         targetArgs,
         ...target
       }) {
+        yield* leases.renew(target);
         if (!launchers)
           return yield* new DeviceHostUnavailableError({
             hostId: target.hostId,
@@ -1443,6 +1498,7 @@ export const make = Effect.gen(function* () {
         ),
       ),
     launchers,
+    deviceLeaseOptions(process.env),
   );
   const hostContext =
     yield* Effect.context<Effect.Services<ReturnType<typeof SshDeviceHost.make>>>();

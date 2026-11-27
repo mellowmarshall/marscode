@@ -83,7 +83,6 @@ vi.mock("./devtoolsClient", () => ({
             devdeck: true,
             shipQueue: true,
             playbook: true,
-            devlease: true,
             reaper: true,
           },
         },

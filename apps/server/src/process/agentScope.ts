@@ -98,6 +98,23 @@ const CLEAR_FAILED_INTERVAL = "1 second";
 const CLEAR_FAILED_ATTEMPTS = 120;
 const MAX_TRACKED_THREADS = 500;
 
+// The unit description survives server restarts (`systemctl --user show -p Description`), so
+// scanners and the reaper recover which thread owns a scope after `scopeByThread` is gone.
+const SCOPE_THREAD_PREFIX = "t3code thread ";
+
+// `systemctl show` prints one property per line, so a description must stay on one line.
+const SCOPE_THREAD_ID = /^[A-Za-z0-9._:-]+$/;
+
+/** Undefined for a thread id that is not safe to put in a unit description. */
+export const scopeThreadDescription = (threadId: string) =>
+  SCOPE_THREAD_ID.test(threadId) ? `${SCOPE_THREAD_PREFIX}${threadId}` : undefined;
+
+export function threadIdFromScopeDescription(description: string): string | undefined {
+  if (!description.startsWith(SCOPE_THREAD_PREFIX)) return undefined;
+  const threadId = description.slice(SCOPE_THREAD_PREFIX.length).trim();
+  return threadId.length > 0 ? threadId : undefined;
+}
+
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
   if (platform !== "linux") return AgentScope.defaultValue();
@@ -442,6 +459,7 @@ export const make = Effect.gen(function* () {
       // Clear the launch thread's previous scope instead.
       const continuing = shared === true && scope.supportsOomPolicy;
       const owned = threadId !== undefined && !continuing;
+      const description = threadId === undefined ? undefined : scopeThreadDescription(threadId);
       if (threadId !== undefined)
         yield* track(scope.systemctl, threadId, owned ? unit : undefined, shared === true);
       const systemdScope: AgentSystemdScope = {
@@ -457,6 +475,8 @@ export const make = Effect.gen(function* () {
             ? [`--property=OOMPolicy=${continuing ? "continue" : "stop"}`]
             : []),
           ...(owned ? [] : ["--collect"]),
+          // A shared scope serves other threads too, so only an owned scope names its thread.
+          ...(owned && description !== undefined ? [`--description=${description}`] : []),
         ],
       };
       // systemd-run does not search the caller's cwd, so anchor a relative path to it. Keep ".."

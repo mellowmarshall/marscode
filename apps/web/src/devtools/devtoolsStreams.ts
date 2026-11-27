@@ -28,16 +28,11 @@ import {
   type DevdeckSessionItem,
   type DevdeckShipPanel,
   type DevdeckWorktreesPanel,
-  type DevleaseOverview,
   type DevtoolsCapabilities,
   type ShipQueueStatusPayload,
 } from "./devtoolsClient";
 import { forceReconnectMux, subscribeMuxTopic } from "./devtoolsEventMux";
-import {
-  deriveFetchResourceStatus,
-  deriveStreamResourceStatus,
-  type DevtoolsResourceStatus,
-} from "./devtoolsState";
+import { deriveStreamResourceStatus, type DevtoolsResourceStatus } from "./devtoolsState";
 
 export interface SharedCapabilitiesSnapshot {
   readonly capabilities: DevtoolsCapabilities | null;
@@ -72,13 +67,6 @@ export interface SharedDevdeckSnapshot {
   readonly status: DevtoolsResourceStatus;
 }
 
-export interface SharedDevleaseSnapshot {
-  readonly overview: DevleaseOverview | null;
-  readonly loading: boolean;
-  readonly error: string | null;
-  readonly status: DevtoolsResourceStatus;
-}
-
 const EMPTY_CAPABILITIES: SharedCapabilitiesSnapshot = {
   capabilities: null,
   unsupported: false,
@@ -101,22 +89,13 @@ const EMPTY_DEVDECK: SharedDevdeckSnapshot = {
   status: "connecting",
 };
 
-const EMPTY_DEVLEASE: SharedDevleaseSnapshot = {
-  overview: null,
-  loading: false,
-  error: null,
-  status: "connecting",
-};
-
 const NOOP_SUBSCRIBE = () => () => {};
 const EMPTY_CAPS_GET = () => EMPTY_CAPABILITIES;
 const EMPTY_SHIP_GET = () => EMPTY_SHIP_QUEUE;
 const EMPTY_DEVDECK_GET = () => EMPTY_DEVDECK;
-const EMPTY_DEVLEASE_GET = () => EMPTY_DEVLEASE;
 
 const CAPABILITIES_TTL_MS = 60_000;
 const UNAVAILABLE_RETRY_MS = 30_000;
-const DEVLEASE_CACHE_MS = 60_000;
 const DEVDECK_TEARDOWN_GRACE_MS = 15_000;
 const DEVDECK_NOTIFY_COALESCE_MS = 32;
 
@@ -1208,206 +1187,13 @@ export function useSharedDevdeck(
   );
 }
 
-interface DevleaseChannel {
-  readonly envId: EnvironmentId;
-  readonly subscribe: (listener: () => void) => () => void;
-  readonly getSnapshot: () => SharedDevleaseSnapshot;
-  snapshot: SharedDevleaseSnapshot;
-  listeners: Set<() => void>;
-  fetchedAtMs: number;
-  hasBoots: boolean;
-  requestedBoots: boolean;
-  inFlight: Promise<void> | null;
-}
-
-const devleaseChannels = new Map<EnvironmentId, DevleaseChannel>();
-
-function getOrCreateDevleaseChannel(envId: EnvironmentId): DevleaseChannel {
-  let ch = devleaseChannels.get(envId);
-  if (!ch) {
-    const channel: DevleaseChannel = {
-      envId,
-      snapshot: EMPTY_DEVLEASE,
-      listeners: new Set(),
-      fetchedAtMs: 0,
-      hasBoots: false,
-      requestedBoots: false,
-      inFlight: null,
-      getSnapshot: () => channel.snapshot,
-      subscribe: (listener) => {
-        channel.listeners.add(listener);
-        ensureEnvConnectionWatcher(envId);
-        return () => {
-          channel.listeners.delete(listener);
-          maybeReleaseEnvConnectionWatcher(envId);
-        };
-      },
-    };
-    ch = channel;
-    devleaseChannels.set(envId, ch);
-  }
-  return ch;
-}
-
-function notifyDevlease(ch: DevleaseChannel): void {
-  const err = ch.snapshot.error ?? ch.snapshot.overview?.error ?? null;
-  const status = deriveFetchResourceStatus({
-    loading: ch.snapshot.loading,
-    hasData: Boolean(ch.snapshot.overview?.available),
-    error: err,
-    unconfigured: ch.snapshot.overview !== null && !ch.snapshot.overview.available && !err,
-  });
-  if (ch.snapshot.status !== status || ch.snapshot.error !== err) {
-    ch.snapshot = { ...ch.snapshot, error: err, status };
-  }
-  for (const l of ch.listeners) l();
-}
-
-export async function refreshSharedDevlease(
-  envId: EnvironmentId,
-  options: { readonly force?: boolean; readonly includeBoots?: boolean } = {},
-): Promise<void> {
-  const force = options.force ?? true;
-  const includeBoots = options.includeBoots ?? true;
-  const ch = getOrCreateDevleaseChannel(envId);
-  if (includeBoots) ch.requestedBoots = true;
-  if (ch.listeners.size > 0) ensureEnvConnectionWatcher(envId);
-  if (!hasConnectedEnvironment(envId)) {
-    if (ch.snapshot.overview !== null) {
-      const offlineErr = m(msg("Environment is offline or disconnected"));
-      ch.snapshot = {
-        ...ch.snapshot,
-        loading: false,
-        error: offlineErr,
-        overview: {
-          available: false,
-          list: null,
-          boots: null,
-          error: offlineErr,
-        },
-      };
-      notifyDevlease(ch);
-    }
-    return;
-  }
-
-  const caps = await ensureCapabilities(envId, force);
-  if (caps.unsupported) {
-    ch.snapshot = {
-      ...ch.snapshot,
-      loading: false,
-      error: null,
-      status: "unconfigured",
-    };
-    notifyDevlease(ch);
-    return;
-  }
-  if (caps.capabilities?.canReadDiagnostics === false) {
-    ch.fetchedAtMs = Date.now();
-    const permErr = m(msg("Diagnostics permission is required to view DevLease"));
-    ch.snapshot = {
-      ...ch.snapshot,
-      loading: false,
-      error: permErr,
-      overview: {
-        available: false,
-        list: null,
-        boots: null,
-        error: permErr,
-      },
-    };
-    notifyDevlease(ch);
-    return;
-  }
-  if (caps.capabilities && !caps.capabilities.tools.devlease) {
-    ch.fetchedAtMs = Date.now();
-    const missingErr = m(msg("devlease is not installed on this host"));
-    ch.snapshot = {
-      ...ch.snapshot,
-      loading: false,
-      error: missingErr,
-      overview: {
-        available: false,
-        list: null,
-        boots: null,
-        error: missingErr,
-      },
-    };
-    notifyDevlease(ch);
-    return;
-  }
-
-  const fresh = Date.now() - ch.fetchedAtMs < DEVLEASE_CACHE_MS && ch.snapshot.overview !== null;
-  if (!force && fresh && (!includeBoots || ch.hasBoots)) {
-    return;
-  }
-  if (ch.inFlight) return ch.inFlight;
-
-  ch.snapshot = { ...ch.snapshot, loading: true };
-  notifyDevlease(ch);
-  ch.inFlight = fetchDevtoolsJson<DevleaseOverview>(envId, "/devlease/overview", {
-    query: includeBoots ? undefined : { includeBoots: "0" },
-  })
-    .then((res) => {
-      ch.fetchedAtMs = Date.now();
-      if (res.data) {
-        const mergedBoots = includeBoots ? res.data.boots : (ch.snapshot.overview?.boots ?? null);
-        if (includeBoots) ch.hasBoots = true;
-        ch.snapshot = {
-          ...ch.snapshot,
-          loading: false,
-          error: res.data.error ?? null,
-          overview: { ...res.data, boots: mergedBoots },
-        };
-      } else {
-        const errText = res.error ?? m(msg("Failed to load DevLease overview"));
-        ch.snapshot = {
-          ...ch.snapshot,
-          loading: false,
-          error: errText,
-          overview: {
-            available: false,
-            list: null,
-            boots: null,
-            error: errText,
-          },
-        };
-      }
-      notifyDevlease(ch);
-    })
-    .finally(() => {
-      ch.inFlight = null;
-    });
-  return ch.inFlight;
-}
-
-export function useSharedDevlease(
-  environmentId: EnvironmentId | null,
-  includeBoots = false,
-): SharedDevleaseSnapshot {
-  const ch = environmentId ? getOrCreateDevleaseChannel(environmentId) : null;
-
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads cached DevLease snapshot when mounted
-  useEffect(() => {
-    if (!environmentId) return;
-    void refreshSharedDevlease(environmentId, { force: false, includeBoots });
-  }, [environmentId, includeBoots]);
-
-  return useSyncExternalStore(
-    ch ? ch.subscribe : NOOP_SUBSCRIBE,
-    ch ? ch.getSnapshot : EMPTY_DEVLEASE_GET,
-    EMPTY_DEVLEASE_GET,
-  );
-}
-
 const envConnectionWatchers = new Map<EnvironmentId, () => void>();
 
 function hasAnyEnvListeners(envId: EnvironmentId): boolean {
   return (
     (capsChannels.get(envId)?.listeners.size ?? 0) > 0 ||
     (shipQueueChannels.get(envId)?.listeners.size ?? 0) > 0 ||
-    (devdeckChannels.get(envId)?.listeners.size ?? 0) > 0 ||
-    (devleaseChannels.get(envId)?.listeners.size ?? 0) > 0
+    (devdeckChannels.get(envId)?.listeners.size ?? 0) > 0
   );
 }
 
@@ -1444,18 +1230,6 @@ function handleEnvironmentConnectionChange(envId: EnvironmentId, connected: bool
     ) {
       devdeckCh.backoffMs = 1_500;
       connectDevdeckChannel(devdeckCh);
-    }
-
-    const devleaseCh = devleaseChannels.get(envId);
-    if (
-      devleaseCh &&
-      devleaseCh.listeners.size > 0 &&
-      (devleaseCh.snapshot.overview === null || !devleaseCh.snapshot.overview.available)
-    ) {
-      void refreshSharedDevlease(envId, {
-        force: true,
-        includeBoots: devleaseCh.requestedBoots || devleaseCh.hasBoots,
-      });
     }
     return;
   }

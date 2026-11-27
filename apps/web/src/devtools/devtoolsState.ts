@@ -38,7 +38,6 @@ export interface DevtoolsServiceHealth {
   readonly guardBroker: DevtoolsServiceStatus;
   readonly shipQueue: DevtoolsServiceStatus;
   readonly reaper: DevtoolsServiceStatus;
-  readonly devlease: DevtoolsServiceStatus;
   readonly playbook: DevtoolsServiceStatus;
 }
 

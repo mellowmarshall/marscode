@@ -4,6 +4,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { ThreadId, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { SettingsSecretValue } from "./settingsSecretValue.ts";
+import { DeviceLeaseUnavailableError } from "./deviceLease.ts";
 
 export const DevicePlatform = Schema.Literals(["ios", "android"]);
 export type DevicePlatform = typeof DevicePlatform.Type;
@@ -630,6 +631,7 @@ export const DeviceError = Schema.Union([
   DeviceBootError,
   DeviceOperationError,
   DeviceActionUnavailableError,
+  DeviceLeaseUnavailableError,
 ]);
 export type DeviceError = typeof DeviceError.Type;
 
@@ -725,6 +727,7 @@ export const DeviceToolError = Schema.Union([
   DeviceBootError,
   DeviceOperationError,
   DeviceActionUnavailableError,
+  DeviceLeaseUnavailableError,
 ]);
 export type DeviceToolError = typeof DeviceToolError.Type;
 

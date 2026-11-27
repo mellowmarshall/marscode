@@ -27,7 +27,6 @@ export interface DevtoolsServiceHealth {
   readonly guardBroker: DevtoolsServiceStatus;
   readonly shipQueue: DevtoolsServiceStatus;
   readonly reaper: DevtoolsServiceStatus;
-  readonly devlease: DevtoolsServiceStatus;
   readonly playbook: DevtoolsServiceStatus;
 }
 
@@ -138,7 +137,6 @@ export function buildServiceHealth(input: {
   readonly guardBrokerListening: boolean;
   readonly shipQueueInstalled: boolean;
   readonly reaperInstalled: boolean;
-  readonly devleaseInstalled: boolean;
   readonly playbookInstalled: boolean;
 }): DevtoolsServiceHealth {
   return {
@@ -150,7 +148,6 @@ export function buildServiceHealth(input: {
     guardBroker: input.guardBrokerListening ? "reachable" : "stopped",
     shipQueue: input.shipQueueInstalled ? "reachable" : "uninstalled",
     reaper: input.reaperInstalled ? "reachable" : "uninstalled",
-    devlease: input.devleaseInstalled ? "reachable" : "uninstalled",
     playbook: input.playbookInstalled ? "reachable" : "uninstalled",
   };
 }

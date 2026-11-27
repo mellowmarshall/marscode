@@ -634,7 +634,6 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
       guardBrokerListening: broker.listening,
       shipQueueInstalled: tools.shipQueue,
       reaperInstalled: tools.reaper,
-      devleaseInstalled: tools.devlease,
       playbookInstalled: tools.playbook,
     });
     return jsonResponse({
@@ -846,20 +845,6 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
       }),
     );
     return jsonResponse(res, res.ok ? 200 : 400);
-  }
-
-  if (method === "GET" && subPath === "/devlease/overview") {
-    const limit = Number(url.value.searchParams.get("bootsLimit") ?? "15");
-    const includeBoots = url.value.searchParams.get("includeBoots") !== "0";
-    const overview = yield* Effect.promise(() =>
-      CliRunners.getDevleaseOverview(Number.isFinite(limit) ? limit : 15, includeBoots),
-    );
-    return jsonResponse(overview, overview.available ? 200 : 503);
-  }
-
-  if (method === "POST" && subPath === "/devlease/reap") {
-    const res = yield* Effect.promise((signal) => CliRunners.reapDevlease(signal));
-    return jsonResponse(res, res.ok ? 200 : 503);
   }
 
   if (method === "GET" && subPath === "/reaper/status") {

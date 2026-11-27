@@ -35,6 +35,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as ServerConfig from "../config.ts";
+import { readOnlyEmulatorArgs } from "./DeviceLeases.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { releaseAgentDeviceSession } from "./AgentDeviceTarget.ts";
 import * as DeviceHost from "./DeviceHost.ts";
@@ -201,6 +202,11 @@ const hubEnvironment = Effect.fn("LocalDeviceHost.hubEnvironment")(function* (
   environment: NodeJS.ProcessEnv,
 ) {
   const env: NodeJS.ProcessEnv = { ...environment, FORCE_COLOR: "0", NO_COLOR: "1" };
+  const readOnly = readOnlyEmulatorArgs(env);
+  if (readOnly)
+    env.EXPO_DEVICE_HUB_EMULATOR_EXTRA_ARGS = [env.EXPO_DEVICE_HUB_EMULATOR_EXTRA_ARGS, readOnly]
+      .filter(Boolean)
+      .join(" ");
   const platform = yield* HostProcess.Platform;
   const uid = yield* HostProcess.UserId;
   if (env.ANDROID_HOME) {

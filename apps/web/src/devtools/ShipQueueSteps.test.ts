@@ -12,7 +12,6 @@ import {
 } from "./ShipQueueSteps";
 import {
   matchThreadJobs,
-  matchThreadLeases,
   matchThreadSessions,
   selectVisibleThreadShipJobs,
 } from "./threadShipStatus";
@@ -596,7 +595,7 @@ describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {
     expect(shipQueueStatusVariant("done")).toBe("success");
   });
 
-  it("isolates parent-thread jobs, leases, and sessions without leaking across main or unrelated repos", () => {
+  it("isolates parent-thread jobs and sessions without leaking across main or unrelated repos", () => {
     const jobs = [
       { id: "mine-tid", thread_id: "t1", branch: "main", repo: "other" },
       { id: "other-tid", thread_id: "t2", branch: "feat/a", worktree: "/wt/t1", repo: "devtools" },
@@ -623,64 +622,6 @@ describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {
       "mine-tid",
     ]);
 
-    const leases = [
-      {
-        id: "l1",
-        project: "app",
-        slot: 0,
-        serial: "emulator-5554",
-        console_port: 5554,
-        metro_port: 8081,
-        web_port: null,
-        adb_port: 5555,
-        avd: "pixel",
-        maestro: false,
-        windowed: false,
-        adopted: false,
-        repo: "/data/app",
-        owner: "dev",
-        thread_id: "t1",
-        created: "",
-      },
-      {
-        id: "l2",
-        project: "app",
-        slot: 1,
-        serial: "emulator-5556",
-        console_port: 5556,
-        metro_port: 8082,
-        web_port: null,
-        adb_port: 5557,
-        avd: "pixel",
-        maestro: false,
-        windowed: false,
-        adopted: false,
-        repo: "/wt/t1/sub",
-        owner: "dev",
-        thread_id: "",
-        created: "",
-      },
-      {
-        id: "l3",
-        project: "app",
-        slot: 2,
-        serial: "emulator-5558",
-        console_port: 5558,
-        metro_port: 8083,
-        web_port: null,
-        adb_port: 5559,
-        avd: "pixel",
-        maestro: false,
-        windowed: false,
-        adopted: false,
-        repo: "/wt/t1",
-        owner: "dev",
-        thread_id: "t2",
-        created: "",
-      },
-    ];
-    expect(matchThreadLeases(leases, "t1", "/wt/t1").map((l) => l.id)).toEqual(["l1", "l2"]);
-
     const sessions = [
       { id: "s1", lease_id: "l1", project: "other" },
       { id: "s2", cwd: "/wt/t1/pkg", branch: "main" },
@@ -688,10 +629,8 @@ describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {
       { id: "s4", branch: "feat/a", project: "other" },
     ];
     expect(
-      matchThreadSessions(sessions, new Set(["l1"]), "feat/a", "/wt/t1", "/data/devtools").map(
-        (s) => s.id,
-      ),
-    ).toEqual(["s1", "s2", "s3"]);
+      matchThreadSessions(sessions, "feat/a", "/wt/t1", "/data/devtools").map((s) => s.id),
+    ).toEqual(["s2", "s3"]);
   });
 
   it("normalizes array node.alerts and deduplicates fleet alerts without dropping distinct details", () => {

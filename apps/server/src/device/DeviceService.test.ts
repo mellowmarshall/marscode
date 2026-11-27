@@ -18,6 +18,7 @@ import { SshCommandError } from "@t3tools/ssh/errors";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
@@ -44,6 +45,7 @@ import * as DeviceService from "./DeviceService.ts";
 import * as SshDeviceHost from "./SshDeviceHost.ts";
 import { agentDeviceSession, releaseAgentDeviceSession } from "./AgentDeviceTarget.ts";
 import { ensureDeviceHub } from "./DeviceToolchain.ts";
+import type { DeviceLeaseOptions } from "./DeviceLeases.ts";
 
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const decodeBootError = Schema.decodeUnknownSync(Schema.fromJsonString(DeviceBootError));
@@ -175,6 +177,7 @@ const fixture = Effect.fn("fixture")(function* (
     readonly routesStreams?: boolean;
     readonly onClose?: Effect.Effect<"ok" | "missing" | "reject" | "http_error" | "malformed">;
     readonly onPlatformAvailability?: Effect.Effect<void>;
+    readonly leaseOptions?: DeviceLeaseOptions;
   } = {},
 ) {
   const settings = yield* Ref.make(DEFAULT_SERVER_SETTINGS);
@@ -379,6 +382,8 @@ const fixture = Effect.fn("fixture")(function* (
     undefined,
     () => Effect.succeed("/host.json"),
     installTool,
+    undefined,
+    options.leaseOptions,
   ).pipe(
     Effect.provide(NodeCrypto.layer),
     Effect.provideService(DeviceHost.DeviceHost, host),
@@ -1316,27 +1321,23 @@ it.effect.each(["shutdown", "close"] as const)(
         return yield* agentDeviceSession(open.threadId, LOCAL_DEVICE_HOST_ID, deviceId);
       }, Effect.provide(NodeCrypto.layer));
       const session = yield* bind(input);
-      yield* bind(other);
+      // The thread holds the simulator exclusively; another thread is refused and told who holds it.
+      expect(yield* bind(other).pipe(Effect.flip)).toMatchObject({
+        _tag: "DeviceLeaseUnavailableError",
+        reason: "held",
+        holders: [{ threadId, deviceId }],
+      });
       expect(capture).toBe(1);
-      expect(launchers.size).toBe(2);
+      expect(launchers.size).toBe(1);
       if (operation === "shutdown") yield* service.shutdown(input);
       else yield* service.close({ threadId, deviceId, shutdown: true });
       expect(capture).toBeNull();
       expect((yield* service.state).sessions).toEqual([]);
       expect(launchers).toEqual(new Set());
       // Retiring a session ends its agent-device session too, which releases the device claim.
-      // Powering the device off retires the other thread's session on it as well.
-      const firstOther = yield* agentDeviceSession(
-        other.threadId,
-        LOCAL_DEVICE_HOST_ID,
-        deviceId,
-      ).pipe(Effect.provide(NodeCrypto.layer));
-      expect(new Set(released.map(([launcher]) => launcher))).toEqual(
-        new Set([session, firstOther]),
-      );
-      expect(released.every(([, existed]) => existed)).toBe(true);
+      expect(released).toEqual([[session, true]]);
       // agent-device can close the session's app only while the device is on.
-      expect(releasedWhileBooted).toEqual([true, true]);
+      expect(releasedWhileBooted).toEqual([true]);
       // A device_open that was still preparing when the close landed.
       expect(yield* service.agentLauncher({ ...target(threadId), targetArgs: [] })).toEqual(
         Option.none(),
@@ -1344,14 +1345,12 @@ it.effect.each(["shutdown", "close"] as const)(
       expect(launchers).toEqual(new Set());
       expect(yield* bind(input)).toBe(session);
       // Reopening the same device ends nothing.
-      expect(released).toHaveLength(2);
+      expect(released).toHaveLength(1);
       expect(capture).toBe(2);
       expect((yield* service.state).sessions).toHaveLength(1);
-      const otherSession = yield* bind(other);
-      yield* service.close({ threadId: other.threadId });
+      // Retiring the session released its lease, so the reopen holds the device again.
+      expect(yield* bind(other).pipe(Effect.flip)).toMatchObject({ reason: "held" });
       expect(launchers).toEqual(new Set([session]));
-      expect(released.slice(2)).toEqual([[otherSession, true]]);
-      expect(otherSession).not.toBe(session);
       // A caller interrupted after retirement committed, while a bind holds the launcher lock.
       pauseBind = { entered: yield* Deferred.make<void>(), proceed: yield* Deferred.make<void>() };
       const binding = yield* Effect.forkChild(
@@ -1373,7 +1372,7 @@ it.effect.each(["shutdown", "close"] as const)(
     }).pipe(Effect.provide(ServerSettings.layerTest({ enableDeviceSupport: true }))),
 );
 
-it.effect("leaves a session its host leases to every thread open when one thread closes", () =>
+it.effect("leaves a session its host leases open when its thread closes", () =>
   Effect.gen(function* () {
     const deviceId = DeviceId.make("33333333-3333-3333-3333-333333333333");
     const http = HttpClient.make((request) =>
@@ -1452,15 +1451,13 @@ it.effect("leaves a session its host leases to every thread open when one thread
         release: (launcher) => Effect.sync(() => void released.push(launcher)),
       },
     ).pipe(Effect.provide(NodeCrypto.layer));
-    const threads = [ThreadId.make("pool-a"), ThreadId.make("pool-b")];
-    for (const threadId of threads) {
-      yield* service.open({ threadId, deviceId, platform: "ios" });
-      const target = { threadId, hostId: LOCAL_DEVICE_HOST_ID, deviceId };
-      const agent = yield* service.agentTarget(target);
-      expect(agent.session).toBe("lease-session");
-      yield* service.agentLauncher({ ...target, targetArgs: agent.args });
-    }
-    yield* service.close({ threadId: threads[0]! });
+    const threadId = ThreadId.make("pool-a");
+    yield* service.open({ threadId, deviceId, platform: "ios" });
+    const target = { threadId, hostId: LOCAL_DEVICE_HOST_ID, deviceId };
+    const agent = yield* service.agentTarget(target);
+    expect(agent.session).toBe("lease-session");
+    yield* service.agentLauncher({ ...target, targetArgs: agent.args });
+    yield* service.close({ threadId });
     expect(released).toEqual([]);
   }).pipe(
     Effect.provide(
@@ -1955,32 +1952,40 @@ describe("agent session release on close", () => {
     deviceId = "Pixel_API_35",
   ) => service.open({ threadId, deviceId, platform: "android" });
 
-  it.effect("releases only the caller's session, keeps the device booted, and is idempotent", () =>
-    Effect.gen(function* () {
-      const { service, closedSessions, requests } = yield* fixture();
-      yield* service.configure({ enabled: true, agentAccessEnabled: true });
-      const threadId = ThreadId.make("closing");
-      const other = ThreadId.make("other");
-      const session = yield* openClaim(service, threadId);
-      yield* openClaim(service, other, session.deviceId);
-      yield* service.close({ threadId, deviceId: session.deviceId });
-      yield* service.close({ threadId, deviceId: session.deviceId });
-      const name = yield* agentDeviceSession(threadId, session.hostId, session.deviceId).pipe(
-        Effect.provide(NodeCrypto.layer),
-      );
-      expect(closedSessions).toEqual([
-        {
-          jsonrpc: "2.0",
-          id: name,
-          method: "agent_device.command",
-          params: { command: "close", session: name, positionals: [], flags: {} },
-        },
-      ]);
-      const state = yield* service.state;
-      expect(state.sessions.map((entry) => entry.threadId)).toEqual([other]);
-      expect(state.devices.find((entry) => entry.id === session.deviceId)?.booted).toBe(true);
-      expect(requests.some((url) => url.endsWith("/shutdown"))).toBe(false);
-    }),
+  it.effect(
+    "releases the caller's lease and session, keeps the device booted, and is idempotent",
+    () =>
+      Effect.gen(function* () {
+        const { service, closedSessions, requests } = yield* fixture();
+        yield* service.configure({ enabled: true, agentAccessEnabled: true });
+        const threadId = ThreadId.make("closing");
+        const other = ThreadId.make("other");
+        const session = yield* openClaim(service, threadId);
+        // The AVD booted as a serial, and the lease followed it.
+        expect(yield* openClaim(service, other, session.deviceId).pipe(Effect.flip)).toMatchObject({
+          _tag: "DeviceLeaseUnavailableError",
+          reason: "held",
+          holders: [{ threadId, deviceId: session.deviceId }],
+        });
+        yield* service.close({ threadId, deviceId: session.deviceId });
+        yield* service.close({ threadId, deviceId: session.deviceId });
+        yield* openClaim(service, other, session.deviceId);
+        const name = yield* agentDeviceSession(threadId, session.hostId, session.deviceId).pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        expect(closedSessions).toEqual([
+          {
+            jsonrpc: "2.0",
+            id: name,
+            method: "agent_device.command",
+            params: { command: "close", session: name, positionals: [], flags: {} },
+          },
+        ]);
+        const state = yield* service.state;
+        expect(state.sessions.map((entry) => entry.threadId)).toEqual([other]);
+        expect(state.devices.find((entry) => entry.id === session.deviceId)?.booted).toBe(true);
+        expect(requests.some((url) => url.endsWith("/shutdown"))).toBe(false);
+      }),
   );
 
   it.effect.each(["reject", "http_error", "malformed"] as const)(
@@ -2107,24 +2112,27 @@ describe("agent session release on close", () => {
       expect(closedSessions).toHaveLength(1);
     }),
   );
-  it.effect("releases peer claims before a close shuts down", () =>
+  it.effect("leaves no peer claim behind when a holder's close shuts the device down", () =>
     Effect.gen(function* () {
       const { service, closedSessions } = yield* fixture();
       yield* service.configure({ enabled: true, agentAccessEnabled: true });
       const threadId = ThreadId.make("shutting-down");
       const other = ThreadId.make("peer");
       const session = yield* openClaim(service, threadId);
-      yield* openClaim(service, other, session.deviceId);
+      expect(yield* openClaim(service, other, session.deviceId).pipe(Effect.flip)).toMatchObject({
+        reason: "held",
+      });
       yield* service.close({ threadId, shutdown: true });
       expect((yield* service.state).sessions).toHaveLength(0);
       yield* service.close({ threadId: other });
-      expect((yield* service.state).sessions).toHaveLength(0);
-      const names = yield* Effect.forEach([threadId, other], (thread) =>
-        agentDeviceSession(thread, session.hostId, session.deviceId),
-      ).pipe(Effect.provide(NodeCrypto.layer));
+      const name = yield* agentDeviceSession(threadId, session.hostId, session.deviceId).pipe(
+        Effect.provide(NodeCrypto.layer),
+      );
       expect(
         closedSessions.map((body) => (body as { params: { session: string } }).params.session),
-      ).toEqual(names);
+      ).toEqual([name]);
+      // The shutdown ended the lease with the session, so the peer can boot the device now.
+      expect((yield* openClaim(service, other)).threadId).toBe(other);
     }),
   );
 
@@ -2356,5 +2364,176 @@ describe("locating a device id across hosts", () => {
         ).toEqual(Option.none());
       }),
     ),
+  );
+});
+
+describe("exclusive device leases", () => {
+  const holder = ThreadId.make("holder");
+  const waiting = ThreadId.make("waiting");
+  const open = (
+    service: DeviceService.DeviceService["Service"],
+    threadId: ThreadId,
+    deviceId = "Pixel_API_35",
+  ) => service.open({ threadId, deviceId, platform: "android" });
+
+  it.effect("lets exactly one of two racing threads take a device", () =>
+    Effect.gen(function* () {
+      const { service } = yield* fixture();
+      yield* service.configure({ enabled: true });
+      const [first, second] = yield* Effect.all(
+        [open(service, holder).pipe(Effect.result), open(service, waiting).pipe(Effect.result)],
+        { concurrency: "unbounded" },
+      );
+      const outcomes = [first, second].map((result) => result._tag).toSorted();
+      expect(outcomes).toEqual(["Failure", "Success"]);
+      expect([first, second].find((result) => result._tag === "Failure")).toMatchObject({
+        failure: { _tag: "DeviceLeaseUnavailableError", reason: "held" },
+      });
+      expect((yield* service.state).sessions).toHaveLength(1);
+    }),
+  );
+
+  it.effect("names the holder and when its lease expires, and lets a renewal extend it", () =>
+    Effect.gen(function* () {
+      const { service } = yield* fixture();
+      yield* service.configure({ enabled: true });
+      const session = yield* open(service, holder);
+      yield* TestClock.adjust("20 minutes");
+      // Reopening is the holder's heartbeat.
+      yield* open(service, holder, session.deviceId);
+      yield* TestClock.adjust("20 minutes");
+      const refused = yield* open(service, waiting, session.deviceId).pipe(Effect.flip);
+      expect(refused).toMatchObject({
+        _tag: "DeviceLeaseUnavailableError",
+        hostId: LOCAL_DEVICE_HOST_ID,
+        deviceId: session.deviceId,
+        reason: "held",
+        holders: [
+          {
+            threadId: holder,
+            deviceId: session.deviceId,
+            heldSince: "1970-01-01T00:00:00.000Z",
+            expiresAt: "1970-01-01T00:50:00.000Z",
+          },
+        ],
+      });
+      expect(refused.message).toContain("thread holder");
+    }),
+  );
+
+  it.effect("hands an expired lease to the next thread and ends the stale session", () =>
+    Effect.gen(function* () {
+      const { service } = yield* fixture();
+      yield* service.configure({ enabled: true });
+      const session = yield* open(service, holder);
+      yield* TestClock.adjust("30 minutes");
+      const taken = yield* open(service, waiting, session.deviceId);
+      expect(taken.threadId).toBe(waiting);
+      expect((yield* service.state).sessions.map((entry) => entry.threadId)).toEqual([waiting]);
+      expect(yield* open(service, holder, session.deviceId).pipe(Effect.flip)).toMatchObject({
+        holders: [{ threadId: waiting }],
+      });
+    }),
+  );
+
+  it.effect("gives the lease back when the opening fiber is interrupted mid-boot", () =>
+    Effect.gen(function* () {
+      const booting = yield* Queue.unbounded<void>();
+      let hang = true;
+      const { service } = yield* fixture(
+        Effect.suspend(() => {
+          if (!hang) return Effect.void;
+          hang = false;
+          return Queue.offer(booting, undefined).pipe(Effect.andThen(Effect.never));
+        }),
+      );
+      yield* service.configure({ enabled: true });
+      const opening = yield* Effect.forkChild(open(service, holder));
+      yield* Queue.take(booting);
+      expect(yield* open(service, waiting).pipe(Effect.flip)).toMatchObject({ reason: "held" });
+      yield* Fiber.interrupt(opening);
+      expect((yield* open(service, waiting)).threadId).toBe(waiting);
+    }),
+  );
+
+  it.effect("keeps an expired holder's lease while its session cannot be ended", () =>
+    Effect.gen(function* () {
+      const { service, connection } = yield* fixture();
+      yield* service.configure({ enabled: true });
+      connection.kind = "ssh";
+      const session = yield* open(service, holder);
+      yield* TestClock.adjust("30 minutes");
+      // A reconnecting SSH host cannot confirm the stale session ended.
+      connection.online = false;
+      expect(yield* open(service, waiting, session.deviceId).pipe(Effect.flip)).toMatchObject({
+        _tag: "DeviceHostUnavailableError",
+      });
+      connection.online = true;
+      // The holder kept its lease, so its next open is a heartbeat and the waiting thread waits.
+      yield* open(service, holder, session.deviceId);
+      expect(yield* open(service, waiting, session.deviceId).pipe(Effect.flip)).toMatchObject({
+        reason: "held",
+        holders: [{ threadId: holder, heldSince: "1970-01-01T00:00:00.000Z" }],
+      });
+    }),
+  );
+
+  it.effect("releases every lease of a thread when the thread's sessions close", () =>
+    Effect.gen(function* () {
+      const { service } = yield* fixture();
+      yield* service.configure({ enabled: true });
+      const session = yield* open(service, holder);
+      // As ResourceCleanupService does when a thread is archived or deleted.
+      yield* service.close({ threadId: holder });
+      expect((yield* open(service, waiting, session.deviceId)).threadId).toBe(waiting);
+      // Turning device support off ends every session, and their leases with them.
+      yield* service.configure({ enabled: false });
+      yield* service.configure({ enabled: true });
+      expect((yield* open(service, holder, session.deviceId)).threadId).toBe(holder);
+    }),
+  );
+
+  it.effect("caps leased local emulators per host, but not physical devices", () =>
+    Effect.gen(function* () {
+      const { service, devices } = yield* fixture(
+        Effect.void,
+        undefined,
+        false,
+        undefined,
+        false,
+        undefined,
+        {
+          leaseOptions: { ttl: Duration.minutes(30), maxLocalEmulators: 1 },
+        },
+      );
+      devices.push(
+        {
+          id: "Pixel_API_36",
+          name: "Pixel_API_36",
+          platform: "android",
+          version: "Android 16",
+          booted: false,
+          physical: false,
+        },
+        {
+          id: "R52T10ABCDE",
+          name: "Galaxy",
+          platform: "android",
+          version: "Android 14",
+          booted: true,
+          physical: true,
+        },
+      );
+      yield* service.configure({ enabled: true });
+      yield* open(service, holder);
+      const refused = yield* open(service, waiting, "Pixel_API_36").pipe(Effect.flip);
+      expect(refused).toMatchObject({
+        _tag: "DeviceLeaseUnavailableError",
+        reason: "host_limit",
+        limit: 1,
+        holders: [{ threadId: holder, deviceId: "emulator-5554" }],
+      });
+      expect((yield* open(service, waiting, "R52T10ABCDE")).deviceId).toBe("R52T10ABCDE");
+    }),
   );
 });

@@ -91,7 +91,7 @@ vi.mock("../devtoolsStreams", () => ({
       platform: "linux",
       guardBrokerListening: true,
       canReadDiagnostics: true,
-      tools: { devdeck: true, shipQueue: true, playbook: true, devlease: true, reaper: true },
+      tools: { devdeck: true, shipQueue: true, playbook: true, reaper: true },
     },
     unsupported: false,
     checked: true,
@@ -121,7 +121,7 @@ vi.mock("../devtoolsClient", () => ({
           platform: "linux",
           guardBrokerListening: true,
           canReadDiagnostics: true,
-          tools: { devdeck: true, shipQueue: true, playbook: true, devlease: true, reaper: true },
+          tools: { devdeck: true, shipQueue: true, playbook: true, reaper: true },
         },
       };
     }

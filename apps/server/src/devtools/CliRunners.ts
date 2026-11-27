@@ -46,21 +46,12 @@ const SAFE_ENV_EXACT = new Set([
   "PNPM_HOME",
 ]);
 
-const SAFE_ENV_PREFIXES = [
-  "LC_",
-  "XDG_",
-  "SHIP_QUEUE_",
-  "DEVLEASE_",
-  "ANDROID_",
-  "CARGO_",
-  "RUSTUP_",
-];
+const SAFE_ENV_PREFIXES = ["LC_", "XDG_", "SHIP_QUEUE_", "ANDROID_", "CARGO_", "RUSTUP_"];
 
 export interface ToolAvailabilityFlags {
   readonly devdeck: boolean;
   readonly shipQueue: boolean;
   readonly playbook: boolean;
-  readonly devlease: boolean;
   readonly reaper: boolean;
 }
 
@@ -124,7 +115,6 @@ export function discoverTools(nativeFleetAvailable: boolean): ToolAvailabilityFl
     devdeck: nativeFleetAvailable,
     shipQueue: resolveToolPath("ship-queue") !== null,
     playbook: resolveToolPath("playbook") !== null,
-    devlease: resolveToolPath("devlease") !== null,
     reaper:
       resolveToolPath("agent-tmp-reap.py") !== null || resolveToolPath("agent-tmp-reap") !== null,
   };
@@ -416,8 +406,6 @@ async function execTextTool(
 
 // Single-flight coalescing for read-only snapshots
 let inFlightShipStatus: Promise<ExecJsonResult> | null = null;
-let inFlightDevleaseFull: Promise<DevleaseOverviewResult> | null = null;
-let inFlightDevleaseListOnly: Promise<DevleaseOverviewResult> | null = null;
 let inFlightReaperStatus: Promise<ExecJsonResult> | null = null;
 
 export function getShipQueueStatus(): Promise<ExecJsonResult> {
@@ -1091,67 +1079,6 @@ export async function runPlaybook(input: {
   });
   inFlightPlaybook.set(key, run);
   return await run;
-}
-
-export interface DevleaseOverviewResult {
-  readonly available: boolean;
-  readonly list: unknown;
-  readonly boots: unknown;
-  readonly error?: string | undefined;
-}
-
-export function getDevleaseOverview(
-  bootsLimit = 15,
-  includeBoots = true,
-): Promise<DevleaseOverviewResult> {
-  const capped = Math.max(1, Math.min(100, Math.floor(bootsLimit)));
-  if (!includeBoots) {
-    if (inFlightDevleaseListOnly) return inFlightDevleaseListOnly;
-    inFlightDevleaseListOnly = (async (): Promise<DevleaseOverviewResult> => {
-      const listRes = await execJsonTool("devlease", ["list", "--json"], { timeoutMs: 10_000 });
-      if (!listRes.ok) {
-        return { available: false, list: null, boots: null, error: listRes.error };
-      }
-      return { available: true, list: listRes.data, boots: null };
-    })().finally(() => {
-      inFlightDevleaseListOnly = null;
-    });
-    return inFlightDevleaseListOnly;
-  }
-
-  if (inFlightDevleaseFull && capped === 15) return inFlightDevleaseFull;
-
-  const run = (async (): Promise<DevleaseOverviewResult> => {
-    const [listRes, bootsRes] = await Promise.all([
-      execJsonTool("devlease", ["list", "--json"], { timeoutMs: 10_000 }),
-      execJsonTool("devlease", ["boots", "--json", String(capped)], { timeoutMs: 10_000 }),
-    ]);
-    if (!listRes.ok && !bootsRes.ok) {
-      return {
-        available: false,
-        list: null,
-        boots: null,
-        error: listRes.error ?? bootsRes.error,
-      };
-    }
-    return {
-      available: true,
-      list: listRes.ok ? listRes.data : null,
-      boots: bootsRes.ok ? bootsRes.data : null,
-    };
-  })();
-
-  if (capped === 15) {
-    inFlightDevleaseFull = run.finally(() => {
-      inFlightDevleaseFull = null;
-    });
-    return inFlightDevleaseFull;
-  }
-  return run;
-}
-
-export async function reapDevlease(signal?: AbortSignal): Promise<ExecJsonResult> {
-  return await execTextTool("devlease", ["reap"], { timeoutMs: 15_000, signal });
 }
 
 export function getReaperStatus(): Promise<ExecJsonResult> {
