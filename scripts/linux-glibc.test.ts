@@ -6,7 +6,7 @@ import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import afterPack from "./linux-after-pack.ts";
-import { parseGlibcNeeds, scanGlibcNeeds } from "./linux-glibc.ts";
+import { parseGlibcNeeds, resolveGlibcBuildCeiling, scanGlibcNeeds } from "./linux-glibc.ts";
 
 it.each([
   ["GLIBC_2.9", "2.9"],
@@ -126,6 +126,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("packaged ELF s
         await expect(
           afterPack({ appOutDir: app, electronPlatformName: "linux", targets: [deb] }),
         ).rejects.toThrow(/helper.*GLIBC_2\.40.*2\.39/s);
+        expect(await scanGlibcNeeds(app, "2.42")).toEqual({ minimum: "2.40", elfCount: 3 });
         await NodeFSP.writeFile(NodePath.join(native, "helper"), Buffer.from("\x7fELFbroken"));
         await expect(scanGlibcNeeds(app)).rejects.toThrow(/helper/);
       } finally {
@@ -133,4 +134,12 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("packaged ELF s
       }
     },
   );
+
+  it("resolves T3CODE_LINUX_GLIBC_CEILING with default 2.39 and rejects invalid values", () => {
+    expect(resolveGlibcBuildCeiling({})).toBe("2.39");
+    expect(resolveGlibcBuildCeiling({ T3CODE_LINUX_GLIBC_CEILING: " 2.42 " })).toBe("2.42");
+    expect(() => resolveGlibcBuildCeiling({ T3CODE_LINUX_GLIBC_CEILING: "latest" })).toThrow(
+      /Invalid T3CODE_LINUX_GLIBC_CEILING/,
+    );
+  });
 });
