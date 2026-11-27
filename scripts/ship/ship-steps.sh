@@ -12,8 +12,14 @@
 set -u
 
 ensure_vp_path() {
-  if [ -d "$HOME/.vite-plus/bin" ]; then
-    export PATH="$HOME/.vite-plus/bin:$PATH"
+  local d
+  if ! command -v vp >/dev/null 2>&1; then
+    for d in "$HOME/.local/share/vite-plus/bin" "$HOME/.vite-plus/bin"; do
+      if [ -x "$d/vp" ]; then
+        export PATH="$d:$PATH"
+        break
+      fi
+    done
   fi
   command -v vp >/dev/null 2>&1 || {
     echo "marscode ship-steps: vp (Vite+) not found on PATH ($PATH)" >&2
