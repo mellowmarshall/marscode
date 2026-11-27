@@ -689,4 +689,360 @@ describe("readAntigravityUsage", () => {
       );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("filters memoized snapshots across date windows without mutating cached records", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const dir = yield* tempDir;
+      const cache = makeAntigravityUsageCache();
+      for (const [name, seconds] of [
+        ["old.db", 1780000000],
+        ["mid.db", 1780000500],
+        ["new.db", 1780001000],
+      ] as const) {
+        yield* seedDatabase(path.join(dir, name), (db) =>
+          Effect.gen(function* () {
+            yield* createTables(db);
+            yield* db.run("INSERT INTO gen_metadata VALUES (?, ?)", [
+              0,
+              new Uint8Array(
+                protoBytes(1, [
+                  ...protoBytes(4, [...protoNumber(2, 50), ...protoText(11, `r-${name}`)]),
+                  ...protoText(19, "Gemini 3 Pro"),
+                  ...protoBytes(9, protoBytes(4, protoNumber(1, seconds))),
+                ]),
+              ),
+            ]);
+          }),
+        );
+      }
+      const all = yield* readAntigravityUsage(dir, 0, cache);
+      assert.strictEqual(records(all).length, 3);
+      // Mutating the returned array must not corrupt subsequent memoized reads.
+      all.files[0]!.records.pop();
+      const mid = yield* readAntigravityUsage(dir, 1780000500000, cache);
+      assert.deepStrictEqual(
+        records(mid).map((r) => r.sessionId),
+        ["mid", "new"],
+      );
+      const empty = yield* readAntigravityUsage(dir, 1780002000000, cache);
+      assert.deepStrictEqual(records(empty), []);
+      const restored = yield* readAntigravityUsage(dir, 0, cache);
+      assert.deepStrictEqual(
+        records(restored).map((r) => r.sessionId),
+        ["mid", "new", "old"],
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("incrementally patches single-DB updates and falls back on cross-file aliases", () =>
+    Effect.gen(function* () {
+      const pathService = yield* Path.Path;
+      const dir = yield* tempDir;
+      const cache = makeAntigravityUsageCache();
+      const stablePath = pathService.join(dir, "a-stable.db");
+      const activePath = pathService.join(dir, "b-active.db");
+      yield* seedDatabase(stablePath, (db) =>
+        Effect.gen(function* () {
+          yield* createTables(db);
+          yield* db.run("INSERT INTO gen_metadata VALUES (?, ?)", [
+            0,
+            antigravityGeneration("s-1"),
+          ]);
+        }),
+      );
+      const activeDb = yield* openDatabase(activePath);
+      yield* activeDb.exec("PRAGMA journal_mode = WAL");
+      yield* activeDb.exec("PRAGMA wal_autocheckpoint = 0");
+      yield* activeDb.exec("CREATE TABLE gen_metadata (idx INTEGER, data BLOB)");
+      yield* activeDb.run("INSERT INTO gen_metadata VALUES (?, ?)", [
+        0,
+        antigravityGeneration("a-1"),
+      ]);
+      const first = yield* readAntigravityUsage(dir, 0, cache);
+      assert.deepStrictEqual(
+        records(first).map((r) => r.dedupeKey),
+        ["antigravity:11:s-1", "antigravity:11:a-1"],
+      );
+      // Disjoint WAL update hits incremental single-file patch.
+      yield* activeDb.run("INSERT INTO gen_metadata VALUES (?, ?)", [
+        1,
+        antigravityGeneration("a-2"),
+      ]);
+      const second = yield* readAntigravityUsage(dir, 0, cache);
+      assert.deepStrictEqual(
+        records(second).map((r) => r.dedupeKey),
+        ["antigravity:11:s-1", "antigravity:11:a-1", "antigravity:11:a-2"],
+      );
+      // Introducing a key shared with a-stable.db must fall back to global merge and keep first-file ownership.
+      yield* activeDb.run("INSERT INTO gen_metadata VALUES (?, ?)", [
+        2,
+        new Uint8Array(
+          protoBytes(1, [
+            ...protoBytes(4, [
+              ...protoNumber(2, 250),
+              ...protoNumber(3, 40),
+              ...protoText(11, "s-1"),
+            ]),
+            ...protoText(19, "Gemini 3 Pro"),
+            ...protoBytes(9, protoBytes(4, protoNumber(1, 1780000000))),
+          ]),
+        ),
+      ]);
+      const third = yield* readAntigravityUsage(dir, 0, cache);
+      assert.strictEqual(third.files[0]?.records.length, 1);
+      assert.strictEqual(third.files[0]?.records[0]?.totals.uncachedInputTokens, 250);
+      assert.strictEqual(third.files[0]?.records[0]?.sessionId, "a-stable");
+      assert.deepStrictEqual(
+        third.files[1]?.records.map((r) => r.dedupeKey),
+        ["antigravity:11:a-1", "antigravity:11:a-2"],
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "skips symlinked databases and directories inside roots while scanning symlinked roots",
+    () =>
+      Effect.gen(function* () {
+        const pathService = yield* Path.Path;
+        const dir = yield* tempDir;
+        const realRoot = pathService.join(dir, "real-root");
+        const linkedRoot = pathService.join(dir, "linked-root");
+        const outside = pathService.join(dir, "outside");
+        yield* Effect.promise(() => NodeFSP.mkdir(realRoot));
+        yield* Effect.promise(() => NodeFSP.mkdir(outside));
+        yield* seedDatabase(pathService.join(realRoot, "real.db"), (db) =>
+          Effect.gen(function* () {
+            yield* createTables(db);
+            yield* db.run("INSERT INTO gen_metadata VALUES (?, ?)", [
+              0,
+              antigravityGeneration("r-1"),
+            ]);
+          }),
+        );
+        yield* seedDatabase(pathService.join(outside, "ext.db"), (db) =>
+          Effect.gen(function* () {
+            yield* createTables(db);
+            yield* db.run("INSERT INTO gen_metadata VALUES (?, ?)", [
+              0,
+              antigravityGeneration("r-2"),
+            ]);
+          }),
+        );
+        yield* Effect.promise(() =>
+          NodeFSP.symlink(
+            pathService.join(outside, "ext.db"),
+            pathService.join(realRoot, "link.db"),
+          ),
+        );
+        yield* Effect.promise(() =>
+          NodeFSP.symlink(outside, pathService.join(realRoot, "linked-subdir")),
+        );
+        yield* Effect.promise(() => NodeFSP.symlink(realRoot, linkedRoot));
+        const result = yield* readAntigravityUsage(linkedRoot, 0);
+        assert.deepStrictEqual(result.errors, []);
+        assert.deepStrictEqual(
+          records(result).map((r) => r.sessionId),
+          ["real"],
+        );
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("deduplicates matching step and generation candidates before caching", () =>
+    Effect.gen(function* () {
+      const pathService = yield* Path.Path;
+      const dir = yield* tempDir;
+      const cache = makeAntigravityUsageCache();
+      const dbPath = pathService.join(dir, "dedupe.db");
+      yield* seedDatabase(dbPath, (db) =>
+        Effect.gen(function* () {
+          yield* createTables(db);
+          const usage = [...protoNumber(1, 246), ...protoNumber(2, 80), ...protoText(11, "turn-1")];
+          yield* db.run("INSERT INTO steps VALUES (?, ?)", [
+            0,
+            new Uint8Array(protoBytes(9, usage)),
+          ]);
+          yield* db.run("INSERT INTO gen_metadata VALUES (?, ?)", [
+            0,
+            new Uint8Array(
+              protoBytes(1, [
+                ...protoText(19, "Gemini 2.5 Pro"),
+                ...protoBytes(4, [...usage, ...protoNumber(3, 30)]),
+              ]),
+            ),
+          ]);
+        }),
+      );
+      const result = yield* readAntigravityUsage(dir, 0, cache);
+      assert.deepStrictEqual(result.errors, []);
+      const canonical = yield* Effect.promise(() => NodeFSP.realpath(dbPath));
+      assert.strictEqual(cache.get(canonical)?.data?.candidates.length, 1);
+      assert.strictEqual(records(result)[0]?.totals.uncachedInputTokens, 80);
+      assert.strictEqual(records(result)[0]?.totals.outputTokens, 30);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "leaves mixed-modelId non-concrete key components unmerged so global tie-breaking stays exact",
+    () =>
+      Effect.gen(function* () {
+        const pathService = yield* Path.Path;
+        const dir = yield* tempDir;
+        const cache = makeAntigravityUsageCache();
+        const dbPath = pathService.join(dir, "mixed-non-concrete.db");
+        yield* seedDatabase(dbPath, (db) =>
+          Effect.gen(function* () {
+            yield* createTables(db);
+            // L: id 9001, q0 (unnamed), keys k1 + k2
+            yield* db.run("INSERT INTO steps VALUES (?, ?)", [
+              0,
+              new Uint8Array(
+                protoBytes(9, [
+                  ...protoNumber(1, 9001),
+                  ...protoNumber(2, 10),
+                  ...protoText(11, "k1"),
+                  ...protoText(12, "k2"),
+                ]),
+              ),
+            ]);
+            // M: id 9002, q1 ("gemini-3-flash-agent"), key k2
+            yield* db.run("INSERT INTO steps VALUES (?, ?)", [
+              1,
+              new Uint8Array([
+                ...protoBytes(24, [
+                  ...protoNumber(1, 9002),
+                  ...protoText(12, "gemini-3-flash-agent"),
+                ]),
+                ...protoBytes(9, [
+                  ...protoNumber(1, 9002),
+                  ...protoNumber(2, 20),
+                  ...protoText(12, "k2"),
+                ]),
+              ]),
+            ]);
+            // H: id 9001, q1 ("gemini-3-flash-b"), key k1
+            yield* db.run("INSERT INTO steps VALUES (?, ?)", [
+              2,
+              new Uint8Array([
+                ...protoBytes(24, [...protoNumber(1, 9001), ...protoText(12, "gemini-3-flash-b")]),
+                ...protoBytes(9, [
+                  ...protoNumber(1, 9001),
+                  ...protoNumber(2, 30),
+                  ...protoText(11, "k1"),
+                ]),
+              ]),
+            ]);
+          }),
+        );
+        const result = yield* readAntigravityUsage(dir, 0, cache);
+        assert.deepStrictEqual(result.errors, []);
+        const canonical = yield* Effect.promise(() => NodeFSP.realpath(dbPath));
+        // Mixed-ID non-concrete component must not be pre-merged before global resolution.
+        assert.strictEqual(cache.get(canonical)?.data?.candidates.length, 3);
+        const read = records(result);
+        assert.strictEqual(read.length, 1);
+        assert.strictEqual(read[0]?.model, "gemini-3-flash-agent");
+        assert.strictEqual(read[0]?.totals.uncachedInputTokens, 30);
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "leaves components with conflicting top-quality models unmerged for exact tie-breaks",
+    () =>
+      Effect.gen(function* () {
+        const pathService = yield* Path.Path;
+        const dir = yield* tempDir;
+        const cache = makeAntigravityUsageCache();
+        const dbPath = pathService.join(dir, "conflicting-q4.db");
+        yield* seedDatabase(dbPath, (db) =>
+          Effect.gen(function* () {
+            yield* createTables(db);
+            // a0: q0, k1
+            yield* db.run("INSERT INTO steps VALUES (?, ?)", [
+              0,
+              new Uint8Array(protoBytes(9, [...protoNumber(2, 10), ...protoText(11, "k1")])),
+            ]);
+            // a1: q4 claude-sonnet-4, k2
+            yield* db.run("INSERT INTO steps VALUES (?, ?)", [
+              1,
+              new Uint8Array([
+                ...protoBytes(24, protoText(12, "claude-sonnet-4")),
+                ...protoBytes(9, [...protoNumber(2, 20), ...protoText(12, "k2")]),
+              ]),
+            ]);
+            // a2: q4 gemini-2.5-pro, k1 (joins a0's owner-0 group before a3 bridges k1+k2)
+            yield* db.run("INSERT INTO steps VALUES (?, ?)", [
+              2,
+              new Uint8Array([
+                ...protoBytes(24, protoText(12, "gemini-2.5-pro")),
+                ...protoBytes(9, [...protoNumber(2, 30), ...protoText(11, "k1")]),
+              ]),
+            ]);
+            // a3: q0, k1 + k2
+            yield* db.run("INSERT INTO steps VALUES (?, ?)", [
+              3,
+              new Uint8Array(
+                protoBytes(9, [
+                  ...protoNumber(2, 40),
+                  ...protoText(11, "k1"),
+                  ...protoText(12, "k2"),
+                ]),
+              ),
+            ]);
+          }),
+        );
+        const result = yield* readAntigravityUsage(dir, 0, cache);
+        assert.deepStrictEqual(result.errors, []);
+        const canonical = yield* Effect.promise(() => NodeFSP.realpath(dbPath));
+        assert.strictEqual(cache.get(canonical)?.data?.candidates.length, 4);
+        const read = records(result);
+        assert.strictEqual(read.length, 1);
+        assert.strictEqual(read[0]?.model, "gemini-2.5-pro");
+        assert.strictEqual(read[0]?.totals.uncachedInputTokens, 40);
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("reads byte-bounded generation pages with large blobs and null step metadata", () =>
+    Effect.gen(function* () {
+      const pathService = yield* Path.Path;
+      const dir = yield* tempDir;
+      const padding = protoBytes(99, new Array(300_000).fill(0x61));
+      const largeGen = new Uint8Array(
+        protoBytes(1, [
+          ...protoBytes(4, [...protoNumber(2, 200), ...protoText(11, "large-1")]),
+          ...protoText(19, "Gemini 3 Pro"),
+          ...protoBytes(9, protoBytes(4, protoNumber(1, 1780000000))),
+          ...padding,
+        ]),
+      );
+      yield* seedDatabase(pathService.join(dir, "mixed-sizes.db"), (db) =>
+        Effect.gen(function* () {
+          yield* createTables(db);
+          yield* db.run("INSERT INTO gen_metadata VALUES (?, ?)", [
+            0,
+            antigravityGeneration("g-0"),
+          ]);
+          yield* db.run("INSERT INTO gen_metadata VALUES (?, ?)", [1, largeGen]);
+          yield* db.run("INSERT INTO gen_metadata VALUES (?, ?)", [
+            2,
+            antigravityGeneration("g-2"),
+          ]);
+          yield* db.run("INSERT INTO steps VALUES (?, ?)", [0, null]);
+          yield* db.run("INSERT INTO steps VALUES (?, ?)", [1, stepUsage("s-1")]);
+          yield* db.run("INSERT INTO steps VALUES (?, ?)", [2, null]);
+        }),
+      );
+      const result = yield* readAntigravityUsage(dir, 0);
+      assert.deepStrictEqual(result.errors, []);
+      assert.deepStrictEqual(
+        records(result).map((r) => r.dedupeKey),
+        [
+          "antigravity:11:s-1",
+          "antigravity:11:g-0",
+          "antigravity:11:large-1",
+          "antigravity:11:g-2",
+        ],
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });

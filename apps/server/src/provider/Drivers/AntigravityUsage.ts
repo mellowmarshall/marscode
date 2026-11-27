@@ -21,11 +21,8 @@ import {
   acquireUsageSqliteIndex,
   type SharedUsageSqliteHandle,
 } from "../../usage/usageSqlitePool.ts";
-import {
-  antigravityRateModel,
-  makeAntigravityUsageCache,
-  readAntigravityUsage,
-} from "./antigravityUsageReader.ts";
+import { antigravityRateModel } from "./antigravityProtobuf.ts";
+import { makeAntigravityUsageCache, readAntigravityUsage } from "./antigravityUsageReader.ts";
 
 export class AntigravityUsage extends Context.Service<
   AntigravityUsage,
@@ -136,7 +133,6 @@ const make = Effect.gen(function* () {
     const nowMs = yield* Clock.currentTimeMillis;
     const sqliteIndex = getSqliteIndex(nowMs);
     const result = yield* readAntigravityUsage([...conversationDirs], windowStartMs, cache).pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );
     if (sqliteIndex !== null) {
