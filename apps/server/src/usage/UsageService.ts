@@ -82,6 +82,7 @@ import {
 import { boundedRealPath, probeArchiveRoot } from "./usageArchiveWalk.ts";
 import type { ArchiveDirState, ArchiveRootState, UsageSqliteIndex } from "./usageSqliteIndex.ts";
 import { acquireUsageSqliteIndex, type SharedUsageSqliteHandle } from "./usageSqlitePool.ts";
+import { glmRateModel, makeGlmUsageCache, readGlmUsage } from "./glmUsageReader.ts";
 
 const LITELLM_RATES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -108,11 +109,12 @@ const scanReaders = BUILT_IN_USAGE_DRIVERS.flatMap((driver) =>
   driver.usage?.kind === "scan" ? [{ driver, reader: driver.usage }] : [],
 );
 
-const providerRateModels = new Map(
-  BUILT_IN_USAGE_DRIVERS.flatMap(({ usage }) =>
+const providerRateModels = new Map<UsageProviderKind, (model: string) => string>([
+  ...BUILT_IN_USAGE_DRIVERS.flatMap(({ usage }) =>
     usage?.rateModel === undefined ? [] : [[usage.provider, usage.rateModel] as const],
   ),
-);
+  ["glm", glmRateModel],
+]);
 
 const transcriptFormats = new Map(
   transcriptReaders.map(({ reader }) => [reader.provider, reader.format] as const),
@@ -191,7 +193,9 @@ export const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
   const hostEnvironment = yield* HostProcess.Environment;
+  const hostHomeDir = yield* HostProcess.HomeDirectory;
   const hostPlatform = yield* HostProcess.Platform;
+  const glmCache = makeGlmUsageCache();
   const hostScope = hostEnvironment[DESKTOP_HOST_SCOPE_ENV]?.trim();
   // A mount or a directory's on-disk name does not change under a running server.
   // A miss is not cached: the directory may not exist yet.
@@ -1090,6 +1094,39 @@ export const make = Effect.gen(function* () {
     awaitRefresh: boolean,
     fromMemory: boolean,
   ) {
+    const mapScannedSources = (
+      provider: UsageProviderKind,
+      sources: ReadonlyArray<{
+        readonly dir: string;
+        readonly volumeId?: string;
+        readonly hostId?: string;
+        readonly status?: UsageSource["status"];
+        readonly message?: string;
+        readonly files:
+          | readonly { readonly path: string; readonly records: readonly UsageRecord[] }[]
+          | null;
+        readonly refreshing?: true;
+      }>,
+    ) =>
+      Effect.forEach(sources, ({ volumeId, ...source }) =>
+        Effect.map(
+          // A reader's own volumeId names a remote account, not a local directory.
+          volumeId === undefined
+            ? Effect.all([
+                Effect.promise(() => readDirectoryVolumeId(source.dir)),
+                physicalSourceId(source.dir),
+              ])
+            : Effect.succeed<[string, string | undefined]>([volumeId, undefined]),
+          ([resolved, sourceId]): ScannedDir => ({
+            ...source,
+            files: source.files?.map((file) => ({ ...file, malformedRecords: [] })) ?? null,
+            provider,
+            volumeId: resolved,
+            ...(sourceId === undefined ? {} : { physicalSourceId: sourceId }),
+          }),
+        ),
+      );
+
     const scans = Effect.forEach(
       scanReaders,
       ({ driver, reader }) =>
@@ -1097,29 +1134,26 @@ export const make = Effect.gen(function* () {
           Effect.flatMap((instances) =>
             reader.scan({ instances, settings, windowStartMs, retentionCutoffMs, awaitRefresh }),
           ),
-          Effect.flatMap((sources) =>
-            Effect.forEach(sources, ({ volumeId, ...source }) =>
-              Effect.map(
-                // A reader's own volumeId names a remote account, not a local directory.
-                volumeId === undefined
-                  ? Effect.all([
-                      Effect.promise(() => readDirectoryVolumeId(source.dir)),
-                      physicalSourceId(source.dir),
-                    ])
-                  : Effect.succeed<[string, string | undefined]>([volumeId, undefined]),
-                ([resolved, sourceId]): ScannedDir => ({
-                  ...source,
-                  files: source.files?.map((file) => ({ ...file, malformedRecords: [] })) ?? null,
-                  provider: reader.provider,
-                  volumeId: resolved,
-                  ...(sourceId === undefined ? {} : { physicalSourceId: sourceId }),
-                }),
-              ),
-            ),
-          ),
+          Effect.flatMap((sources) => mapScannedSources(reader.provider, sources)),
           Effect.provideContext(readerContext),
         ),
       { concurrency: "unbounded" },
+    );
+
+    const glmScans = Clock.currentTimeMillis.pipe(
+      Effect.map((nowMs) =>
+        readGlmUsage({
+          homeDir: hostHomeDir,
+          stateDir: config.stateDir,
+          environment: hostEnvironment,
+          windowStartMs,
+          retentionCutoffMs,
+          nowMs,
+          sqliteIndex: getSqliteIndex(nowMs),
+          cache: glmCache,
+        }),
+      ),
+      Effect.flatMap((sources) => mapScannedSources("glm", sources)),
     );
 
     // Scan live transcript directories first so archive walks can skip redundant live backup copies.
@@ -1166,10 +1200,16 @@ export const make = Effect.gen(function* () {
     });
 
     // Scan independent sources together, directories sequentially to bound open files; keep order, since the first copy decides a duplicate's bucket.
-    const [transcripts, scanDirs] = yield* Effect.all([scanAllTranscripts, scans], {
-      concurrency: "unbounded",
-    });
-    const scanned: readonly ScannedDir[] = [...transcripts, ...pending, ...scanDirs.flat()];
+    const [transcripts, scanDirs, glmDirs] = yield* Effect.all(
+      [scanAllTranscripts, scans, glmScans],
+      { concurrency: "unbounded" },
+    );
+    const scanned: readonly ScannedDir[] = [
+      ...transcripts,
+      ...pending,
+      ...scanDirs.flat(),
+      ...glmDirs,
+    ];
     return scanned;
   });
 

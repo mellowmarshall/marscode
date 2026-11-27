@@ -107,6 +107,23 @@ CREATE TABLE IF NOT EXISTS antigravity_dbs (
   payload BLOB NOT NULL,
   updated_at_ms INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS acp_usage_turns (
+  dedupe_key TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  timestamp_ms INTEGER NOT NULL,
+  model TEXT NOT NULL,
+  rate_model TEXT,
+  uncached_input_tokens INTEGER NOT NULL,
+  cached_input_tokens INTEGER NOT NULL,
+  cache_creation_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
+  reasoning_tokens INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_acp_usage_turns_provider_ts
+  ON acp_usage_turns(provider, timestamp_ms);
 `;
 
 function isSqliteCorruptionError(error: unknown): boolean {

@@ -4,9 +4,14 @@ import type * as NodeSqlite from "node:sqlite";
 import * as NodeZlib from "node:zlib";
 
 import type { UsageProviderKind } from "@t3tools/contracts";
-import type { TranscriptUsageFormat } from "@t3tools/provider-core/server/usage";
+import type { TranscriptUsageFormat, UsageRecord } from "@t3tools/provider-core/server/usage";
 
 import type { CachedFile } from "./usageScanCache.ts";
+import {
+  loadAcpUsageTurns,
+  pruneAcpUsageTurnsBefore,
+  upsertAcpUsageTurns,
+} from "./usageSqliteAcpTurns.ts";
 import {
   decodeAntigravityPayload,
   decodeFilePayload,
@@ -336,7 +341,8 @@ export class UsageSqliteIndex {
       const result = this.#db
         .prepare("DELETE FROM usage_files WHERE mtime_ms < ?")
         .run(retentionCutoffMs);
-      const removed = Number(result.changes);
+      const removed =
+        Number(result.changes) + pruneAcpUsageTurnsBefore(this.#db, retentionCutoffMs);
       // Raise archive coverage floors to match pruned files so widening retention re-scans them.
       this.#db
         .prepare("UPDATE usage_archive_roots SET covered_since_ms = ? WHERE covered_since_ms < ?")
@@ -427,6 +433,14 @@ export class UsageSqliteIndex {
     this.#db
       .prepare("DELETE FROM usage_archive_dirs WHERE provider = ? AND root_dir = ?")
       .run(provider, rootDir);
+  }
+
+  loadAcpTurns(provider: UsageProviderKind, minTimestampMs: number): UsageRecord[] {
+    return this.#closed ? [] : loadAcpUsageTurns(this.#db, provider, minTimestampMs);
+  }
+
+  upsertAcpTurns(records: readonly UsageRecord[], updatedAtMs: number): void {
+    if (!this.#closed) upsertAcpUsageTurns(this.#db, records, updatedAtMs);
   }
 
   loadAntigravityCache(): Map<string, AntigravityCachedPayload> {

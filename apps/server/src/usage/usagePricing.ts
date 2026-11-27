@@ -162,6 +162,7 @@ const FIRST_PARTY_PROVIDERS = new Set([
   "mistral",
   "openai",
   "xai",
+  "zai",
 ]);
 
 /** Drops models missing input or output rates to avoid understating cost. */
