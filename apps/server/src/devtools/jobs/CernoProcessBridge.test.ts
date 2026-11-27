@@ -631,6 +631,33 @@ describe("CernoProcessBridge", () => {
       state: "WAITING_CUSTOM",
       confidence: undefined,
     });
+    writeSnapshot(snapDir, "3007.json", {
+      pid: 3007,
+      proc_start_ticks: 77777,
+      command: "vp run check:changed",
+      state: "FAILED",
+      outcome: "FAIL",
+      confidence: 0.99,
+      alert: "mid_stream_fail:suspicion",
+    });
+    writeSnapshot(snapDir, "3008.json", {
+      pid: 3008,
+      proc_start_ticks: 88888,
+      command: "vp run check:changed",
+      state: "RUNNING",
+      outcome: "FAIL",
+      confidence: 0.99,
+      alert: "mid_stream_fail:confirmed",
+    });
+    writeSnapshot(snapDir, "3009.json", {
+      pid: 3009,
+      proc_start_ticks: 99999,
+      command: "vp run check:changed",
+      state: "RUNNING",
+      outcome: "FAIL",
+      confidence: 0.99,
+      alert: "mid_stream_fail:suspicion",
+    });
 
     const bridge = new CernoProcessBridge({
       snapshotDirs: [snapDir],
@@ -651,6 +678,9 @@ describe("CernoProcessBridge", () => {
       const s4 = bridge.getSummary("cerno:3004:44444");
       const s5 = bridge.getSummary("cerno:3005:55555");
       const s6 = bridge.getSummary("cerno:3006:66666");
+      const s7 = bridge.getSummary("cerno:3007:77777");
+      const s8 = bridge.getSummary("cerno:3008:88888");
+      const s9 = bridge.getSummary("cerno:3009:99999");
 
       expect(s1?.cerno).toMatchObject({
         pips: 4,
@@ -686,6 +716,24 @@ describe("CernoProcessBridge", () => {
         pips: 2,
         tone: "neutral",
         label: "Unknown",
+      });
+      expect(s7?.cerno).toMatchObject({
+        pips: 4,
+        tone: "destructive",
+        label: "Failing",
+        outcome: "fail",
+      });
+      expect(s8?.cerno).toMatchObject({
+        pips: 4,
+        tone: "destructive",
+        label: "Failing",
+        outcome: "fail",
+      });
+      expect(s9?.cerno).toMatchObject({
+        pips: 4,
+        tone: "warning",
+        label: "Likely failing",
+        outcome: "fail",
       });
     } finally {
       bridge.dispose();

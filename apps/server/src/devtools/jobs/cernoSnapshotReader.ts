@@ -465,8 +465,8 @@ export function buildCernoVerdict(snap: RawCernoLiveSnapshot): JobCernoVerdict {
     label = "Possibly stalled";
   } else if (
     upperState === "FAILED" ||
-    upperOutcome === "FAIL" ||
-    alert === "mid_stream_fail:confirmed"
+    alert === "mid_stream_fail:confirmed" ||
+    (upperOutcome === "FAIL" && alert !== "mid_stream_fail:suspicion")
   ) {
     tone = "destructive";
     label = "Failing";
