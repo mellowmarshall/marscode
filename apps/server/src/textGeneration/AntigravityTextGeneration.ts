@@ -15,6 +15,7 @@ import {
   antigravityThinkingConfig,
   applyAntigravityAcpModelSelection,
 } from "../provider/acp/AntigravityAcpSupport.ts";
+import { readAntigravityClientTextFile } from "../provider/acp/AntigravityClientFiles.ts";
 import { removeAntigravitySessionFiles } from "../provider/acp/AntigravitySessionFiles.ts";
 import {
   ANTIGRAVITY_SIGN_IN_REQUIRED_MESSAGE,
@@ -23,6 +24,10 @@ import {
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import { collectSessionConfigOptionValues } from "@t3tools/provider-acp/server/runtimeModel";
 import * as TextGenerationOperations from "@t3tools/provider-core/server/textGenerationOperations";
+import {
+  allowReadOnlyPermission,
+  isReadOnlyToolUpdateAllowed,
+} from "./AntigravityInvestigationGuard.ts";
 
 const ANTIGRAVITY_TIMEOUT_MS = 180_000;
 const MAX_OUTPUT_CHARS = 128_000;
@@ -61,6 +66,7 @@ export interface AntigravityTextGenerationOptions {
   readonly defaultModel?: Effect.Effect<string | undefined>;
   readonly makeRuntime: (
     cwd: string,
+    runtimeOptions?: { readonly readOnlyInvestigation?: boolean },
   ) => Effect.Effect<AntigravityTextRuntime, AcpError | ProviderSetupError, Scope.Scope>;
   readonly withProcess: <A, E, R>(
     stop: Effect.Effect<void>,
@@ -144,7 +150,7 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
 
   const runAntigravityJson = Effect.fn("AntigravityTextGeneration.runJson")(
     function* <S extends Schema.Top>(input: TextGenerationOperations.Request<S>) {
-      const { operation } = input;
+      const { operation, investigate } = input;
       const scope = yield* Scope.make();
       yield* Effect.addFinalizer((exit) => Scope.close(scope, exit));
       const helper = Effect.gen(function* () {
@@ -156,7 +162,33 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
           });
         }
 
-        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-antigravity-text-" });
+        const cwd = investigate
+          ? yield* fs.realPath(input.cwd).pipe(
+              Effect.flatMap((realRoot) =>
+                fs.stat(realRoot).pipe(
+                  Effect.flatMap((info) =>
+                    info.type === "Directory"
+                      ? Effect.succeed(realRoot)
+                      : Effect.fail(
+                          new TextGenerationError({
+                            operation,
+                            detail: `Antigravity investigation workspace '${input.cwd}' is not a directory.`,
+                          }),
+                        ),
+                  ),
+                ),
+              ),
+              Effect.mapError((cause) =>
+                isTextGenerationError(cause)
+                  ? cause
+                  : new TextGenerationError({
+                      operation,
+                      detail: `Antigravity investigation workspace '${input.cwd}' cannot be accessed.`,
+                      cause,
+                    }),
+              ),
+            )
+          : yield* fs.makeTempDirectoryScoped({ prefix: "t3-antigravity-text-" });
         let sessionId: string | undefined;
         yield* Effect.addFinalizer(() =>
           removeAntigravitySessionFiles({
@@ -170,7 +202,9 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
         );
 
         const rawResult = yield* Effect.gen(function* () {
-          const runtime = yield* options.makeRuntime(cwd);
+          const runtime = yield* investigate
+            ? options.makeRuntime(cwd, { readOnlyInvestigation: true })
+            : options.makeRuntime(cwd);
           yield* runtime.getEvents().pipe(
             Stream.runForEach((event) =>
               event._tag === "EventStreamBarrier"
@@ -181,6 +215,7 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
           );
           const output = yield* Ref.make("");
           const rejected = yield* Deferred.make<never, TextGenerationError>();
+          const allowedToolCalls = new Set<string>();
           const reject = (detail: string) =>
             Deferred.fail(rejected, new TextGenerationError({ operation, detail })).pipe(
               Effect.asVoid,
@@ -197,17 +232,46 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
               ),
             );
 
-          yield* runtime.handleRequestPermission(() =>
-            reject("Antigravity text generation requested a tool permission or user input.").pipe(
-              Effect.as({ outcome: { outcome: "cancelled" as const } }),
-            ),
+          yield* runtime.handleRequestPermission((request) =>
+            Effect.gen(function* () {
+              if (investigate) {
+                const optionId = yield* allowReadOnlyPermission({
+                  fileSystem: fs,
+                  path,
+                  cwd,
+                  request,
+                });
+                if (optionId !== null) {
+                  allowedToolCalls.add(request.toolCall.toolCallId);
+                  return { outcome: { outcome: "selected" as const, optionId } };
+                }
+              }
+              yield* reject(
+                "Antigravity text generation requested a tool permission or user input.",
+              );
+              return { outcome: { outcome: "cancelled" as const } };
+            }),
           );
           yield* runtime.handleElicitation(() =>
             reject("Antigravity text generation requested user input.").pipe(
               Effect.as({ action: "decline" as const }),
             ),
           );
-          yield* runtime.handleReadTextFile(rejectToolRequest);
+          yield* runtime.handleReadTextFile(
+            investigate
+              ? (request) => {
+                  const normalizedPath = path.isAbsolute(request.path)
+                    ? request.path
+                    : path.resolve(cwd, request.path);
+                  return readAntigravityClientTextFile({
+                    fileSystem: fs,
+                    path,
+                    allowedRoots: [cwd],
+                    request: { ...request, path: normalizedPath },
+                  });
+                }
+              : rejectToolRequest,
+          );
           yield* runtime.handleWriteTextFile(rejectToolRequest);
           yield* runtime.handleCreateTerminal(rejectToolRequest);
           yield* runtime.handleTerminalOutput(rejectToolRequest);
@@ -222,6 +286,18 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
                 update.sessionUpdate === "tool_call" ||
                 update.sessionUpdate === "tool_call_update"
               ) {
+                if (
+                  investigate &&
+                  (yield* isReadOnlyToolUpdateAllowed({
+                    fileSystem: fs,
+                    path,
+                    cwd,
+                    update,
+                    allowedToolCalls,
+                  }))
+                ) {
+                  return;
+                }
                 return yield* reject("Antigravity attempted tool work during text generation.");
               }
               if (
@@ -293,7 +369,9 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
                 {
                   type: "text",
                   text: [
-                    "Use only the input below. Do not use tools, read or write files, run commands, or ask questions.",
+                    investigate
+                      ? "You may inspect files inside the repository using read-only tools only. Do not write or edit files, run commands, or ask questions."
+                      : "Use only the input below. Do not use tools, read or write files, run commands, or ask questions.",
                     "Return only the requested JSON object.",
                     "",
                     input.prompt,
@@ -319,7 +397,7 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
           );
         }).pipe(Effect.scoped);
 
-        if (!(yield* hasOnlyRuntimeDirectories(cwd))) {
+        if (!investigate && !(yield* hasOnlyRuntimeDirectories(cwd))) {
           return yield* new TextGenerationError({
             operation,
             detail: "Antigravity wrote files during text generation.",
@@ -334,7 +412,7 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
         return yield* TextGenerationOperations.decodeJsonReply(input, "Antigravity", rawResult);
       }).pipe(
         Effect.scoped,
-        Effect.timeoutOption(ANTIGRAVITY_TIMEOUT_MS),
+        Effect.timeoutOption(investigate?.timeoutMs ?? ANTIGRAVITY_TIMEOUT_MS),
         Effect.flatMap(
           Option.match({
             onNone: () =>
@@ -372,8 +450,5 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
       ),
   );
 
-  return TextGenerationOperations.fromRunner(
-    "AntigravityTextGeneration",
-    TextGenerationOperations.withoutInvestigation("Antigravity", runAntigravityJson),
-  );
+  return TextGenerationOperations.fromRunner("AntigravityTextGeneration", runAntigravityJson);
 });

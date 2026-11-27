@@ -300,3 +300,149 @@ export function commitMessages(root: string, base: string, tip: string): string 
   if (res.code === 0 && res.stdout.trim()) return res.stdout.trim();
   return log("-1", "--format=%B", tip).stdout.trim();
 }
+
+/** Tracked and non-ignored untracked repo-relative paths present in ROOT, or null if git fails. */
+export function listedFiles(root: string): ReadonlyArray<string> | null {
+  const res = git(root, ["ls-files", "-co", "--exclude-standard", "-z"]);
+  if (res.code !== 0) return null;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const rel of res.stdout.split("\0")) {
+    if (!rel || seen.has(rel)) continue;
+    seen.add(rel);
+    try {
+      NodeFS.lstatSync(NodePath.join(root, rel));
+      out.push(rel);
+    } catch {
+      // deleted in the working tree
+    }
+  }
+  return out;
+}
+
+/** Tracked repo-relative paths present in ROOT, or null if git fails. */
+export function trackedFiles(root: string): ReadonlyArray<string> | null {
+  const res = git(root, ["ls-files", "-z"]);
+  if (res.code !== 0) return null;
+  return res.stdout.split("\0").filter((rel) => {
+    if (!rel) return false;
+    try {
+      NodeFS.lstatSync(NodePath.join(root, rel));
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** Files present in commit REV (repo-relative), or null if git cannot read REV. */
+export function treeFiles(root: string, rev: string): ReadonlyArray<string> | null {
+  if (!safeRev(rev)) return null;
+  const res = git(root, ["ls-tree", "-r", "--name-only", "-z", "--end-of-options", rev]);
+  if (res.code !== 0) return null;
+  return res.stdout.split("\0").filter(Boolean);
+}
+
+/** Map of relative path -> blob sha under PREFIX at commit REV, or null if git fails. */
+export function treeBlobs(
+  root: string,
+  rev: string,
+  prefix: string,
+): ReadonlyMap<string, string> | null {
+  if (!safeRev(rev)) return null;
+  const normalized = prefix.replace(/\/+$/, "");
+  const res = git(root, ["ls-tree", "-r", "-z", "--end-of-options", rev, "--", `${normalized}/`]);
+  if (res.code !== 0) return null;
+  const out = new Map<string, string>();
+  for (const entry of res.stdout.split("\0")) {
+    if (!entry) continue;
+    const tab = entry.indexOf("\t");
+    if (tab < 0) continue;
+    const sha = entry.slice(0, tab).split(/\s+/)[2];
+    const rel = entry.slice(tab + 1);
+    if (sha && rel) out.set(rel, sha);
+  }
+  return out;
+}
+
+/** Compute git blob hashes for existing worktree files in one hardened `git hash-object` call. */
+export function hashWorktreeFiles(
+  root: string,
+  relPaths: ReadonlyArray<string>,
+): ReadonlyMap<string, string> {
+  const out = new Map<string, string>();
+  if (relPaths.length === 0) return out;
+  const safe = relPaths.filter((p) => p.length > 0 && !p.includes("\0") && !p.includes("\n"));
+  if (safe.length === 0) return out;
+  const res = NodeChildProcess.spawnSync(
+    "git",
+    ["-C", root, ...HARDENED_ARGS, "hash-object", "--stdin-paths"],
+    {
+      encoding: "utf8",
+      env: gitEnv(),
+      input: `${safe.join("\n")}\n`,
+      maxBuffer: MAX_GIT_BUFFER,
+    },
+  );
+  if (res.status !== 0) return out;
+  const hashes = (res.stdout ?? "").trim().split(/\s+/).filter(Boolean);
+  safe.forEach((rel, i) => {
+    const hash = hashes[i];
+    if (hash) out.set(rel, hash);
+  });
+  return out;
+}
+
+/** First symlink segment along REL inside ROOT, or null when no component is a symlink. */
+export function firstSymlinkSegment(root: string, rel: string): string | null {
+  if (!rel || NodePath.isAbsolute(rel) || rel.includes("\0") || rel.includes("\\")) return rel;
+  const parts = rel
+    .replace(/\/+$/, "")
+    .split("/")
+    .filter((p) => p.length > 0 && p !== ".");
+  if (parts.some((p) => p === "..")) return rel;
+  let current = root;
+  const walked: string[] = [];
+  for (const part of parts) {
+    walked.push(part);
+    current = NodePath.join(current, part);
+    try {
+      if (NodeFS.lstatSync(current).isSymbolicLink()) return walked.join("/");
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Raw bytes of a regular file in ROOT, refusing symlinks or parent paths escaping ROOT. */
+export function readWorktreeBytes(root: string, rel: string): Buffer | null {
+  if (!rel || NodePath.isAbsolute(rel) || rel.includes("\0")) return null;
+  try {
+    const rootReal = NodeFS.realpathSync(root);
+    const full = NodePath.resolve(rootReal, rel);
+    const parentReal = NodeFS.realpathSync(NodePath.dirname(full));
+    if (parentReal !== rootReal && !parentReal.startsWith(rootReal + NodePath.sep)) return null;
+    const target = NodePath.join(parentReal, NodePath.basename(full));
+    const st = NodeFS.lstatSync(target);
+    if (!st.isFile()) return null;
+    return NodeFS.readFileSync(target);
+  } catch {
+    return null;
+  }
+}
+
+/** True when REL exists inside ROOT as a file or directory without escaping via symlinks. */
+export function worktreePathExists(root: string, rel: string): boolean {
+  if (!rel || NodePath.isAbsolute(rel) || rel.includes("\0")) return false;
+  if (firstSymlinkSegment(root, rel) !== null) return false;
+  try {
+    const rootReal = NodeFS.realpathSync(root);
+    const full = NodePath.resolve(rootReal, rel);
+    if (full !== rootReal && !full.startsWith(rootReal + NodePath.sep)) return false;
+    NodeFS.lstatSync(full);
+    return true;
+  } catch {
+    return false;
+  }
+}

@@ -1,0 +1,249 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Captured design theme",
+  "description": "Structured token set extracted from a screenshot or live URL. Captures color roles, typography, layout, effects, motion, architecture, and detected catalog features.",
+  "type": "object",
+  "required": ["name", "colors", "radius", "fontFamily"],
+  "properties": {
+    "name": { "type": "string", "description": "Short name for this theme." },
+    "source": {
+      "type": "string",
+      "description": "What was captured: app/mobile/web + URL or app name."
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["light", "dark"],
+      "description": "Predominant light or dark mode."
+    },
+    "colors": {
+      "type": "object",
+      "description": "Semantic color roles in hex.",
+      "required": ["primary", "neutral", "surface", "background", "border", "text"],
+      "properties": {
+        "primary": { "type": "string" },
+        "accent": { "type": "string" },
+        "neutral": { "type": "string" },
+        "success": { "type": "string" },
+        "warning": { "type": "string" },
+        "danger": { "type": "string" },
+        "surface": { "type": "string" },
+        "background": { "type": "string" },
+        "border": { "type": "string" },
+        "text": { "type": "string" },
+        "muted": { "type": "string" }
+      }
+    },
+    "radius": { "type": "string", "description": "Base corner radius, CSS length." },
+    "fontFamily": {
+      "type": "object",
+      "required": ["sans"],
+      "properties": {
+        "sans": { "type": "string", "description": "Body/UI stack." },
+        "display": {
+          "type": "string",
+          "description": "Display/heading stack if distinct from body."
+        },
+        "mono": { "type": "string" }
+      }
+    },
+    "typeScale": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "size": { "type": "string" },
+          "weight": { "type": "integer" },
+          "lineHeight": { "type": "string" },
+          "tracking": { "type": "string" }
+        }
+      }
+    },
+    "spacing": { "type": "string" },
+    "density": { "type": "string", "enum": ["compact", "comfortable", "spacious"] },
+    "shadows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": { "name": { "type": "string" }, "value": { "type": "string" } }
+      }
+    },
+    "effects": {
+      "type": "object",
+      "description": "Atmosphere layer (gradients, grain, glow, glass, blend modes).",
+      "properties": {
+        "gradients": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "value"],
+            "properties": {
+              "name": { "type": "string" },
+              "value": { "type": "string" },
+              "use": { "type": "string" }
+            }
+          }
+        },
+        "grain": {
+          "type": "object",
+          "properties": {
+            "opacity": { "type": "number" },
+            "blend": { "type": "string" },
+            "drift": { "type": "boolean" }
+          }
+        },
+        "glow": { "type": "string" },
+        "glass": {
+          "type": "object",
+          "properties": { "blur": { "type": "string" }, "bg": { "type": "string" } }
+        },
+        "blend": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "motion": {
+      "type": "object",
+      "description": "Codeable motion system: easings, durations, named presets, and transition model.",
+      "properties": {
+        "scrollModel": { "type": "string", "enum": ["native", "smooth", "virtual"] },
+        "lerp": { "type": "number" },
+        "easings": { "type": "object", "additionalProperties": { "type": "string" } },
+        "durations": { "type": "object", "additionalProperties": { "type": "number" } },
+        "presets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "name"],
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "trigger": { "type": "string" },
+              "desc": { "type": "string" },
+              "css": { "type": "string" },
+              "js": { "type": "string" }
+            }
+          }
+        },
+        "pageTransition": { "type": "string" },
+        "reducedMotion": { "type": "string" }
+      }
+    },
+    "architecture": {
+      "type": "object",
+      "description": "Developer build notes from live inspection.",
+      "properties": {
+        "stack": { "type": "string" },
+        "scroll": { "type": "string" },
+        "webgl": { "type": "string" },
+        "audio": { "type": "string" },
+        "cursor": { "type": "string" },
+        "transitions": { "type": "string" },
+        "libraries": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "confidence": {
+      "type": "object",
+      "description": "Per-area notes on direct measurement vs inference.",
+      "additionalProperties": { "type": "string" }
+    },
+    "detected": {
+      "type": "object",
+      "description": "Catalog ids observed on the source so the interactive picker starts those toggles ON.",
+      "properties": {
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "button",
+              "input",
+              "select",
+              "textarea",
+              "checkbox",
+              "radio",
+              "toggle",
+              "badge",
+              "alert",
+              "progress",
+              "tooltip",
+              "card",
+              "stat",
+              "tabs",
+              "navbar",
+              "pagination",
+              "breadcrumb",
+              "dropdown",
+              "modal",
+              "table",
+              "avatar",
+              "button-group",
+              "icon-button",
+              "split-button",
+              "search",
+              "input-group",
+              "range",
+              "file-upload",
+              "toast",
+              "banner",
+              "spinner",
+              "skeleton",
+              "empty-state",
+              "steps",
+              "command",
+              "sidebar",
+              "drawer",
+              "popover",
+              "accordion",
+              "chip",
+              "divider",
+              "kbd",
+              "desc-list",
+              "list-feed",
+              "timeline"
+            ]
+          }
+        },
+        "motion": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "reveal-up",
+              "mask-line",
+              "fade",
+              "parallax",
+              "hover-scale",
+              "underline-wipe",
+              "magnetic",
+              "count-up",
+              "marquee",
+              "page-cover"
+            ]
+          }
+        },
+        "interactions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "scroll-reveal",
+              "scroll-scrub",
+              "cursor",
+              "tilt",
+              "shader",
+              "loader",
+              "kinetic",
+              "ambient"
+            ]
+          }
+        },
+        "effects": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["aurora", "vignette", "glow", "grain", "glass", "shadow", "duotone", "blend"]
+          }
+        }
+      }
+    }
+  }
+}

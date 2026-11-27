@@ -38,6 +38,10 @@
       "types": "./src/declaration.ts",
       "import": "./src/declaration.ts"
     },
+    "./declarationSchema": {
+      "types": "./src/declarationSchema.ts",
+      "import": "./src/declarationSchema.ts"
+    },
     "./declarationSummary": {
       "types": "./src/declarationSummary.ts",
       "import": "./src/declarationSummary.ts"
@@ -77,7 +81,9 @@
     "build:bundle": "vp pack"
   },
   "dependencies": {
+    "@t3tools/fleet": "workspace:*",
     "@t3tools/guard-protocol": "workspace:*",
+    "@t3tools/surface": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

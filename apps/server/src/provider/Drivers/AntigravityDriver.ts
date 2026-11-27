@@ -660,10 +660,11 @@ export const AntigravityDriver: ProviderDriver<
       profileDirectory,
       defaultModel,
       withProcess: authFlow.withProcess,
-      makeRuntime: (cwd) =>
+      makeRuntime: (cwd, runtimeOptions) =>
         makeRuntime({
           cwd,
           mcpServers: [],
+          ...(runtimeOptions?.readOnlyInvestigation === true ? { clientFileReads: true } : {}),
         }),
     });
 

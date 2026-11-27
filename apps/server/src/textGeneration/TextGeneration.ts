@@ -69,7 +69,7 @@ const resolveInstance = (
   );
 
 // Review guides and playbook challenges investigate the checkout read-only; the other drivers reject that request.
-const INVESTIGATING_DRIVERS = new Set(["codex", "claudeAgent"]);
+const INVESTIGATING_DRIVERS = new Set(["codex", "claudeAgent", "antigravity"]);
 const INVESTIGATING_OPERATIONS: ReadonlySet<TextGenerationOp> = new Set([
   "generateReviewGuide",
   "generatePlaybookChallenge",
@@ -110,9 +110,12 @@ export const make = Effect.gen(function* () {
     const now = DateTime.toEpochMillis(yield* DateTime.now);
     const selected = snapshots.find((provider) => provider.instanceId === selection.instanceId);
     const selectedDisabled = selected?.enabled === false;
+    const selectedCannotInvestigate =
+      investigates && selected !== undefined && !INVESTIGATING_DRIVERS.has(selected.driver);
     // Only a failed probe counts: a pending one is also not installed yet.
     const unusable =
       textGeneratorCannotRun ||
+      selectedCannotInvestigate ||
       selectedDisabled ||
       (selected?.enabled === true &&
         (!isProviderTextGenerationCapable(selected) ||
@@ -157,13 +160,16 @@ export const make = Effect.gen(function* () {
       // Another instance first; the rejected instance's other models only when none qualifies.
       selection = fallbackWhere(false) ?? fallbackWhere(true) ?? selection;
     }
-    if (textGeneratorCannotRun && selection.instanceId === textGeneratorId) {
+    if (
+      (textGeneratorCannotRun || selectedCannotInvestigate) &&
+      selection.instanceId === textGeneratorId
+    ) {
       return yield* new TextGenerationError({
         operation,
         detail:
           operation === "generatePlaybookChallenge"
-            ? "Playbook challenges need a coding agent that can read the checkout. None is ready. Pick Codex or Claude as the playbook challenge model."
-            : "Review guides need a coding agent that can read the checkout. None is ready. Pick Codex or Claude as the review guide model in Settings → Source control & issues.",
+            ? "Playbook challenges need a coding agent that can read the checkout. None is ready. Pick Codex, Claude, or Antigravity as the playbook challenge model."
+            : "Review guides need a coding agent that can read the checkout. None is ready. Pick Codex, Claude, or Antigravity as the review guide model in Settings → Source control & issues.",
       });
     }
     if (selectedDisabled && selection.instanceId === selected.instanceId) {

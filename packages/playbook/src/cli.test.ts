@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import { starterShape } from "@t3tools/fleet";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { runPlaybookCli } from "./cli.ts";
@@ -31,6 +32,7 @@ async function cli(cwd: string, argv: ReadonlyArray<string>, env: NodeJS.Process
 function branchRepo() {
   const repo = makeFixtureRepo();
   repo.writeJson("playbook.json", declarationWithSize({ "src/a.ts": 3 }));
+  repo.writeJson("fleet.json", starterShape("sample-repo"));
   repo.write("playbook/PLAYBOOK.md", fixturePlaybookMd());
   repo.write("src/a.ts", "export const a = 1;\n");
   const base = repo.commit("base");
@@ -73,8 +75,8 @@ describe("playbook CLI", () => {
     ]);
     expect((await cli(repo.root, ["check", "nonsense"])).code).toBe(2);
     const text = await cli(repo.root, ["-C", "src", "check"], { SHIP_QUEUE_BASE_SHA: base });
-    expect(text.out).toContain("UNPROVEN fleet:");
-    expect(text.code).toBe(3);
+    expect(text.out).toContain("PASS fleet:");
+    expect(text.code).toBe(0);
   });
 
   it("challenge judges a response file against the real worktree and records it", async () => {

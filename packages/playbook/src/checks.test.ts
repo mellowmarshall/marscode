@@ -1,3 +1,4 @@
+import { starterShape } from "@t3tools/fleet";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { runCheck } from "./checks.ts";
@@ -15,6 +16,7 @@ afterEach(cleanupTempDirs);
 function repoWithBase(extra: object = {}) {
   const repo = makeFixtureRepo();
   repo.writeJson("playbook.json", declarationWithSize({ "src/a.ts": 10 }, extra));
+  repo.writeJson("fleet.json", starterShape("sample-repo"));
   repo.write("src/a.ts", "export const a = 1;\n");
   const base = repo.commit("base");
   repo.branch("feat/change");
@@ -55,14 +57,17 @@ describe("playbook check on a real worktree", () => {
     ]);
   });
 
-  it("passes a clean branch and marks unported gates UNPROVEN, never PASS", async () => {
+  it("passes every declared deterministic gate on a clean branch", async () => {
     const { repo, base } = repoWithBase();
     const report = await check(repo.root, base);
     expect(statusOf(report, "declaration")).toBe("PASS");
     expect(statusOf(report, "ratchet")).toBe("PASS");
     expect(statusOf(report, "size")).toBe("PASS");
-    expect(statusOf(report, "fleet")).toBe("UNPROVEN");
-    expect(report.exitCode).toBe(3);
+    expect(statusOf(report, "tools")).toBe("PASS");
+    expect(statusOf(report, "fleet")).toBe("PASS");
+    expect(statusOf(report, "generations")).toBe("PASS");
+    expect(statusOf(report, "optimization")).toBe("PASS");
+    expect(report.exitCode).toBe(0);
     const sizeOnly = await check(repo.root, base, { contracts: ["size", "tools"] });
     expect(sizeOnly.exitCode).toBe(0);
   });

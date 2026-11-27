@@ -35,6 +35,7 @@ import { expandHomePath } from "../os-jank.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { readLiveServerRuntimeState } from "../serverRuntimeState.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { buildThreadShowJsonPayload, type ThreadShowMessage } from "./threadShowReview.ts";
 
 /**
  * Short enough that a run which stops to ask the user something is noticed
@@ -1059,9 +1060,9 @@ const threadShowCommand = Command.make("show", {
             threadId,
             flags.messages,
           );
-          const messages = yield* Effect.forEach(latest, (item) =>
+          const messages: Array<ThreadShowMessage> = yield* Effect.forEach(latest, (item) =>
             readFullText(tools, threadId, item).pipe(
-              Effect.map((text) => ({
+              Effect.map((text): ThreadShowMessage => ({
                 role:
                   item.type === "assistant_message"
                     ? "assistant"
@@ -1075,7 +1076,39 @@ const threadShowCommand = Command.make("show", {
           );
           const error = yield* latestRunError(tools, thread);
           if (flags.json) {
-            return yield* printJson({ thread, messages, error });
+            let initialPromptText: string | null = null;
+            if (thread.relationshipToParent === "subagent") {
+              const firstUserIndex = latest.findIndex((item) => item.type === "user_message");
+              if (latest[0]?.position === 0 && firstUserIndex >= 0) {
+                initialPromptText = messages[firstUserIndex]?.text ?? null;
+              } else {
+                let afterPosition = -1;
+                while (true) {
+                  const head: OrchestratorMcpThreadReadResult = yield* tools.call(
+                    "t3_thread_read",
+                    {
+                      threadId,
+                      view: "messages",
+                      limit: READ_PAGE_LIMIT,
+                      maxCharsPerItem: READ_ITEM_MAX_CHARS,
+                      runLimit: 1,
+                      afterPosition,
+                    },
+                    OrchestratorMcpThreadReadResult,
+                  );
+                  const firstUser = head.items.find((item) => item.type === "user_message");
+                  if (firstUser) {
+                    initialPromptText = yield* readFullText(tools, threadId, firstUser);
+                    break;
+                  }
+                  if (!head.hasMore || head.nextPosition === null) break;
+                  afterPosition = head.nextPosition;
+                }
+              }
+            }
+            return yield* printJson(
+              buildThreadShowJsonPayload({ thread, messages, initialPromptText, error }),
+            );
           }
           yield* Console.log(thread.title);
           yield* Console.log(

@@ -10,9 +10,8 @@ import { planAmend } from "./amend.ts";
 import { installedExceptionsPath, readExceptionsFile, repoBypasses } from "./bypass.ts";
 import { decodeChallengeReplyText } from "./challengeReply.ts";
 import { runChallenge, type ChallengeModel } from "./challenger.ts";
-import { runCheck, type OverrideAsk } from "./checks.ts";
+import { ALL_GATE_NAMES, runCheck, type OverrideAsk } from "./checks.ts";
 import {
-  CONTRACT_NAMES,
   DECLARATION,
   HOST_VERSION,
   renderDeclaration,
@@ -88,10 +87,10 @@ async function cmdCheck(root: string, args: ReadonlyArray<string>, io: CliIo): P
     allowPositionals: true,
     options: { "pr-body": { type: "string" }, json: { type: "boolean" } },
   });
-  const unknown = positionals.filter((c) => !(CONTRACT_NAMES as ReadonlyArray<string>).includes(c));
+  const unknown = positionals.filter((c) => !ALL_GATE_NAMES.includes(c));
   if (unknown.length > 0) {
     io.err(
-      `playbook: unknown contract ${unknown.join(", ")} (known: ${CONTRACT_NAMES.join(", ")})`,
+      `playbook: unknown contract ${unknown.join(", ")} (known: ${ALL_GATE_NAMES.join(", ")})`,
     );
     return EXIT_USAGE;
   }

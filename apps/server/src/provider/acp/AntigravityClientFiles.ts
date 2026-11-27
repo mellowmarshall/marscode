@@ -13,48 +13,48 @@ function isInsideRoot(path: Path.Path, root: string, candidate: string): boolean
 }
 
 /** Resolve all symlinks, including the final component, before checking workspace containment. */
-const resolveClientFilePath = Effect.fn("AntigravityClientFiles.resolveClientFilePath")(
-  function* (input: {
-    readonly fileSystem: FileSystem.FileSystem;
-    readonly path: Path.Path;
-    readonly allowedRoots: ReadonlyArray<string>;
-    readonly requestPath: string;
-  }) {
-    const { path } = input;
-    const resolved = path.resolve(input.requestPath);
-    const outside = EffectAcpErrors.AcpRequestError.invalidParams(
-      `Path '${input.requestPath}' is outside the session workspace.`,
-    );
-    // Canonicalize the deepest existing ancestor, so a link above missing directories cannot escape.
-    let candidate = resolved;
-    const missingSuffix: Array<string> = [];
-    let real: string;
-    while (true) {
-      const canonical = yield* input.fileSystem.realPath(candidate).pipe(Effect.option);
-      if (Option.isSome(canonical)) {
-        real = path.join(canonical.value, ...missingSuffix);
-        break;
-      }
-      // Walk up only past missing entries, never dangling or unreadable links.
-      const entryExists = yield* input.fileSystem.readLink(candidate).pipe(
-        Effect.as(true),
-        Effect.catch(() => input.fileSystem.exists(candidate)),
-        Effect.orElseSucceed(() => true),
-      );
-      const parent = path.dirname(candidate);
-      if (entryExists || parent === candidate) return yield* outside;
-      missingSuffix.unshift(path.basename(candidate));
-      candidate = parent;
+export const resolveAntigravityClientFilePath = Effect.fn(
+  "AntigravityClientFiles.resolveClientFilePath",
+)(function* (input: {
+  readonly fileSystem: FileSystem.FileSystem;
+  readonly path: Path.Path;
+  readonly allowedRoots: ReadonlyArray<string>;
+  readonly requestPath: string;
+}) {
+  const { path } = input;
+  const resolved = path.resolve(input.requestPath);
+  const outside = EffectAcpErrors.AcpRequestError.invalidParams(
+    `Path '${input.requestPath}' is outside the session workspace.`,
+  );
+  // Canonicalize the deepest existing ancestor, so a link above missing directories cannot escape.
+  let candidate = resolved;
+  const missingSuffix: Array<string> = [];
+  let real: string;
+  while (true) {
+    const canonical = yield* input.fileSystem.realPath(candidate).pipe(Effect.option);
+    if (Option.isSome(canonical)) {
+      real = path.join(canonical.value, ...missingSuffix);
+      break;
     }
-    const roots = yield* Effect.forEach(input.allowedRoots, (root) =>
-      input.fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root)),
+    // Walk up only past missing entries, never dangling or unreadable links.
+    const entryExists = yield* input.fileSystem.readLink(candidate).pipe(
+      Effect.as(true),
+      Effect.catch(() => input.fileSystem.exists(candidate)),
+      Effect.orElseSucceed(() => true),
     );
-    if (!roots.some((root) => isInsideRoot(path, root, real))) {
-      return yield* outside;
-    }
-    return real;
-  },
-);
+    const parent = path.dirname(candidate);
+    if (entryExists || parent === candidate) return yield* outside;
+    missingSuffix.unshift(path.basename(candidate));
+    candidate = parent;
+  }
+  const roots = yield* Effect.forEach(input.allowedRoots, (root) =>
+    input.fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root)),
+  );
+  if (!roots.some((root) => isInsideRoot(path, root, real))) {
+    return yield* outside;
+  }
+  return real;
+});
 
 export const readAntigravityClientTextFile = Effect.fn("AntigravityClientFiles.readTextFile")(
   function* (input: {
@@ -63,7 +63,10 @@ export const readAntigravityClientTextFile = Effect.fn("AntigravityClientFiles.r
     readonly allowedRoots: ReadonlyArray<string>;
     readonly request: EffectAcpSchema.ReadTextFileRequest;
   }): Effect.fn.Return<EffectAcpSchema.ReadTextFileResponse, EffectAcpErrors.AcpError> {
-    const filePath = yield* resolveClientFilePath({ ...input, requestPath: input.request.path });
+    const filePath = yield* resolveAntigravityClientFilePath({
+      ...input,
+      requestPath: input.request.path,
+    });
     const info = yield* input.fileSystem
       .stat(filePath)
       .pipe(

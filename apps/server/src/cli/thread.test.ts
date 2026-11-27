@@ -769,3 +769,219 @@ it.live("resolves a path inside a git worktree of the project's repository to th
     assert.include(ambiguous.message, "feature (project-feature)");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect(
+  "show --json returns structured status, delegated review marker, and final review text",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-thread-show-" });
+      yield* persistServerRuntimeState({
+        path: path.join(baseDir, "userdata", "server-runtime.json"),
+        state: yield* makePersistedServerRuntimeState({
+          config: { host: "127.0.0.1", devUrl: undefined },
+          port: 3_773,
+        }),
+      });
+      const detail = {
+        threadId: "thread-review-1",
+        projectId: "project-1",
+        title: "Adversarial review",
+        createdBy: "agent",
+        creationSource: "provider",
+        status: "completed",
+        latestRunId: "run-1",
+        activeRunId: null,
+        providerInstanceId: "codex",
+        model: "gpt-5.4",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        linkedPullRequest: null,
+        titleRegeneration: null,
+        settled: false,
+        settledAt: null,
+        snoozed: false,
+        snoozedUntil: null,
+        archived: false,
+        parentThreadId: "thread-parent",
+        relationshipToParent: "subagent",
+        worktreePath: null,
+        branch: null,
+        runCount: 1,
+        pendingRequestCount: 0,
+        itemCount: 2,
+        createdAt: "2026-11-27T10:00:00.000Z",
+        updatedAt: "2026-11-27T10:01:00.000Z",
+      };
+      const systemPreambleItem = {
+        itemId: "item-0",
+        position: 0,
+        visibility: "local",
+        sourceThreadId: "thread-review-1",
+        type: "proposed_plan",
+        createdBy: "system",
+        creationSource: "provider",
+        runId: "run-1",
+        messageId: null,
+        status: "completed",
+        title: null,
+        text: "Internal plan preamble before user prompt",
+        textTruncated: false,
+        nextTextOffset: null,
+        updatedAt: "2026-11-27T09:59:59.000Z",
+      };
+      const promptItem = {
+        itemId: "item-1",
+        position: 1,
+        visibility: "local",
+        sourceThreadId: "thread-review-1",
+        type: "user_message",
+        createdBy: "agent",
+        creationSource: "provider",
+        runId: "run-1",
+        messageId: "msg-0",
+        status: "completed",
+        title: null,
+        text: "Act as the review sub-agent for PR #40.",
+        textTruncated: false,
+        nextTextOffset: null,
+        updatedAt: "2026-11-27T10:00:00.000Z",
+      };
+      const replyItem = {
+        itemId: "item-2",
+        position: 2,
+        visibility: "local",
+        sourceThreadId: "thread-review-1",
+        type: "assistant_message",
+        createdBy: "agent",
+        creationSource: "provider",
+        runId: "run-1",
+        messageId: "msg-1",
+        status: "completed",
+        title: null,
+        text: "VERDICT: PASS\nNo blocking findings.",
+        textTruncated: false,
+        nextTextOffset: null,
+        updatedAt: "2026-11-27T10:01:00.000Z",
+      };
+      const recentRuns = [
+        {
+          runId: "run-1",
+          ordinal: 1,
+          status: "completed",
+          providerInstanceId: "codex",
+          model: "gpt-5.4",
+          requestedAt: "2026-11-27T10:00:00.000Z",
+          startedAt: "2026-11-27T10:00:01.000Z",
+          completedAt: "2026-11-27T10:01:00.000Z",
+        },
+      ];
+
+      using _session = vi.spyOn(McpBridge, "mcpToolSession").mockReturnValue(
+        Effect.succeed({
+          call: (_name: string, args: unknown) => {
+            const input = (args ?? {}) as Record<string, unknown>;
+            if (input.afterPosition === -1) {
+              return Effect.succeed({
+                structuredContent: {
+                  thread: { ...detail, itemCount: 3 },
+                  items: [systemPreambleItem, promptItem, replyItem],
+                  hasMore: false,
+                  nextPosition: null,
+                  earlierPosition: null,
+                  recentRuns,
+                },
+              });
+            }
+            return Effect.succeed({
+              structuredContent: {
+                thread: { ...detail, itemCount: 3 },
+                items: [replyItem],
+                hasMore: false,
+                nextPosition: null,
+                earlierPosition: 1,
+                recentRuns,
+              },
+            });
+          },
+        } as unknown as McpBridge.McpToolSession),
+      );
+
+      yield* Command.runWith(threadCommand, { version: "0.0.0" })([
+        "show",
+        "thread-review-1",
+        "--messages",
+        "1",
+        "--json",
+        "--base-dir",
+        baseDir,
+      ]);
+      const lines = yield* TestConsole.logLines;
+      const output = JSON.parse(String(lines.at(-1))) as {
+        status: string;
+        isDelegatedReviewSubagent: boolean;
+        finalReviewText: string | null;
+        reviewVerification: { ok: boolean; delegatedReview?: boolean; source?: string };
+      };
+      assert.strictEqual(output.status, "completed");
+      assert.strictEqual(output.isDelegatedReviewSubagent, true);
+      assert.strictEqual(output.finalReviewText, "VERDICT: PASS\nNo blocking findings.\n");
+      assert.strictEqual(output.reviewVerification.ok, true);
+      assert.strictEqual(output.reviewVerification.delegatedReview, true);
+      assert.strictEqual(output.reviewVerification.source, "subagent");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer, TestConsole.layer),
+      ),
+    ),
+);
+
+it("buildThreadShowJsonPayload rejects non-completed terminal statuses even with assistant output", async () => {
+  const { buildThreadShowJsonPayload } = await import("./threadShowReview.ts");
+  for (const status of ["failed", "cancelled", "interrupted", "rolled_back"] as const) {
+    const payload = buildThreadShowJsonPayload({
+      thread: {
+        threadId: ThreadId.make("thread-term-1"),
+        projectId: ProjectId.make("project-1"),
+        title: "Interrupted review",
+        createdBy: "agent",
+        creationSource: "provider",
+        status,
+        latestRunId: RunId.make("run-1"),
+        activeRunId: null,
+        providerInstanceId: "codex" as never,
+        model: "gpt-5.4",
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        linkedPullRequest: null,
+        titleRegeneration: null,
+        settled: false,
+        settledAt: null,
+        snoozed: false,
+        snoozedUntil: null,
+        archived: false,
+        parentThreadId: ThreadId.make("thread-parent"),
+        relationshipToParent: "subagent",
+        worktreePath: null,
+        branch: null,
+        runCount: 1,
+        pendingRequestCount: 0,
+        itemCount: 2,
+        createdAt: "2026-11-27T10:00:00.000Z" as never,
+        updatedAt: "2026-11-27T10:01:00.000Z" as never,
+      },
+      messages: [
+        { role: "user", runId: "run-1", text: "Act as the review sub-agent for PR #40." },
+        { role: "assistant", runId: "run-1", text: "Partial review before failure" },
+      ],
+      initialPromptText: "Act as the review sub-agent for PR #40.",
+      error: null,
+    });
+    assert.strictEqual(payload.status, status);
+    assert.strictEqual(payload.isDelegatedReviewSubagent, true);
+    assert.strictEqual(payload.finalReviewText, null);
+    assert.strictEqual(payload.reviewVerification.ok, false);
+  }
+});

@@ -4,8 +4,8 @@
  */
 import { normalizeExceptions, repoBypasses } from "@t3tools/playbook/bypass";
 import type { ChallengeOutcome } from "@t3tools/playbook/challenger";
-import { runCheck, type CheckReport } from "@t3tools/playbook/checks";
-import { CONTRACT_NAMES, loadDeclaration } from "@t3tools/playbook/declaration";
+import { ALL_GATE_NAMES, runCheck, type CheckReport } from "@t3tools/playbook/checks";
+import { loadDeclaration } from "@t3tools/playbook/declaration";
 import { readPlaybookDeclaration } from "@t3tools/playbook/declarationSummary";
 import { repoName, repoRoot } from "@t3tools/playbook/git";
 import * as DateTime from "effect/DateTime";
@@ -39,7 +39,7 @@ function flightRefusal(
   if (kind === "busy") return helpers.jsonResponse({ error: `too many ${what} runs at once` }, 429);
   return helpers.jsonResponse({ error: `${what} was cancelled` }, 499);
 }
-const KNOWN_CONTRACTS: ReadonlySet<string> = new Set(CONTRACT_NAMES);
+const KNOWN_CONTRACTS: ReadonlySet<string> = new Set(ALL_GATE_NAMES);
 
 export function validatePlaybookRequest(input: {
   readonly mode: unknown;

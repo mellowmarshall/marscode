@@ -179,6 +179,41 @@ function check(
   }
 }
 
+/** Verify SCHEMA uses only keywords and formats implemented by this validator. */
+export function assertSupportedSchema(schema: SchemaNode): void {
+  const seen = new Set<SchemaNode>();
+  const walk = (rawNode: SchemaNode): void => {
+    const node = resolveRef(rawNode, schema);
+    if (seen.has(node)) return;
+    seen.add(node);
+    const unknown = Object.keys(node).filter((k) => !KEYWORDS.has(k));
+    if (unknown.length > 0) {
+      throw new SchemaKeywordError({
+        detail: `schema keyword not implemented by the validator: ${unknown.toSorted().join(", ")}`,
+      });
+    }
+    if (node.format !== undefined && node.format !== "regex") {
+      throw new SchemaKeywordError({
+        detail: `schema format not implemented: ${String(node.format)}`,
+      });
+    }
+    if (isRecord(node.$defs)) {
+      for (const def of Object.values(node.$defs)) {
+        if (isRecord(def)) walk(def);
+      }
+    }
+    if (isRecord(node.properties)) {
+      for (const prop of Object.values(node.properties)) {
+        if (isRecord(prop)) walk(prop);
+      }
+    }
+    if (isRecord(node.additionalProperties)) walk(node.additionalProperties);
+    if (isRecord(node.propertyNames)) walk(node.propertyNames);
+    if (isRecord(node.items)) walk(node.items);
+  };
+  walk(schema);
+}
+
 /** DATA against SCHEMA; every problem named by its path. */
 export function validateAgainstSchema(data: unknown, schema: SchemaNode): ReadonlyArray<string> {
   const errors: string[] = [];

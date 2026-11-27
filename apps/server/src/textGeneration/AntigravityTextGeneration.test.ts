@@ -82,6 +82,7 @@ const makeFixture = Effect.fn("makeAntigravityTextGenerationFixture")(function* 
   const enteredPrompt = yield* Deferred.make<void>();
   const state = {
     workspaces: [] as Array<string>,
+    readOnlyInvestigations: [] as Array<boolean>,
     closed: [] as Array<string>,
     prompts: [] as Array<Parameters<TextRuntime["prompt"]>[0]>,
     selectedModels: [] as Array<string>,
@@ -124,11 +125,15 @@ const makeFixture = Effect.fn("makeAntigravityTextGenerationFixture")(function* 
       );
     });
 
-  const makeRuntime: AntigravityTextGenerationOptions["makeRuntime"] = (cwd) =>
+  const makeRuntime: AntigravityTextGenerationOptions["makeRuntime"] = (cwd, runtimeOptions) =>
     Effect.gen(function* () {
       const events = yield* Queue.unbounded<AcpSessionRuntime.AcpSessionRuntimeEvent>();
+      const readOnly = runtimeOptions?.readOnlyInvestigation === true;
       state.workspaces.push(cwd);
-      expect(yield* fs.readDirectory(cwd).pipe(Effect.orDie)).toEqual([]);
+      state.readOnlyInvestigations.push(readOnly);
+      if (!readOnly) {
+        expect(yield* fs.readDirectory(cwd).pipe(Effect.orDie)).toEqual([]);
+      }
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
           state.nativeFilesAtClose.push(yield* fs.exists(`${sessionBase}.db`).pipe(Effect.orDie));
@@ -297,9 +302,12 @@ const makeFixture = Effect.fn("makeAntigravityTextGenerationFixture")(function* 
   });
   const titleInput = { cwd: projectDirectory, message: "Repair Google login", modelSelection };
   const assertCleaned = Effect.gen(function* () {
+    const realProject = yield* fs.realPath(projectDirectory);
     expect(state.closed).toEqual(state.workspaces);
     for (const workspace of state.workspaces) {
-      expect(yield* fs.exists(workspace)).toBe(false);
+      if (workspace !== realProject) {
+        expect(yield* fs.exists(workspace)).toBe(false);
+      }
     }
     expect(yield* fs.exists(`${sessionBase}.db`)).toBe(false);
     expect(yield* fs.exists(`${sessionBase}.db-wal`)).toBe(false);
@@ -700,6 +708,290 @@ it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
       );
       expect(yield* fixture.fs.readFileString(`${fixture.sessionBase}.meta`)).toBe(metadata);
     }),
+  );
+
+  it.effect("investigates the checkout read-only for playbook challenges and cleans up", () =>
+    Effect.gen(function* () {
+      const observedReads: Array<string> = [];
+      let escapedReadRejected = false;
+      let readPermissionOutcome: unknown;
+      const fixture = yield* makeFixture({
+        prompt: (context) =>
+          Effect.gen(function* () {
+            const readRes = yield* context.readFile(
+              { sessionId: SESSION_ID, path: "keep.txt" },
+              requestContext,
+            );
+            observedReads.push(readRes.content);
+            const escaped = yield* context
+              .readFile({ sessionId: SESSION_ID, path: "../profile/secret.txt" }, requestContext)
+              .pipe(Effect.exit);
+            escapedReadRejected = Exit.isFailure(escaped);
+            readPermissionOutcome = yield* context.permission(
+              {
+                sessionId: SESSION_ID,
+                toolCall: {
+                  toolCallId: "tc-read-1",
+                  kind: "read",
+                  title: "Read keep.txt",
+                  locations: [{ path: "keep.txt" }],
+                },
+                options: [
+                  { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+                  { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+                ],
+              },
+              requestContext,
+            );
+            yield* context.emit({
+              sessionUpdate: "tool_call",
+              toolCallId: "tc-search-1",
+              title: "Search files",
+              kind: "search",
+              status: "in_progress",
+            });
+            yield* context.emit({
+              sessionUpdate: "tool_call_update",
+              toolCallId: "tc-search-1",
+              status: "completed",
+            });
+            yield* context.emit({
+              sessionUpdate: "agent_message_chunk",
+              content: {
+                type: "text",
+                text: JSON.stringify({
+                  acceptable: true,
+                  summary: "Checked keep.txt and found no issues.",
+                  diagnosis: "clean",
+                  bypass_detected: false,
+                  playbook_friction: false,
+                  rejected_rises: [],
+                  rises_accepted: false,
+                  defects: [],
+                  analysis: "ok",
+                  recommendation: "Accept.",
+                }),
+              },
+            });
+            return { stopReason: "end_turn" };
+          }),
+      });
+
+      const ChallengeSchema = Schema.Struct({
+        acceptable: Schema.Boolean,
+        summary: Schema.String,
+        diagnosis: Schema.String,
+        bypass_detected: Schema.Boolean,
+        playbook_friction: Schema.Boolean,
+        rejected_rises: Schema.Array(Schema.Unknown),
+        rises_accepted: Schema.Boolean,
+        defects: Schema.Array(Schema.Unknown),
+        analysis: Schema.String,
+        recommendation: Schema.String,
+      });
+
+      const result = yield* fixture.textGeneration.generatePlaybookChallenge({
+        cwd: fixture.projectDirectory,
+        prompt: "Review the diff.",
+        outputSchema: ChallengeSchema,
+        modelSelection,
+      });
+      expect(result.acceptable).toBe(true);
+      expect(observedReads).toEqual(["untouched"]);
+      expect(escapedReadRejected).toBe(true);
+      expect(readPermissionOutcome).toEqual({
+        outcome: { outcome: "selected", optionId: "allow-once" },
+      });
+      expect(fixture.state.readOnlyInvestigations).toEqual([true]);
+      expect(fixture.state.workspaces).toEqual([
+        yield* fixture.fs.realPath(fixture.projectDirectory),
+      ]);
+      yield* fixture.assertCleaned;
+    }),
+  );
+
+  it.effect("refuses mutating tool permissions and terminal calls during investigation", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture({
+        prompt: (context) =>
+          Effect.gen(function* () {
+            const denied = yield* context.permission(
+              {
+                sessionId: SESSION_ID,
+                toolCall: {
+                  toolCallId: "tc-edit-1",
+                  kind: "edit",
+                  title: "Edit keep.txt",
+                  locations: [{ path: "keep.txt" }],
+                },
+                options: [{ optionId: "allow-once", name: "Allow once", kind: "allow_once" }],
+              },
+              requestContext,
+            );
+            expect(denied).toEqual({ outcome: { outcome: "cancelled" } });
+            return { stopReason: "end_turn" };
+          }),
+      });
+
+      const error = yield* fixture.textGeneration
+        .generatePlaybookChallenge({
+          cwd: fixture.projectDirectory,
+          prompt: "Review the diff.",
+          outputSchema: Schema.Struct({ acceptable: Schema.Boolean }),
+          modelSelection,
+        })
+        .pipe(Effect.flip);
+      expect(error._tag).toBe("TextGenerationError");
+      expect(error.detail).toContain("tool permission");
+      yield* fixture.assertCleaned;
+    }),
+  );
+
+  it.effect(
+    "denies symlink escapes, empty locations, allow_always-only permissions, and outside-cwd tool updates during investigation",
+    () =>
+      Effect.gen(function* () {
+        const challengeSchema = Schema.Struct({ acceptable: Schema.Boolean });
+
+        // 1. Empty locations must be denied even for kind="read"
+        const emptyLocFixture = yield* makeFixture({
+          prompt: (context) =>
+            Effect.gen(function* () {
+              const denied = yield* context.permission(
+                {
+                  sessionId: SESSION_ID,
+                  toolCall: {
+                    toolCallId: "tc-empty-loc",
+                    kind: "read",
+                    title: "Read without locations",
+                    locations: [],
+                  },
+                  options: [{ optionId: "allow-once", name: "Allow once", kind: "allow_once" }],
+                },
+                requestContext,
+              );
+              expect(denied).toEqual({ outcome: { outcome: "cancelled" } });
+              return { stopReason: "end_turn" };
+            }),
+        });
+        const emptyLocErr = yield* emptyLocFixture.textGeneration
+          .generatePlaybookChallenge({
+            cwd: emptyLocFixture.projectDirectory,
+            prompt: "Review.",
+            outputSchema: challengeSchema,
+            modelSelection,
+          })
+          .pipe(Effect.flip);
+        expect(emptyLocErr._tag).toBe("TextGenerationError");
+        expect(emptyLocErr.detail).toContain("tool permission");
+        yield* emptyLocFixture.assertCleaned;
+
+        // 2. allow_always-only option must be denied (never fall back from allow_once)
+        const alwaysOnlyFixture = yield* makeFixture({
+          prompt: (context) =>
+            Effect.gen(function* () {
+              const denied = yield* context.permission(
+                {
+                  sessionId: SESSION_ID,
+                  toolCall: {
+                    toolCallId: "tc-always-only",
+                    kind: "read",
+                    title: "Read keep.txt",
+                    locations: [{ path: "keep.txt" }],
+                  },
+                  options: [
+                    { optionId: "allow-always", name: "Allow always", kind: "allow_always" },
+                  ],
+                },
+                requestContext,
+              );
+              expect(denied).toEqual({ outcome: { outcome: "cancelled" } });
+              return { stopReason: "end_turn" };
+            }),
+        });
+        const alwaysOnlyErr = yield* alwaysOnlyFixture.textGeneration
+          .generatePlaybookChallenge({
+            cwd: alwaysOnlyFixture.projectDirectory,
+            prompt: "Review.",
+            outputSchema: challengeSchema,
+            modelSelection,
+          })
+          .pipe(Effect.flip);
+        expect(alwaysOnlyErr._tag).toBe("TextGenerationError");
+        expect(alwaysOnlyErr.detail).toContain("tool permission");
+        yield* alwaysOnlyFixture.assertCleaned;
+
+        // 3. Symlink inside cwd pointing outside cwd must be denied
+        if (symlinksSupported) {
+          const symlinkFixture = yield* makeFixture({
+            prompt: (context) =>
+              Effect.gen(function* () {
+                const denied = yield* context.permission(
+                  {
+                    sessionId: SESSION_ID,
+                    toolCall: {
+                      toolCallId: "tc-symlink",
+                      kind: "read",
+                      title: "Read symlinked file",
+                      locations: [{ path: "escape-link.txt" }],
+                    },
+                    options: [{ optionId: "allow-once", name: "Allow once", kind: "allow_once" }],
+                  },
+                  requestContext,
+                );
+                expect(denied).toEqual({ outcome: { outcome: "cancelled" } });
+                return { stopReason: "end_turn" };
+              }),
+          });
+          const outsideFile = symlinkFixture.path.join(
+            symlinkFixture.profileDirectory,
+            "outside-secret.txt",
+          );
+          yield* symlinkFixture.fs.writeFileString(outsideFile, "secret");
+          yield* symlinkFixture.fs.symlink(
+            outsideFile,
+            symlinkFixture.path.join(symlinkFixture.projectDirectory, "escape-link.txt"),
+          );
+          const symlinkErr = yield* symlinkFixture.textGeneration
+            .generatePlaybookChallenge({
+              cwd: symlinkFixture.projectDirectory,
+              prompt: "Review.",
+              outputSchema: challengeSchema,
+              modelSelection,
+            })
+            .pipe(Effect.flip);
+          expect(symlinkErr._tag).toBe("TextGenerationError");
+          expect(symlinkErr.detail).toContain("tool permission");
+          yield* symlinkFixture.assertCleaned;
+        }
+
+        // 4. handleSessionUpdate tool_call with outside-cwd location must reject
+        const updateEscapeFixture = yield* makeFixture({
+          prompt: (context) =>
+            Effect.gen(function* () {
+              yield* context.emit({
+                sessionUpdate: "tool_call",
+                toolCallId: "tc-read-outside",
+                title: "Read outside",
+                kind: "read",
+                status: "in_progress",
+                locations: [{ path: "../profile/secret.txt" }],
+              });
+              return { stopReason: "end_turn" };
+            }),
+        });
+        const updateEscapeErr = yield* updateEscapeFixture.textGeneration
+          .generatePlaybookChallenge({
+            cwd: updateEscapeFixture.projectDirectory,
+            prompt: "Review.",
+            outputSchema: challengeSchema,
+            modelSelection,
+          })
+          .pipe(Effect.flip);
+        expect(updateEscapeErr._tag).toBe("TextGenerationError");
+        expect(updateEscapeErr.detail).toContain("tool work");
+        yield* updateEscapeFixture.assertCleaned;
+      }),
   );
 });
 

@@ -22,19 +22,27 @@ import {
   parseDeclarationText,
   type DeclarationData,
 } from "./declaration.ts";
-import { gateBase, mergeBase, readWorktreeFile, showFile, type GateBase } from "./git.ts";
-import {
-  contractDiff,
-  INTENT_CONTRACTS,
-  judgeContractIntent,
-  type ContractChange,
-  type IntentContract,
-} from "./intent.ts";
+import { actionsGate } from "./gates/actionsGate.ts";
+import { ciGate } from "./gates/ciGate.ts";
+import { designGate } from "./gates/designGate.ts";
+import { dictionaryGate } from "./gates/dictionaryGate.ts";
+import { docsGate } from "./gates/docsGate.ts";
+import { fleetGate } from "./gates/fleetGate.ts";
+import { generationsGate } from "./gates/generationsGate.ts";
+import { migrationsGate } from "./gates/migrationsGate.ts";
+import { optimizationGate } from "./gates/optimizationGate.ts";
+import { pyDepsGate } from "./gates/pyDepsGate.ts";
+import { toolsGate } from "./gates/toolsGate.ts";
+import { gateBase, listedFiles, readWorktreeFile, showFile, type GateBase } from "./git.ts";
+import { intentGate } from "./intent.ts";
 import { loosenedDeclaration, reportedCommandChanges } from "./ratchet.ts";
 import { exitCodeFor, failed, passed, unproven, type CheckResult } from "./result.ts";
 import { sizeGate } from "./sizeGate.ts";
-import { runStep, tailLines } from "./steps.ts";
 import { isRecord } from "./strictJson.ts";
+
+/** Non-schema auxiliary deterministic gates runnable via `playbook check <name>`. */
+const AUXILIARY_GATES = ["ci", "docs", "py-deps"] as const;
+export const ALL_GATE_NAMES: ReadonlyArray<string> = [...CONTRACT_NAMES, ...AUXILIARY_GATES];
 
 /** Asks the owner (the T3 guard broker) to let REASON through; true when granted. */
 export type OverrideAsk = (reason: string) => Promise<boolean>;
@@ -146,75 +154,13 @@ async function baselineResults(
   return { results, entries: current.entries };
 }
 
-function intentGate(
-  root: string,
-  settings: Readonly<Record<string, unknown>>,
-  baseSha: string | null,
-  body: string | null,
-): CheckResult {
-  const files = isRecord(settings.contracts) ? settings.contracts : {};
-  if (baseSha === null) return unproven("intent", "no base: contract changes cannot be compared");
-  const start = mergeBase(root, "HEAD", baseSha) ?? baseSha;
-  const changes: ContractChange[] = [];
-  const fresh = new Set<string>();
-  for (const [contract, path] of Object.entries(files)) {
-    if (typeof path !== "string" || !INTENT_CONTRACTS.includes(contract as IntentContract))
-      continue;
-    const before = showFile(root, start, path);
-    if (before === null) fresh.add(contract);
-    const after = readWorktreeFile(root, path);
-    changes.push(
-      ...contractDiff(
-        contract as IntentContract,
-        parseJsonOrEmpty(before),
-        parseJsonOrEmpty(after),
-      ),
-    );
-  }
-  if (body === null && changes.length > 0) {
-    return unproven("intent", `${changes.length} contract change(s) and no PR body`, {
-      errors: changes.map((c) => `${c.action} ${c.contract} ${c.item}`),
-      fix: "pass --pr-body <body.md> locally, or ship through the queue",
-    });
-  }
-  const { issues, audited } = judgeContractIntent(changes, body ?? "", fresh);
-  if (issues.length > 0) {
-    return failed("intent", `${issues.length} contract intent problem(s)`, {
-      errors: issues,
-      fix: "## Contract Intent / - ADD|REMOVE|MODIFY <contract> <item> (why)",
-    });
-  }
-  return passed("intent", `${audited.length} contract change(s) declared exactly`);
-}
-
-async function toolsGate(
-  root: string,
-  settings: Readonly<Record<string, unknown>>,
-  base: string | null,
-  signal: AbortSignal | undefined,
-): Promise<ReadonlyArray<CheckResult>> {
-  const steps = Array.isArray(settings.steps) ? settings.steps.filter(isRecord) : [];
-  if (steps.length === 0) return [passed("tools", "no declared steps")];
-  const results: CheckResult[] = [];
-  for (const step of steps) {
-    const name = `tools ${String(step.name)}`;
-    const run = await runStep(
-      root,
-      String(step.run),
-      { PLAYBOOK_BASE: base ?? "" },
-      undefined,
-      signal,
-    );
-    if (run.code === null) {
-      results.push(unproven(name, `\`${String(step.run)}\` did not run: ${run.why}`));
-    } else if (run.code === 0) {
-      results.push(passed(name, `\`${String(step.run)}\` exited 0`));
-    } else {
-      const errors = tailLines(run, 5);
-      results.push(failed(name, `\`${String(step.run)}\` exited ${run.code}`, { errors }));
-    }
-  }
-  return results;
+function hasPythonManifests(root: string): boolean {
+  const files = listedFiles(root) ?? [];
+  return files.some((f) =>
+    /(?:^|\/)(?:pyproject\.toml|Pipfile|uv\.lock|poetry\.lock|Pipfile\.lock|requirements(?:[-_a-z0-9]*)?\.txt)$/i.test(
+      f,
+    ),
+  );
 }
 
 /** Run the declared contracts' gates on the real worktree. */
@@ -266,34 +212,145 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
       results.push(passed(name, `bypassed by owner (${why})`));
       continue;
     }
-    if (optedOut(body0)) {
+    if (optedOut(body0) && name !== "optimization") {
       results.push(passed(name, `not applicable: ${String((body0 as { none: unknown }).none)}`));
       continue;
     }
     const settings = contractSettings(head, name);
     const bl = await baselineResults(root, name, head, baseData, base.sha, today, ask);
     results.push(...bl.results);
-    if (name === "size") {
-      results.push(
-        await sizeGate({
-          root,
-          settings,
-          entries: bl.entries,
-          base: base.sha,
-          signal: options.signal,
-        }),
-      );
-    } else if (name === "intent") {
-      results.push(intentGate(root, settings, base.sha, body));
-    } else if (name === "tools") {
-      results.push(...(await toolsGate(root, settings, base.sha, options.signal)));
-    } else {
-      results.push(
-        unproven(name, "this contract's gate is not in the TypeScript engine yet", {
-          fix: "track the port on the playbook engine issue",
-        }),
-      );
+    switch (name) {
+      case "size":
+        results.push(
+          await sizeGate({
+            root,
+            settings,
+            entries: bl.entries,
+            base: base.sha,
+            signal: options.signal,
+          }),
+        );
+        break;
+      case "intent":
+        results.push(...intentGate(root, settings, base.sha, body, options.env));
+        break;
+      case "tools":
+        results.push(
+          ...(await toolsGate({ root, settings, base: base.sha, signal: options.signal })),
+        );
+        break;
+      case "fleet":
+        results.push(
+          ...(await fleetGate({
+            root,
+            settings,
+            entries: bl.entries,
+            base: base.sha,
+            ask,
+            signal: options.signal,
+          })),
+        );
+        break;
+      case "generations":
+        results.push(
+          ...(await generationsGate({
+            root,
+            settings,
+            declaration: head,
+            base: base.sha,
+            ask,
+            signal: options.signal,
+          })),
+        );
+        break;
+      case "dictionary":
+        results.push(
+          ...(await dictionaryGate({
+            root,
+            settings,
+            declaration: head,
+            entries: bl.entries,
+            base: base.sha,
+            ask,
+          })),
+        );
+        break;
+      case "migrations":
+        results.push(
+          ...(await migrationsGate({
+            root,
+            settings,
+            declaration: head,
+            base: base.sha,
+            ask,
+            signal: options.signal,
+          })),
+        );
+        break;
+      case "design":
+        results.push(
+          ...(await designGate({
+            root,
+            settings,
+            declaration: head,
+            entries: bl.entries,
+            base: base.sha,
+            signal: options.signal,
+          })),
+        );
+        break;
+      case "actions":
+        results.push(
+          ...(await actionsGate({
+            root,
+            settings,
+            declaration: head,
+            entries: bl.entries,
+            bypasses,
+            base: base.sha,
+            baseData,
+            ask,
+            signal: options.signal,
+          })),
+        );
+        break;
+      case "optimization":
+        results.push(
+          ...(await optimizationGate({
+            root,
+            settings,
+            declaration: head,
+            entries: bl.entries,
+            bypasses,
+            base: base.sha,
+            baseData,
+            ask,
+          })),
+        );
+        break;
     }
   }
+
+  // Auxiliary deterministic gates: run when explicitly selected, or automatically when applicable.
+  for (const aux of AUXILIARY_GATES) {
+    const explicit = wanted !== null && wanted.includes(aux);
+    const auto =
+      wanted === null &&
+      ((aux === "ci" && isRecord(head.ci)) || (aux === "py-deps" && hasPythonManifests(root)));
+    if (!explicit && !auto) continue;
+    if (options.signal?.aborted) {
+      results.push(unproven(aux, "the run was cancelled before this gate started"));
+      continue;
+    }
+    const why = bypassReason(bypasses, aux);
+    if (why) {
+      results.push(passed(aux, `bypassed by owner (${why})`));
+      continue;
+    }
+    if (aux === "ci") results.push(ciGate({ root }));
+    else if (aux === "docs") results.push(docsGate({ root }));
+    else results.push(pyDepsGate({ root, declaration: head }));
+  }
+
   return { repo, base: base.sha, results, reported, exitCode: exitCodeFor(results) };
 }

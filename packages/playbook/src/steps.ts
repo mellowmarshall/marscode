@@ -21,6 +21,7 @@ export function runStep(
   extraEnv: Readonly<Record<string, string>> = {},
   timeoutMs = STEP_TIMEOUT_MS,
   signal?: AbortSignal,
+  stdinText?: string,
 ): Promise<StepRun> {
   return new Promise((resolve) => {
     if (signal?.aborted) {
@@ -30,8 +31,12 @@ export function runStep(
     const child = NodeChildProcess.spawn("bash", ["-c", command], {
       cwd: root,
       env: { ...withoutGitOverrides(), ...extraEnv },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [stdinText !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
     });
+    if (stdinText !== undefined && child.stdin) {
+      child.stdin.on("error", () => {});
+      child.stdin.end(stdinText);
+    }
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     let bytes = 0;
@@ -45,8 +50,8 @@ export function runStep(
       }
       sink.push(chunk);
     };
-    child.stdout.on("data", collect(out));
-    child.stderr.on("data", collect(err));
+    child.stdout?.on("data", collect(out));
+    child.stderr?.on("data", collect(err));
     const timer = setTimeout(() => {
       why = `timed out after ${Math.round(timeoutMs / 1000)}s`;
       child.kill("SIGKILL");
