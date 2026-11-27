@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
 import { ghForge } from "./ghForge.ts";
+import { runDepsSubcommand, runHostsSubcommand, runPinsSubcommand } from "./cliSubcommands.ts";
 import { gitleaksScanner, guardProtocolGuard } from "./houseGate.ts";
 import { isJobId, jobLogPath, listJobIds, readJob, readLog } from "./jobStore.ts";
 import { lastMarker, SHIP_QUEUE_STAGE_AFTER, SHIP_QUEUE_STAGE_MARKERS } from "./markers.ts";
@@ -156,7 +157,7 @@ export async function runShipQueueCli(
   const [sub, ...rest] = argv;
   const startWorker = options.startWorker ?? ((r: string) => startDetachedWorker(r, io.env));
   const usage =
-    "ship-queue <submit WORKTREE BRANCH TITLE BODY.md [--no-start] | watch JOB | status [--json] [JOB...] | cancel JOB | work [--once]>\n";
+    "ship-queue <submit WORKTREE BRANCH TITLE BODY.md [--no-start] | watch JOB | status [--json] [JOB...] | cancel JOB | work [--once] | hosts ... | deps ... | pins ...>\n";
 
   if (!sub || sub === "--help" || sub === "-h") {
     io.stdout(usage);
@@ -229,6 +230,9 @@ export async function runShipQueueCli(
   }
   if (sub === "status") return runStatus(deps, io, rest);
   if (sub === "work") return runWork(deps, io, rest.includes("--once"));
+  if (sub === "hosts") return runHostsSubcommand(root, rest, io);
+  if (sub === "deps") return runDepsSubcommand(root, rest, io);
+  if (sub === "pins") return runPinsSubcommand(rest, io);
   io.stderr(`ship-queue: unknown command '${sub}'\n${usage}`);
   return 64;
 }

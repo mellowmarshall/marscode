@@ -3,7 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import * as CliRunners from "../CliRunners.ts";
+import { getShipQueueStatus } from "../ShipQueueEventStream.ts";
 import { readShipJobLogInfo } from "./shipQueueLogParser.ts";
 import {
   sanitizeJobText,
@@ -226,7 +226,7 @@ export class ShipQueueBridge {
   }
 
   async refresh(allowWhenStopped = false): Promise<void> {
-    const res = await CliRunners.getShipQueueStatus();
+    const res = await getShipQueueStatus();
     if (!allowWhenStopped && !this.running) return;
     if (!res.ok || !res.data || typeof res.data !== "object") {
       const errMsg = res.error || "ship-queue unavailable";

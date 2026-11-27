@@ -1046,7 +1046,6 @@ describe("DevtoolsHttp routes", () => {
           manifestPath: NodePath.join(dir, "missing-ci-hosts.json"),
           githubAuditPath: NodePath.join(dir, "missing-audit.json"),
           enableBackgroundPolling: false,
-          writeNodesFile: false,
         });
         yield* Effect.addFinalizer(() => Effect.sync(() => nativeFleet.close()));
 

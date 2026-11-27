@@ -1,15 +1,19 @@
-// @effect-diagnostics nodeBuiltinImport:off - Fleet host resolution from ci-hosts.json, SSH targets, wrapper scripts, and GPU hints.
+// @effect-diagnostics nodeBuiltinImport:off - Fleet host resolution from canonical `@t3tools/ship-queue/ciHosts`, SSH targets, wrapper scripts, and GPU hints.
 import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
+
+import {
+  extractCiHostEntries,
+  resolveCiHostsPath,
+  type CiHostEntry,
+} from "@t3tools/ship-queue/ciHosts";
 
 export interface FleetHostDescriptor {
-  /** Canonical machine name matching DevDeck's `nodes` map key (e.g. `host-x`, `dev-host-x`). */
+  /** Canonical machine name matching fleet telemetry keys (e.g. `ci-host-1`). */
   readonly host: string;
   readonly isLocal: boolean;
-  /** Lowercase exact host/ssh aliases (e.g. `host-x`, `host-x-wsl`, `dev-host-x`, `host-x`). */
+  /** Lowercase exact host/ssh aliases. */
   readonly exactTokens: ReadonlySet<string>;
-  /** Lowercase short suffix tokens (e.g. `wsl`, `7a34`) matched only in explicit remote-target slots. */
+  /** Lowercase short suffix tokens matched only in explicit remote-target slots. */
   readonly shortTokens: ReadonlySet<string>;
   /** Lowercase GPU/hardware hints parsed from `ci-hosts.json` notes (e.g. `rtx 3080`, `3080`). */
   readonly noteHints: ReadonlyArray<string>;
@@ -22,12 +26,6 @@ interface CachedFleetHosts {
 }
 
 let cachedFleetHosts: CachedFleetHosts | null = null;
-
-function defaultCiHostsPath(): string {
-  const env = (process.env.DEVTOOLS_CI_HOSTS ?? "").trim();
-  if (env) return env;
-  return NodePath.join(NodeOS.homedir(), "Dev", "devtools", "ship-queue", "ci-hosts.json");
-}
 
 function addSuffixToken(target: Set<string>, raw: string): void {
   const parts = raw
@@ -57,14 +55,10 @@ function extractNoteHints(note: string | undefined): ReadonlyArray<string> {
   return hints;
 }
 
-export function parseFleetHostsConfig(
-  raw: unknown,
+function buildDescriptorsFromEntries(
+  entries: ReadonlyArray<CiHostEntry>,
   localHostname: string,
 ): ReadonlyArray<FleetHostDescriptor> {
-  const hostsArr =
-    raw && typeof raw === "object" && Array.isArray((raw as { hosts?: unknown }).hosts)
-      ? (raw as { hosts: ReadonlyArray<Record<string, unknown>> }).hosts
-      : [];
   const localLower = localHostname.trim().toLowerCase();
   const byCanonical = new Map<
     string,
@@ -77,12 +71,12 @@ export function parseFleetHostsConfig(
     }
   >();
 
-  for (const entry of hostsArr) {
-    const name = typeof entry.name === "string" ? entry.name.trim() : "";
+  for (const entry of entries) {
+    const name = entry.name;
     if (!name) continue;
-    const on = typeof entry.on === "string" ? entry.on.trim() : "";
-    const ssh = typeof entry.ssh === "string" ? entry.ssh.trim() : "";
-    const note = typeof entry.note === "string" ? entry.note : undefined;
+    const on = entry.on ?? "";
+    const ssh = entry.ssh ?? "";
+    const note = entry.note;
     const canonical = on || name;
     let bucket = byCanonical.get(canonical);
     if (!bucket) {
@@ -100,8 +94,11 @@ export function parseFleetHostsConfig(
       const lower = candidate.toLowerCase();
       if (!lower) continue;
       bucket.exactTokens.add(lower);
-      const stripped = lower.replace(/^dev-/, "");
-      if (stripped && stripped !== lower) bucket.exactTokens.add(stripped);
+      const firstDash = lower.indexOf("-");
+      if (firstDash > 0 && lower.length - firstDash > 3) {
+        const suffix = lower.slice(firstDash + 1);
+        if (suffix.includes("-")) bucket.exactTokens.add(suffix);
+      }
       addSuffixToken(bucket.shortTokens, lower);
     }
     for (const hint of extractNoteHints(note)) {
@@ -118,12 +115,20 @@ export function parseFleetHostsConfig(
   }));
 }
 
+export function parseFleetHostsConfig(
+  raw: unknown,
+  localHostname: string,
+): ReadonlyArray<FleetHostDescriptor> {
+  return buildDescriptorsFromEntries(extractCiHostEntries(raw), localHostname);
+}
+
 export function loadFleetHosts(
   localHostname: string,
   ciHostsPathOverride?: string | null,
 ): ReadonlyArray<FleetHostDescriptor> {
   if (ciHostsPathOverride === null) return [];
-  const filePath = ciHostsPathOverride || defaultCiHostsPath();
+  const filePath = resolveCiHostsPath({ overridePath: ciHostsPathOverride ?? undefined });
+  if (!filePath) return [];
   let stamp = "";
   try {
     const st = NodeFS.statSync(filePath);
@@ -196,7 +201,7 @@ function extractExplicitRemoteTargets(command: string): ReadonlyArray<string> {
 }
 
 /**
- * Infers which fleet host executes a command (e.g. `host-x`, `dev-host-x`, `host-x`)
+ * Infers which fleet host executes a command (e.g. `ci-host-1`, `ci-host-2`, `mac-host`)
  * from SSH destinations, remote wrapper targets, explicit host aliases, or hardware hints in
  * `ci-hosts.json`. Falls back to `localHostname`.
  */

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# sandbox-kit (private-repo): a private sandbox for a repo from one declaration file.
+#
+#   sandbox-kit check            check the declaration against the fleet shape; print what it resolved
+#   sandbox-kit deploy           bring the sandbox up to this checkout's commit (a clean checkout only)
+#   sandbox-kit smoke [COMMIT]   run the repo's smoke against the sandbox's real URL
+#   sandbox-kit edge             the Cloudflare door and tunnel (sandbox-edge.mjs; its own settings)
+#
+# Run it inside the repo. It works from the repo's root. The declaration is
+# deploy/sandbox/sandbox.json, or the path in SANDBOX_KIT_DECLARATION.
+set -euo pipefail
+
+KIT="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+
+usage() { sed -n '3,10s/^# \{0,1\}//p' "${BASH_SOURCE[0]}" >&2; exit 2; }
+
+[ "$#" -ge 1 ] || usage
+command="$1"; shift
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "sandbox-kit: run it inside a git checkout" >&2; exit 2; }
+cd "$root"
+
+# The smoke: a test of the repo's own against the deployed sandbox. The machines' Access token
+# reaches it only as its environment, from Doppler.
+smoke() {
+  local commit="${1:-}" assignments
+  [ "$#" -le 1 ] || usage
+  [ -z "$commit" ] || [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo "sandbox-kit: '$commit' is not a full commit id" >&2; exit 2; }
+  assignments="$(python3 "$KIT/sandbox_declaration.py" shell "$(git rev-parse HEAD)")"
+  eval "$assignments"
+  export SANDBOX_EXPECTED_COMMIT="$commit" SANDBOX_PUBLIC_URL="$sk_public_url"
+  exec doppler run --project "$sk_doppler_project" --config "$sk_doppler_config" \
+    --only-secrets "$sk_access_id" --only-secrets "$sk_access_secret" -- bash -c "$sk_smoke"
+}
+
+case "$command" in
+  check) [ "$#" -eq 0 ] || usage; exec python3 "$KIT/sandbox_declaration.py" check ;;
+  deploy) [ "$#" -eq 0 ] || usage; exec bash "$KIT/sandbox-deploy.sh" ;;
+  smoke) smoke "$@" ;;
+  edge)
+    [ "$#" -eq 0 ] || usage
+    plan="$(python3 "$KIT/sandbox_declaration.py" edge)"
+    exec node "$KIT/sandbox-edge.mjs" <<<"$plan"
+    ;;
+  *) usage ;;
+esac

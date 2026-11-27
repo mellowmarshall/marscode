@@ -1,5 +1,4 @@
 // @effect-diagnostics nodeBuiltinImport:off - Real unit and HTTP/SSE integration tests for native T3 fleet telemetry.
-import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
@@ -12,6 +11,8 @@ import {
   type AuthEnvironmentScope,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { validateCiHostsManifest } from "@t3tools/ship-queue/ciHosts";
+import { readInMemoryNodeLoads } from "@t3tools/ship-queue/ciRouter";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -367,14 +368,13 @@ describe("RemoteNodeProber peer-first and SSH fallback", () => {
   });
 });
 
-describe("NativeFleetService + DevtoolsHttp integration + sq_route.py parity", () => {
-  it("serves capabilities, /fleet/self, /devdeck/snapshot, SSE, and writes ship-queue-compatible fleet-nodes.json", async () => {
+describe("NativeFleetService + DevtoolsHttp integration + in-memory routing parity", () => {
+  it("serves capabilities, /fleet/self, /devdeck/snapshot, SSE, and feeds ship-queue routing in memory without writing fleet-nodes.json", async () => {
     const stateDir = mkTempDir("t3-fleet-state-");
     const fleet = new NativeFleetService({
-      hostname: "dev-host-x",
+      hostname: "ci-host-primary",
       stateDir,
       enableBackgroundPolling: false,
-      writeNodesFile: true,
       readHostResources: async () => ({
         sampledAt: FIXED_EPOCH_MS,
         cpuUtilization: 0.2,
@@ -386,29 +386,35 @@ describe("NativeFleetService + DevtoolsHttp integration + sq_route.py parity", (
 
     try {
       const snap = await fleet.getSnapshot();
-      expect((snap.host as { name: string; cpus: number }).name).toBe("dev-host-x");
+      expect((snap.host as { name: string; cpus: number }).name).toBe("ci-host-primary");
       expect((snap.host as { cpus: number }).cpus).toBe(16);
 
+      // Legacy fleet-nodes.json file handoff is retired.
       const nodesPath = NodePath.join(stateDir, "fleet-nodes.json");
-      expect(NodeFS.existsSync(nodesPath)).toBe(true);
+      expect(NodeFS.existsSync(nodesPath)).toBe(false);
 
-      // Verify real ship-queue/sq_route.py parses our generated fleet-nodes.json!
-      const sqRouteCandidates = [
-        "/home/devprivate-repo/ship-queue/sq_route.py",
-        "/dataprivate-repo/main/ship-queue/sq_route.py",
-      ];
-      const sqRoute = sqRouteCandidates.find((p) => NodeFS.existsSync(p));
-      if (sqRoute) {
-        const out = NodeChildProcess.execFileSync(
-          "python3",
-          [sqRoute, "node-loads", nodesPath, "dev-host-x"],
-          { encoding: "utf8", timeout: 5_000 },
-        ).trim();
-        expect(out).toMatch(/^dev-host-x \d+ 16 \d+$/);
-      }
+      // Verify in-memory telemetry provider feeds `@t3tools/ship-queue/ciRouter` directly.
+      const validated = validateCiHostsManifest({
+        schema: 1,
+        hosts: [{ name: "ci-host-primary", ssh: null, role: "ci", data_root: "/data/ci" }],
+        toolchain: {
+          git: { version: ">=2.40", probe: "git --version", install: null, base: true },
+        },
+      });
+      expect(validated.ok).toBe(true);
+      const loads = readInMemoryNodeLoads({
+        manifest: validated.manifest!,
+        telemetry: fleet.getTelemetryProvider(),
+        hostNames: ["ci-host-primary"],
+        nowEpochSec: Math.floor(Date.parse((snap.host as { ts: string }).ts) / 1000),
+      });
+      const reading = loads.get("ci-host-primary");
+      expect(reading).toBeDefined();
+      expect(reading?.cores).toBe(16);
+      expect(reading?.onBattery).toBe(false);
 
       // Verify native route dispatcher
-      const kickRes = await handleNativeFleetRequest(fleet, "POST", "/api/nodes/host-x/kick");
+      const kickRes = await handleNativeFleetRequest(fleet, "POST", "/api/nodes/ci-worker-1/kick");
       expect(kickRes.status).toBe(200);
 
       // Verify DevtoolsHttp serves nativeFleet without DevDeck running
@@ -422,7 +428,7 @@ describe("NativeFleetService + DevtoolsHttp integration + sq_route.py parity", (
       const testLayer = DevtoolsHttp.makeLayer({ startBroker: false, nativeFleet: fleet }).pipe(
         Layer.provide(Layer.succeed(JobRegistry.JobRegistry, reg)),
         Layer.provideMerge(Layer.succeed(HostProcess.Platform, "linux")),
-        Layer.provideMerge(Layer.succeed(HostProcess.Hostname, "dev-host-x")),
+        Layer.provideMerge(Layer.succeed(HostProcess.Hostname, "ci-host-primary")),
         Layer.provideMerge(Path.layer),
         Layer.provideMerge(
           Layer.succeed(EnvironmentAuth.EnvironmentAuth, {
@@ -480,7 +486,7 @@ describe("NativeFleetService + DevtoolsHttp integration + sq_route.py parity", (
           servers: Array<Record<string, unknown>>;
           sessions?: Array<Record<string, unknown>>;
         };
-        expect(selfBody.host.name).toBe("dev-host-x");
+        expect(selfBody.host.name).toBe("ci-host-primary");
         expect(Array.isArray(selfBody.sessions)).toBe(true);
         for (const s of selfBody.sessions ?? []) {
           expect(s.pid).toBeUndefined();
@@ -501,8 +507,8 @@ describe("NativeFleetService + DevtoolsHttp integration + sq_route.py parity", (
           host: { name: string };
           nodes: Record<string, unknown>;
         };
-        expect(snapBody.host.name).toBe("dev-host-x");
-        expect(snapBody.nodes["dev-host-x"]).toBeDefined();
+        expect(snapBody.host.name).toBe("ci-host-primary");
+        expect(snapBody.nodes["ci-host-primary"]).toBeDefined();
       } finally {
         await dispose();
       }

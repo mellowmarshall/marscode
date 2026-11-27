@@ -1,8 +1,9 @@
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off - Fleet-wide DevTools host-config.json discovery, read, and SSH sync across workstations, stock T3 hosts, and bare VPSes.
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off - Fleet-wide DevTools host-config.json discovery, read, and SSH sync backed by `@t3tools/ship-queue/ciHosts`.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
+
+import { isValidSshAlias, readCiHostEntries } from "@t3tools/ship-queue/ciHosts";
 
 import {
   defaultHostConfigPath,
@@ -13,10 +14,8 @@ import {
   type DevtoolsHostConfig,
 } from "./DevtoolsConfig.ts";
 
-const SAFE_SSH_ALIAS_RE = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$/;
 const DEFAULT_SSH_TIMEOUT_MS = 10_000;
 const REMOTE_CONFIG_REL_PATH = ".local/lib/ship-queue/host-config.json";
-
 const REMOTE_READ_SH =
   'p="$HOME/.local/lib/ship-queue/host-config.json"; if [ -f "$p" ]; then cat "$p"; else printf "{}"; fi';
 const REMOTE_WRITE_SH =
@@ -87,17 +86,6 @@ export interface FleetConfigOptions {
   readonly signal?: AbortSignal | undefined;
 }
 
-export function isValidSshAlias(alias: string): boolean {
-  return SAFE_SSH_ALIAS_RE.test(alias);
-}
-
-function defaultCiHostsPath(): string {
-  const libDir =
-    process.env.SHIP_QUEUE_LIB_DIR?.trim() ||
-    NodePath.join(NodeOS.homedir(), ".local", "lib", "ship-queue");
-  return NodePath.join(libDir, "ci-hosts.json");
-}
-
 function defaultSshRunner(
   sshAlias: string,
   remoteScript: string,
@@ -132,9 +120,7 @@ function defaultSshRunner(
         sshAlias,
         remoteScript,
       ],
-      {
-        stdio: ["pipe", "pipe", "pipe"],
-      },
+      { stdio: ["pipe", "pipe", "pipe"] },
     );
 
     let stdout = "";
@@ -148,19 +134,13 @@ function defaultSshRunner(
       options.signal?.removeEventListener("abort", onAbort);
       resolve(result);
     };
-
     const onAbort = () => {
       child.kill("SIGTERM");
       finish({ exitCode: 124, stdout, stderr: stderr || "SSH operation aborted" });
     };
-
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
-      finish({
-        exitCode: 124,
-        stdout,
-        stderr: stderr || `SSH timed out after ${timeoutMs}ms`,
-      });
+      finish({ exitCode: 124, stdout, stderr: stderr || `SSH timed out after ${timeoutMs}ms` });
     }, timeoutMs);
 
     if (options.signal) {
@@ -179,23 +159,15 @@ function defaultSshRunner(
     child.stderr.on("data", (chunk: string) => {
       if (stderr.length < 32 * 1024) stderr += chunk;
     });
-    child.on("error", (err) => {
-      finish({ exitCode: 1, stdout, stderr: err.message });
-    });
-    child.on("close", (code) => {
-      finish({ exitCode: code ?? 1, stdout, stderr });
-    });
+    child.on("error", (err) => finish({ exitCode: 1, stdout, stderr: err.message }));
+    child.on("close", (code) => finish({ exitCode: code ?? 1, stdout, stderr }));
 
-    if (options.stdin !== undefined) {
-      child.stdin.write(options.stdin, "utf8");
-    }
+    if (options.stdin !== undefined) child.stdin.write(options.stdin, "utf8");
     child.stdin.end();
   });
 }
 
-export function discoverFleetHosts(
-  ciHostsPath: string = defaultCiHostsPath(),
-): ReadonlyArray<FleetHostDescriptor> {
+export function discoverFleetHosts(ciHostsPath?: string): ReadonlyArray<FleetHostDescriptor> {
   const hosts: FleetHostDescriptor[] = [];
   const seenNames = new Set<string>();
   const localHostname = NodeOS.hostname();
@@ -208,52 +180,32 @@ export function discoverFleetHosts(
     hosts.push(desc);
   };
 
-  try {
-    if (NodeFS.existsSync(ciHostsPath)) {
-      const parsed = JSON.parse(NodeFS.readFileSync(ciHostsPath, "utf8")) as {
-        readonly hosts?: ReadonlyArray<Record<string, unknown>>;
-      };
-      const rawHosts = Array.isArray(parsed.hosts) ? parsed.hosts : [];
-      const parentHosts: string[] = [];
-
-      for (const entry of rawHosts) {
-        if (!entry || typeof entry !== "object") continue;
-        const name = typeof entry.name === "string" ? entry.name.trim() : "";
-        if (!name) continue;
-        const sshRaw = entry.ssh;
-        const ssh = typeof sshRaw === "string" && sshRaw.trim() ? sshRaw.trim() : null;
-        const local = ssh === null;
-        if (local) sawLocal = true;
-        if (!local && ssh && !isValidSshAlias(ssh)) continue;
-        const role = typeof entry.role === "string" && entry.role.trim() ? entry.role.trim() : "ci";
-        const onHost =
-          typeof entry.on === "string" && entry.on.trim() ? entry.on.trim() : undefined;
-        pushHost({
-          name,
-          label: local ? `${name} (this host)` : name,
-          ssh,
-          local,
-          role,
-          onHost,
-        });
-        if (onHost && isValidSshAlias(onHost)) {
-          parentHosts.push(onHost);
-        }
-      }
-
-      // Include parent workstation hosts (e.g. macOS host "host-x" running OrbStack guest).
-      for (const parentName of parentHosts) {
-        pushHost({
-          name: parentName,
-          label: parentName,
-          ssh: parentName,
-          local: false,
-          role: "workstation",
-        });
-      }
+  const parentHosts: string[] = [];
+  for (const entry of readCiHostEntries({ overridePath: ciHostsPath })) {
+    const local = entry.ssh === null;
+    if (local) sawLocal = true;
+    if (!local && entry.ssh && !isValidSshAlias(entry.ssh)) continue;
+    pushHost({
+      name: entry.name,
+      label: local ? `${entry.name} (this host)` : entry.name,
+      ssh: entry.ssh,
+      local,
+      role: entry.role || "ci",
+      ...(entry.on ? { onHost: entry.on } : {}),
+    });
+    if (entry.on && isValidSshAlias(entry.on)) {
+      parentHosts.push(entry.on);
     }
-  } catch {
-    // Fallback to local host alone if ci-hosts.json is missing or malformed.
+  }
+
+  for (const parentName of parentHosts) {
+    pushHost({
+      name: parentName,
+      label: parentName,
+      ssh: parentName,
+      local: false,
+      role: "workstation",
+    });
   }
 
   if (!sawLocal) {
@@ -277,10 +229,8 @@ function parseRemoteJsonObject(stdout: string): {
   readonly raw: Record<string, unknown>;
 } {
   const trimmed = stdout.trim();
-  if (!trimmed || trimmed === "{}") {
-    return { exists: false, raw: {} };
-  }
-  const parsed = JSON.parse(trimmed);
+  if (!trimmed || trimmed === "{}") return { exists: false, raw: {} };
+  const parsed = JSON.parse(trimmed) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return { exists: true, raw: {} };
   }
@@ -386,13 +336,7 @@ async function writeSingleRemoteHost(
   options: FleetConfigOptions,
 ): Promise<FleetWriteResultEntry> {
   if (!host.ssh) {
-    return {
-      host: host.name,
-      ssh: null,
-      local: false,
-      ok: false,
-      error: "Host has no SSH alias",
-    };
+    return { host: host.name, ssh: null, local: false, ok: false, error: "Host has no SSH alias" };
   }
   const runner = options.sshRunner ?? defaultSshRunner;
   const readRes = await runner(host.ssh, REMOTE_READ_SH, {
@@ -422,13 +366,7 @@ async function writeSingleRemoteHost(
   }
   const prepared = prepareMergedHostConfig(existing, patch);
   if (!prepared.ok) {
-    return {
-      host: host.name,
-      ssh: host.ssh,
-      local: false,
-      ok: false,
-      error: prepared.error,
-    };
+    return { host: host.name, ssh: host.ssh, local: false, ok: false, error: prepared.error };
   }
   const writeRes = await runner(host.ssh, REMOTE_WRITE_SH, {
     stdin: `${JSON.stringify(prepared.toPersist, null, 2)}\n`,
@@ -444,13 +382,7 @@ async function writeSingleRemoteHost(
       error: writeRes.stderr.trim() || `SSH write failed (exit ${writeRes.exitCode})`,
     };
   }
-  return {
-    host: host.name,
-    ssh: host.ssh,
-    local: false,
-    ok: true,
-    config: prepared.config,
-  };
+  return { host: host.name, ssh: host.ssh, local: false, ok: true, config: prepared.config };
 }
 
 export async function writeFleetHostConfig(
@@ -458,7 +390,6 @@ export async function writeFleetHostConfig(
   patch: Record<string, unknown>,
   options: FleetConfigOptions = {},
 ): Promise<FleetWriteResponse> {
-  // Validate submitted patch once up front before touching any host.
   const precheck = prepareMergedHostConfig({}, patch);
   if (!precheck.ok) {
     return {

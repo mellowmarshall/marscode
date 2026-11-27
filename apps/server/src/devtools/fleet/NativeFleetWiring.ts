@@ -6,6 +6,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
+import * as HostPowerMonitor from "../../background/HostPowerMonitor.ts";
 import * as GitManager from "../../git/GitManager.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
 import * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
@@ -64,6 +65,7 @@ export const makeNativeFleetFromContext = Effect.fn("NativeFleet.makeFromContext
     const hostnameOpt = yield* Effect.serviceOption(HostProcess.Hostname);
     const localHostName = Option.getOrElse(hostnameOpt, () => NodeOS.hostname());
     const hostResourcesOpt = yield* Effect.serviceOption(HostResources.HostResources);
+    const hostPowerOpt = yield* Effect.serviceOption(HostPowerMonitor.HostPowerMonitor);
     const desktopTelemetryOpt = yield* Effect.serviceOption(
       DesktopTelemetryReceiver.DesktopTelemetryReceiver,
     );
@@ -76,19 +78,20 @@ export const makeNativeFleetFromContext = Effect.fn("NativeFleet.makeFromContext
       hostname: localHostName,
       platform,
       enableBackgroundPolling: options.enableBackground,
-      writeNodesFile: options.enableBackground,
       readHostResources: Option.isSome(hostResourcesOpt)
         ? () => runWithServices(hostResourcesOpt.value.read.pipe(Effect.orElseSucceed(() => null)))
         : undefined,
-      readDesktopPower: Option.isSome(desktopTelemetryOpt)
-        ? () =>
-            runWithServices(
-              desktopTelemetryOpt.value.latest.pipe(
-                Effect.map((opt) => (Option.isSome(opt) ? opt.value.power : null)),
-                Effect.orElseSucceed(() => null),
-              ),
-            )
-        : undefined,
+      readDesktopPower: Option.isSome(hostPowerOpt)
+        ? () => runWithServices(hostPowerOpt.value.snapshot.pipe(Effect.orElseSucceed(() => null)))
+        : Option.isSome(desktopTelemetryOpt)
+          ? () =>
+              runWithServices(
+                desktopTelemetryOpt.value.latest.pipe(
+                  Effect.map((opt) => (Option.isSome(opt) ? opt.value.power : null)),
+                  Effect.orElseSucceed(() => null),
+                ),
+              )
+          : undefined,
       readWorktrees,
       listPeerLinks: Option.isSome(peerLinksOpt)
         ? () =>

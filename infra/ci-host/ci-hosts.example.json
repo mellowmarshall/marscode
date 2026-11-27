@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "note": "Template CI hosts configuration for MarsCode ship-queue. Copy to ~/.local/lib/marscode/ci-hosts.json and customize for your environment.",
+  "hosts": [
+    {
+      "name": "local",
+      "ssh": null,
+      "role": "ci",
+      "data_root": "~/Dev-data",
+      "note": "local queue host"
+    },
+    {
+      "name": "ci-host-1",
+      "ssh": "ci-host-1.example",
+      "role": "ci",
+      "priority": 1,
+      "data_root": "~/Dev-data",
+      "note": "example remote CI host (100.64.0.10)"
+    }
+  ],
+  "toolchain": {
+    "git": { "version": ">=2.40", "probe": "git --version", "install": null, "base": true },
+    "python3": { "version": ">=3.10", "probe": "python3 --version", "install": null, "base": true },
+    "typescript": {
+      "version": "=5.9.3",
+      "probe": "tsc --version",
+      "install": "t=\"$HOME/.local/share/ship-queue-ci\"; [ \"$(\"$t/npm/bin/tsc\" --version 2>/dev/null | grep -o '[0-9][0-9.]*' | head -1)\" = 5.9.3 ] || npm install -g --prefix \"$t/npm\" typescript@5.9.3"
+    },
+    "gh": { "version": ">=2", "probe": "gh --version", "install": null, "base": true },
+    "docker": { "version": ">=24", "probe": "docker --version", "install": null },
+    "node": {
+      "version": ">=22",
+      "probe": "node --version",
+      "install": null,
+      "note": "Node release installed by an admin or via infra/ci-host/ci-node.sh"
+    },
+    "pnpm": {
+      "version": ">=9.15 <10",
+      "probe": "pnpm --version",
+      "install": "t=\"$HOME/.local/share/ship-queue-ci\"; [ \"$(\"$t/npm/bin/pnpm\" --version 2>/dev/null)\" = 9.15.0 ] || npm install -g --prefix \"$t/npm\" pnpm@9.15.0"
+    },
+    "vp": {
+      "version": ">=0.1",
+      "probe": "vp --version",
+      "install": "bash \"$CI_HOST_PAYLOAD/infra/ci-host/ci-vp.sh\" 0.1.18 linux-x64=0000000000000000000000000000000000000000000000000000000000000000 linux-arm64=0000000000000000000000000000000000000000000000000000000000000000 darwin-arm64=0000000000000000000000000000000000000000000000000000000000000000",
+      "note": "Vite+ CLI installed via infra/ci-host/ci-vp.sh; replace placeholder hashes with release checksums"
+    },
+    "cargo": {
+      "version": ">=1.85",
+      "probe": "cargo --version",
+      "install": "if command -v rustup >/dev/null; then rustup update stable; else curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal; fi"
+    },
+    "playbook": {
+      "version": ">=6",
+      "probe": "playbook version",
+      "install": "bash \"$CI_HOST_PAYLOAD/packages/playbook/install.sh\"",
+      "refresh": true
+    },
+    "shellcheck": {
+      "version": ">=0.11",
+      "probe": "shellcheck --version",
+      "install": "v=0.11.0; case \"$(uname -sm)\" in 'Linux x86_64') a=linux.x86_64 ;; 'Darwin arm64') a=darwin.aarch64 ;; *) echo \"shellcheck: no release for $(uname -sm)\" >&2; exit 1 ;; esac; t=$(mktemp -d); trap 'rm -rf \"$t\"' EXIT; curl -fsSL \"https://github.com/koalaman/shellcheck/releases/download/v$v/shellcheck-v$v.$a.tar.xz\" | tar -xJ -C \"$t\"; mkdir -p \"$HOME/.local/bin\"; install -m 0755 \"$t/shellcheck-v$v/shellcheck\" \"$HOME/.local/bin/shellcheck\""
+    },
+    "jq": { "version": ">=1.6", "probe": "jq --version", "install": null },
+    "curl": { "version": ">=7.68", "probe": "curl --version", "install": null },
+    "uv": {
+      "version": "=0.13.0",
+      "probe": "p=$(UV_PYTHON_PREFERENCE=only-managed UV_PYTHON_DOWNLOADS=never uv python find 3.12 2>/dev/null) && [ -x \"$p\" ] && [ \"$(\"$p\" -c \"import sys, sqlite3; print(sys.version.split()[0], sqlite3.sqlite_version)\" 2>/dev/null)\" = \"3.12.15 3.53.1\" ] && d=$(uv python dir 2>/dev/null) && d=$(cd \"$d\" && pwd -P) && case \"$(\"$p\" -c \"import sys; print(sys.base_prefix)\" 2>/dev/null)\" in \"$d\"/cpython-3.12.15-*) ;; *) false ;; esac && uv --version",
+      "install": "bash \"$CI_HOST_PAYLOAD/infra/ci-host/ci-uv.sh\" 0.13.0 linux-x64=1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154 darwin-arm64=a9c1b29002cf3c83f07fa9cd8a887a3be0107d90e23189721221e7257db8e3d6 python=3.12.15+20261009 sqlite=3.53.1 python-linux-x64=ffa8f85f1b56e88b687f08d743d817015524b86a9365fd921243132b80f1a36d python-darwin-arm64=233f8e15255b3e1d1fd47ea5dd5230dfed803f371138e896e54d98c60ae19f6f"
+    },
+    "osv-scanner": {
+      "version": ">=2",
+      "probe": "osv-scanner --version",
+      "install": "v=2.6.0; mkdir -p \"$HOME/.local/bin\"; curl -fsSL -o \"$HOME/.local/bin/.osv-scanner.next\" \"https://github.com/google/osv-scanner/releases/download/v$v/osv-scanner_linux_amd64\"; chmod 0755 \"$HOME/.local/bin/.osv-scanner.next\"; mv -f \"$HOME/.local/bin/.osv-scanner.next\" \"$HOME/.local/bin/osv-scanner\""
+    }
+  },
+  "guards": {
+    "install": "src=\"$HOME/Dev\"; data=\"${SHIP_QUEUE_DATA_ROOT:-$src}\"; HOST_GUARDS_SOURCE_ROOT=\"$src\" HOST_GUARDS_DATA_ROOT=\"$data\" HOST_GUARDS_SCAN_ROOTS=\"${HOST_GUARDS_SCAN_ROOTS:-$src:$data}\" bash \"$CI_HOST_PAYLOAD/packages/host-guards/install.sh\"",
+    "note": "host guards installer"
+  }
+}

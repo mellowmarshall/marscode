@@ -3,7 +3,7 @@
  * `GET /api/devtools/events?topics=...` stream with prefixed SSE event names (`<topic>:<event>`),
  * independent sub-stream resilience, and unified AbortSignal teardown.
  */
-import * as CliRunners from "./CliRunners.ts";
+import * as ShipQueueEventStream from "./ShipQueueEventStream.ts";
 import type { NativeFleetService } from "./fleet/NativeFleetService.ts";
 import type { GuardGrantBroker } from "./GuardGrantBroker.ts";
 import type * as JobRegistry from "./jobs/JobRegistry.ts";
@@ -217,7 +217,10 @@ export function createMultiplexedEventStream(
         }
 
         if (!innerCtrl.signal.aborted && options.topics.has("ship-queue")) {
-          pipeTopic("ship-queue", CliRunners.createShipQueueEventStream(innerCtrl.signal));
+          pipeTopic(
+            "ship-queue",
+            ShipQueueEventStream.createShipQueueEventStream(innerCtrl.signal),
+          );
         }
       } catch {
         cleanup();

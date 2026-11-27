@@ -10,6 +10,8 @@ import {
   type UsageLimitSourceSnapshot,
 } from "@t3tools/contracts";
 
+import { isValidSshAlias } from "@t3tools/ship-queue/ciHosts";
+
 import {
   DEFAULT_DEVTOOLS_HOST_CONFIG,
   readDevtoolsHostConfig,
@@ -18,7 +20,6 @@ import {
 } from "./DevtoolsConfig.ts";
 import {
   discoverFleetHosts,
-  isValidSshAlias,
   readFleetConfigSnapshot,
   writeFleetHostConfig,
   type SshRunner,

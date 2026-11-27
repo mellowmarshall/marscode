@@ -12,7 +12,7 @@ import * as Stream from "effect/Stream";
 import * as CommandOutputHub from "../../orchestration-v2/CommandOutputHub.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as KnownWorkspaces from "../../workspace/KnownWorkspaces.ts";
-import * as CliRunners from "../CliRunners.ts";
+import { cancelShipQueueJob } from "../ShipQueueEventStream.ts";
 import { BackgroundTaskBridge, type BackgroundTaskBridgeOptions } from "./BackgroundTaskBridge.ts";
 import type { CommandExecutionTurnItem } from "./BackgroundTaskLifecycle.ts";
 import { CernoVisibilityCoordinator } from "./cernoJobMatcher.ts";
@@ -296,7 +296,7 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
       if (id.startsWith("ship:")) {
         const num = id.slice("ship:".length);
         if (!/^[0-9]{1,16}$/.test(num)) return { ok: false, error: "Invalid Ship Queue job id" };
-        const res = await CliRunners.cancelShipQueueJob(num, signal);
+        const res = await cancelShipQueueJob(num, signal);
         return { ok: res.ok, ...(res.error ? { error: res.error } : {}) };
       }
       if (id.startsWith("cerno:")) {

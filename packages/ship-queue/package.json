@@ -6,9 +6,69 @@
   },
   "type": "module",
   "exports": {
+    "./ciHosts": {
+      "types": "./src/ciHosts.ts",
+      "import": "./src/ciHosts.ts"
+    },
+    "./ciNeeds": {
+      "types": "./src/ciNeeds.ts",
+      "import": "./src/ciNeeds.ts"
+    },
+    "./ciRouter": {
+      "types": "./src/ciRouter.ts",
+      "import": "./src/ciRouter.ts"
+    },
+    "./ciToolVersion": {
+      "types": "./src/ciToolVersion.ts",
+      "import": "./src/ciToolVersion.ts"
+    },
     "./cli": {
       "types": "./src/cli.ts",
       "import": "./src/cli.ts"
+    },
+    "./declaration": {
+      "types": "./src/declaration.ts",
+      "import": "./src/declaration.ts"
+    },
+    "./declarationValidation": {
+      "types": "./src/declarationValidation.ts",
+      "import": "./src/declarationValidation.ts"
+    },
+    "./depsEngine": {
+      "types": "./src/depsEngine.ts",
+      "import": "./src/depsEngine.ts"
+    },
+    "./depsRepoFiles": {
+      "types": "./src/depsRepoFiles.ts",
+      "import": "./src/depsRepoFiles.ts"
+    },
+    "./depsRollback": {
+      "types": "./src/depsRollback.ts",
+      "import": "./src/depsRollback.ts"
+    },
+    "./depsScan": {
+      "types": "./src/depsScan.ts",
+      "import": "./src/depsScan.ts"
+    },
+    "./depsStore": {
+      "types": "./src/depsStore.ts",
+      "import": "./src/depsStore.ts"
+    },
+    "./depsTypes": {
+      "types": "./src/depsTypes.ts",
+      "import": "./src/depsTypes.ts"
+    },
+    "./dopplerBroker": {
+      "types": "./src/dopplerBroker.ts",
+      "import": "./src/dopplerBroker.ts"
+    },
+    "./hostProbe": {
+      "types": "./src/hostProbe.ts",
+      "import": "./src/hostProbe.ts"
+    },
+    "./hostProvision": {
+      "types": "./src/hostProvision.ts",
+      "import": "./src/hostProvision.ts"
     },
     "./jobStore": {
       "types": "./src/jobStore.ts",
@@ -18,9 +78,33 @@
       "types": "./src/markers.ts",
       "import": "./src/markers.ts"
     },
+    "./passRecord": {
+      "types": "./src/passRecord.ts",
+      "import": "./src/passRecord.ts"
+    },
+    "./pins": {
+      "types": "./src/pins.ts",
+      "import": "./src/pins.ts"
+    },
+    "./rootGrant": {
+      "types": "./src/rootGrant.ts",
+      "import": "./src/rootGrant.ts"
+    },
+    "./sshExec": {
+      "types": "./src/sshExec.ts",
+      "import": "./src/sshExec.ts"
+    },
+    "./stepRunner": {
+      "types": "./src/stepRunner.ts",
+      "import": "./src/stepRunner.ts"
+    },
     "./submit": {
       "types": "./src/submit.ts",
       "import": "./src/submit.ts"
+    },
+    "./toolchainEnv": {
+      "types": "./src/toolchainEnv.ts",
+      "import": "./src/toolchainEnv.ts"
     },
     "./types": {
       "types": "./src/types.ts",
@@ -40,7 +124,10 @@
     "test": "vp test run --config ../../vite.config.ts --dir ."
   },
   "dependencies": {
-    "@t3tools/guard-protocol": "workspace:*"
+    "@effect/platform-node": "catalog:",
+    "@t3tools/guard-protocol": "workspace:*",
+    "@t3tools/ssh": "workspace:*",
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

@@ -310,7 +310,6 @@ describe("NativeFleetService alerts + worktrees panels", () => {
       manifestPath: NodePath.join(dir, "missing-ci-hosts.json"),
       githubAuditPath: writeAudit(dir, HEALTHY_AUDIT),
       enableBackgroundPolling: false,
-      writeNodesFile: false,
       readWorktrees: async () => worktrees,
     });
     try {
@@ -371,7 +370,6 @@ describe("NativeFleetService alerts + worktrees panels", () => {
       manifestPath: NodePath.join(dir, "missing-ci-hosts.json"),
       githubAuditPath: NodePath.join(dir, "missing-audit.json"),
       enableBackgroundPolling: false,
-      writeNodesFile: false,
       activeScansIntervalMs: 20,
       now: () => clock,
       readWorktrees: async () => {

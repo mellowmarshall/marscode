@@ -1,0 +1,607 @@
+{
+  "schema": 1,
+  "note": "The CI hosts' tool pins that `ship-queue deps` keeps current (private-repo): one entry per pin, read by Renovate as its custom regex managers (sq_deps_renovate.py) and by sq_pins.py, which the dependency exporter runs after Renovate moves a pin's anchor (match: Renovate's own regex, one currentValue). sq_pins.py then writes the version everywhere the pin's lines held the old one, its derived values (read: where the file holds one; source: where the release publishes it), and each platform's sha256 (assets: the download per platform; sums: list, a checksum file of the release; sidecar, a file beside each download; github-digest, the sha256 GitHub records for a release asset, for a project that publishes none; npm, the registry, which checks its own integrity; writer: where the sums sit, case arms, KEY=SHA256 words or a fleet script's case lines), and proves the result. A new major, and a new minor of a 0.x release, is never offered unless major is true (a human raises it); monthEnd keeps BtbN's month-end autobuilds, the ones the project keeps. Signatures (private-repo): a pin whose vendor signs its checksum list or its download names the signature and a key set of `keys` (pinned primary fingerprints; each fetched key is used only when it is that key), and refresh and prove both refuse a missing or bad signature; `unsigned` says why each other pin has none. Not here: the rust release (the release repos' rust-toolchain.toml pin; raised with them), cargo-audit and semgrep (unpinned), google-chrome and the playwright tools (current stable on purpose, refresh), the GNU userland bundle (macOS only, built from source, its BUNDLE raised with each pin), and the unmanaged lines below.",
+  "pins": [
+    {
+      "name": "gitleaks",
+      "file": "infra/ci-host/ci-hosts.json",
+      "lines": ["gitleaks"],
+      "datasource": "github-releases",
+      "depName": "gitleaks/gitleaks",
+      "extractVersion": "^v(?<version>.+)$",
+      "match": "\"gitleaks\": \\{[^\\n]*?\"install\": \"v=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+);",
+      "assets": {
+        "linux-x64": "https://github.com/gitleaks/gitleaks/releases/download/v{v}/gitleaks_{v}_linux_x64.tar.gz",
+        "linux-arm64": "https://github.com/gitleaks/gitleaks/releases/download/v{v}/gitleaks_{v}_linux_arm64.tar.gz",
+        "darwin-arm64": "https://github.com/gitleaks/gitleaks/releases/download/v{v}/gitleaks_{v}_darwin_arm64.tar.gz"
+      },
+      "sums": {
+        "kind": "list",
+        "url": "https://github.com/gitleaks/gitleaks/releases/download/v{v}/gitleaks_{v}_checksums.txt"
+      },
+      "writer": {
+        "kind": "case",
+        "labels": {
+          "linux-x64": "'Linux x86_64')",
+          "linux-arm64": "'Linux aarch64')",
+          "darwin-arm64": "'Darwin arm64')"
+        }
+      },
+      "no_floor": "its range is * on purpose: a distribution's gitleaks build prints no version (the manifest's gitleaks note), so no floor could judge a host"
+    },
+    {
+      "name": "squawk",
+      "file": "infra/ci-host/ci-hosts.json",
+      "lines": ["squawk"],
+      "datasource": "github-releases",
+      "depName": "sbdchd/squawk",
+      "extractVersion": "^v(?<version>.+)$",
+      "match": "\"squawk\": \\{[^\\n]*?\"install\": \"v=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+);",
+      "assets": {
+        "linux-x64": "https://github.com/sbdchd/squawk/releases/download/v{v}/squawk-linux-x64",
+        "linux-arm64": "https://github.com/sbdchd/squawk/releases/download/v{v}/squawk-linux-arm64",
+        "darwin-arm64": "https://github.com/sbdchd/squawk/releases/download/v{v}/squawk-darwin-arm64"
+      },
+      "sums": {
+        "kind": "github-digest",
+        "release": "sbdchd/squawk",
+        "tag": "v{v}"
+      },
+      "writer": {
+        "kind": "case",
+        "labels": {
+          "linux-x64": "'Linux x86_64')",
+          "linux-arm64": "'Linux aarch64')",
+          "darwin-arm64": "'Darwin arm64')"
+        }
+      },
+      "floor": {
+        "tools": ["squawk"]
+      }
+    },
+    {
+      "name": "shellcheck",
+      "file": "infra/ci-host/ci-hosts.json",
+      "lines": ["shellcheck"],
+      "datasource": "github-releases",
+      "depName": "koalaman/shellcheck",
+      "extractVersion": "^v(?<version>.+)$",
+      "match": "\"shellcheck\": \\{[^\\n]*?\"install\": \"v=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+);",
+      "assets": {
+        "linux-x64": "https://github.com/koalaman/shellcheck/releases/download/v{v}/shellcheck-v{v}.linux.x86_64.tar.xz",
+        "linux-arm64": "https://github.com/koalaman/shellcheck/releases/download/v{v}/shellcheck-v{v}.linux.aarch64.tar.xz",
+        "darwin-arm64": "https://github.com/koalaman/shellcheck/releases/download/v{v}/shellcheck-v{v}.darwin.aarch64.tar.xz"
+      },
+      "sums": {
+        "kind": "github-digest",
+        "release": "koalaman/shellcheck",
+        "tag": "v{v}"
+      },
+      "writer": {
+        "kind": "case",
+        "labels": {
+          "linux-x64": "'Linux x86_64')",
+          "linux-arm64": "'Linux aarch64')",
+          "darwin-arm64": "'Darwin arm64')"
+        }
+      },
+      "floor": {
+        "tools": ["shellcheck"]
+      }
+    },
+    {
+      "name": "osv-scanner",
+      "file": "infra/ci-host/ci-hosts.json",
+      "lines": ["osv-scanner"],
+      "datasource": "github-releases",
+      "depName": "google/osv-scanner",
+      "extractVersion": "^v(?<version>.+)$",
+      "match": "\"osv-scanner\": \\{[^\\n]*?\"install\": \"v=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+);",
+      "assets": {
+        "linux-x64": "https://github.com/google/osv-scanner/releases/download/v{v}/osv-scanner_linux_amd64",
+        "linux-arm64": "https://github.com/google/osv-scanner/releases/download/v{v}/osv-scanner_linux_arm64",
+        "darwin-arm64": "https://github.com/google/osv-scanner/releases/download/v{v}/osv-scanner_darwin_arm64"
+      },
+      "sums": {
+        "kind": "list",
+        "url": "https://github.com/google/osv-scanner/releases/download/v{v}/osv-scanner_SHA256SUMS"
+      },
+      "writer": {
+        "kind": "case",
+        "labels": {
+          "linux-x64": "'Linux x86_64')",
+          "linux-arm64": "'Linux aarch64')",
+          "darwin-arm64": "'Darwin arm64')"
+        }
+      },
+      "floor": {
+        "tools": ["osv-scanner"]
+      }
+    },
+    {
+      "name": "ffmpeg",
+      "file": "infra/ci-host/ci-hosts.json",
+      "lines": ["ffmpeg", "ffprobe"],
+      "datasource": "github-releases",
+      "depName": "BtbN/FFmpeg-Builds",
+      "major": true,
+      "monthEnd": true,
+      "extractVersion": "^autobuild-(?<version>[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2})$",
+      "versioning": "regex:^(?<major>\\d{4})-(?<minor>\\d{2})-(?<patch>\\d{2})-(?<build>\\d{2})-(?<revision>\\d{2})$",
+      "allowedVersions": "/^\\d{4}-(01|03|05|07|08|10|12)-31-|^\\d{4}-(04|06|09|11)-30-|^\\d{4}-02-(28|29)-/",
+      "match": "\"ffmpeg\": \\{[^\\n]*?/releases/download/autobuild-(?<currentValue>[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2})/",
+      "derived": [
+        {
+          "name": "series",
+          "read": "-gpl-([0-9]+\\.[0-9]+)(?![0-9.])",
+          "source": {
+            "kind": "file"
+          }
+        },
+        {
+          "name": "build",
+          "read": "\\bv=(n[0-9][0-9A-Za-z.-]*);",
+          "source": {
+            "kind": "sums-name",
+            "pattern": "ffmpeg-(n{series}(?:\\.[0-9]+)*-[0-9]+-g[0-9a-f]+)-linux64-gpl-{series}\\.tar\\.xz",
+            "missing": "the release has no ffmpeg {series} build: raise the series (the install line's -gpl-X.Y) by hand"
+          }
+        }
+      ],
+      "assets": {
+        "linux-x64": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-{v}/ffmpeg-{build}-linux64-gpl-{series}.tar.xz",
+        "linux-arm64": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-{v}/ffmpeg-{build}-linuxarm64-gpl-{series}.tar.xz"
+      },
+      "sums": {
+        "kind": "list",
+        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-{v}/checksums.sha256"
+      },
+      "writer": {
+        "kind": "case",
+        "labels": {
+          "linux-x64": "*)",
+          "linux-arm64": "aarch64)"
+        }
+      },
+      "floor": {
+        "tools": ["ffmpeg", "ffprobe"],
+        "from": "build",
+        "pattern": "^n([0-9]+(?:\\.[0-9]+)*)"
+      }
+    },
+    {
+      "name": "node",
+      "file": "infra/ci-host/ci-hosts.json",
+      "lines": ["node"],
+      "datasource": "node-version",
+      "depName": "node",
+      "match": "\"node\": \\{\"version\": \">=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\"",
+      "assets": {
+        "linux-x64": "https://nodejs.org/dist/v{v}/node-v{v}-linux-x64.tar.xz",
+        "linux-arm64": "https://nodejs.org/dist/v{v}/node-v{v}-linux-arm64.tar.xz",
+        "darwin-arm64": "https://nodejs.org/dist/v{v}/node-v{v}-darwin-arm64.tar.xz"
+      },
+      "sums": {
+        "kind": "list",
+        "url": "https://nodejs.org/dist/v{v}/SHASUMS256.txt"
+      },
+      "writer": {
+        "kind": "words",
+        "keys": {
+          "linux-x64": "linux-x64",
+          "linux-arm64": "linux-arm64",
+          "darwin-arm64": "darwin-arm64"
+        }
+      },
+      "signature": {
+        "keys": "node-releasers",
+        "over": "list",
+        "suffix": ".sig"
+      },
+      "floor": {
+        "tools": ["node"]
+      }
+    },
+    {
+      "name": "uv",
+      "file": "infra/ci-host/ci-hosts.json",
+      "lines": ["uv"],
+      "datasource": "github-releases",
+      "depName": "astral-sh/uv",
+      "match": "\"uv\": \\{[^\\n]*?ci-uv\\.sh\\\\\" (?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+) ",
+      "assets": {
+        "linux-x64": "https://github.com/astral-sh/uv/releases/download/{v}/uv-x86_64-unknown-linux-gnu.tar.gz",
+        "linux-arm64": "https://github.com/astral-sh/uv/releases/download/{v}/uv-aarch64-unknown-linux-gnu.tar.gz",
+        "darwin-arm64": "https://github.com/astral-sh/uv/releases/download/{v}/uv-aarch64-apple-darwin.tar.gz"
+      },
+      "sums": {
+        "kind": "sidecar",
+        "suffix": ".sha256"
+      },
+      "writer": {
+        "kind": "words",
+        "keys": {
+          "linux-x64": "linux-x64",
+          "linux-arm64": "linux-arm64",
+          "darwin-arm64": "darwin-arm64"
+        }
+      }
+    },
+    {
+      "name": "python",
+      "file": "infra/ci-host/ci-hosts.json",
+      "lines": ["uv"],
+      "datasource": "github-releases",
+      "depName": "astral-sh/python-build-standalone",
+      "major": true,
+      "versioning": "regex:^(?<major>\\d{4})(?<minor>\\d{2})(?<patch>\\d{2})$",
+      "match": " python=3\\.12\\.[0-9]+\\+(?<currentValue>[0-9]{8}) sqlite=",
+      "derived": [
+        {
+          "name": "python",
+          "read": " python=(3\\.12\\.[0-9]+)\\+",
+          "source": {
+            "kind": "json",
+            "url": "https://raw.githubusercontent.com/astral-sh/python-build-standalone/{v}/pythonbuild/downloads.json",
+            "path": ["cpython-3.12", "version"],
+            "form": "^3\\.12\\.[0-9]+$"
+          }
+        },
+        {
+          "name": "sqlite",
+          "read": " sqlite=([0-9]+\\.[0-9]+\\.[0-9]+) ",
+          "source": {
+            "kind": "json",
+            "url": "https://raw.githubusercontent.com/astral-sh/python-build-standalone/{v}/pythonbuild/downloads.json",
+            "path": ["sqlite", "actual_version"],
+            "form": "^[0-9]+\\.[0-9]+\\.[0-9]+(\\.0)?$",
+            "parts": 3
+          }
+        }
+      ],
+      "assets": {
+        "linux-x64": "https://github.com/astral-sh/python-build-standalone/releases/download/{v}/cpython-{python}%2B{v}-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "linux-arm64": "https://github.com/astral-sh/python-build-standalone/releases/download/{v}/cpython-{python}%2B{v}-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "darwin-arm64": "https://github.com/astral-sh/python-build-standalone/releases/download/{v}/cpython-{python}%2B{v}-aarch64-apple-darwin-install_only_stripped.tar.gz"
+      },
+      "sums": {
+        "kind": "list",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/{v}/SHA256SUMS"
+      },
+      "writer": {
+        "kind": "words",
+        "keys": {
+          "linux-x64": "python-linux-x64",
+          "linux-arm64": "python-linux-arm64",
+          "darwin-arm64": "python-darwin-arm64"
+        }
+      }
+    },
+    {
+      "name": "rustup",
+      "file": "infra/ci-host/ci-hosts.json",
+      "lines": ["rust", "cargo"],
+      "datasource": "github-tags",
+      "depName": "rust-lang/rustup",
+      "match": "\"rust\": \\{[^\\n]*? rustup=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+) ",
+      "assets": {
+        "linux-x64": "https://static.rust-lang.org/rustup/archive/{v}/x86_64-unknown-linux-gnu/rustup-init",
+        "linux-arm64": "https://static.rust-lang.org/rustup/archive/{v}/aarch64-unknown-linux-gnu/rustup-init",
+        "darwin-arm64": "https://static.rust-lang.org/rustup/archive/{v}/aarch64-apple-darwin/rustup-init"
+      },
+      "sums": {
+        "kind": "sidecar",
+        "suffix": ".sha256"
+      },
+      "writer": {
+        "kind": "words",
+        "keys": {
+          "linux-x64": "x86_64-unknown-linux-gnu",
+          "linux-arm64": "aarch64-unknown-linux-gnu",
+          "darwin-arm64": "aarch64-apple-darwin"
+        }
+      }
+    },
+    {
+      "name": "jdk",
+      "file": "infra/ci-host/ci-hosts.json",
+      "lines": ["jdk"],
+      "datasource": "github-releases",
+      "depName": "adoptium/temurin17-binaries",
+      "match": "\"jdk\": \\{[^\\n]*?ci-jvm\\.sh\\\\\" jdk (?<currentValue>17\\.[0-9]+\\.[0-9]+\\+[0-9]+) ",
+      "derived": [
+        {
+          "name": "release",
+          "read": "\"version\": \"=(17\\.[0-9]+\\.[0-9]+)\"",
+          "source": {
+            "kind": "value",
+            "pattern": "^([0-9.]+)\\+[0-9]+$"
+          }
+        }
+      ],
+      "assets": {
+        "linux-x64": "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-{v|url}/OpenJDK17U-jdk_x64_linux_hotspot_{v|us}.tar.gz",
+        "linux-arm64": "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-{v|url}/OpenJDK17U-jdk_aarch64_linux_hotspot_{v|us}.tar.gz",
+        "darwin-arm64": "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-{v|url}/OpenJDK17U-jdk_aarch64_mac_hotspot_{v|us}.tar.gz"
+      },
+      "sums": {
+        "kind": "sidecar",
+        "suffix": ".sha256.txt"
+      },
+      "writer": {
+        "kind": "words",
+        "keys": {
+          "linux-x64": "linux-x64",
+          "linux-arm64": "linux-arm64",
+          "darwin-arm64": "darwin-arm64"
+        }
+      },
+      "signature": {
+        "keys": "adoptium",
+        "over": "asset",
+        "suffix": ".sig"
+      },
+      "extractVersion": "^jdk-(?<version>17\\.[0-9]+\\.[0-9]+\\+[0-9]+)$",
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)\\+(?<build>\\d+)$"
+    },
+    {
+      "name": "ktlint",
+      "file": "infra/ci-host/ci-hosts.json",
+      "lines": ["ktlint"],
+      "datasource": "github-releases",
+      "depName": "ktlint/ktlint",
+      "match": "\"ktlint\": \\{[^\\n]*?ci-jvm\\.sh\\\\\" ktlint (?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+) ",
+      "assets": {
+        "jar": "https://github.com/ktlint/ktlint/releases/download/{v}/ktlint"
+      },
+      "sums": {
+        "kind": "github-digest",
+        "release": "ktlint/ktlint",
+        "tag": "{v}"
+      },
+      "writer": {
+        "kind": "words",
+        "keys": {
+          "jar": "jar"
+        }
+      },
+      "signature": {
+        "keys": "ktlint",
+        "over": "asset",
+        "suffix": ".asc"
+      }
+    },
+    {
+      "name": "biome",
+      "file": "infra/ci-host/ci-hosts.json",
+      "lines": ["biome"],
+      "datasource": "npm",
+      "depName": "@biomejs/biome",
+      "match": "\"biome\": \\{[^\\n]*?@biomejs/biome@(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)",
+      "assets": {},
+      "sums": {
+        "kind": "npm"
+      },
+      "writer": {
+        "kind": "none"
+      },
+      "shared_check": true
+    },
+    {
+      "name": "typescript",
+      "file": "infra/ci-host/ci-hosts.json",
+      "lines": ["typescript"],
+      "datasource": "npm",
+      "depName": "typescript",
+      "match": "\"typescript\": \\{[^\\n]*?typescript@(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)",
+      "assets": {},
+      "sums": {
+        "kind": "npm"
+      },
+      "writer": {
+        "kind": "none"
+      }
+    },
+    {
+      "name": "pnpm",
+      "file": "infra/ci-host/ci-hosts.json",
+      "lines": ["pnpm"],
+      "datasource": "npm",
+      "depName": "pnpm",
+      "match": "\"pnpm\": \\{[^\\n]*?pnpm@(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)",
+      "assets": {},
+      "sums": {
+        "kind": "npm"
+      },
+      "writer": {
+        "kind": "none"
+      },
+      "floor": {
+        "tools": ["pnpm"]
+      }
+    },
+    {
+      "name": "fly",
+      "file": "infra/ci-host/ci-fleet-tools.sh",
+      "lines": ["fly"],
+      "datasource": "github-releases",
+      "depName": "superfly/flyctl",
+      "extractVersion": "^v(?<version>.+)$",
+      "match": "\"fly Linux x86_64\"\\) echo \"https://github\\.com/superfly/flyctl/releases/download/v(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)/",
+      "assets": {
+        "linux-x64": "https://github.com/superfly/flyctl/releases/download/v{v}/flyctl_{v}_Linux_x86_64.tar.gz",
+        "linux-arm64": "https://github.com/superfly/flyctl/releases/download/v{v}/flyctl_{v}_Linux_arm64.tar.gz",
+        "darwin-arm64": "https://github.com/superfly/flyctl/releases/download/v{v}/flyctl_{v}_macOS_arm64.tar.gz"
+      },
+      "sums": {
+        "kind": "list",
+        "url": "https://github.com/superfly/flyctl/releases/download/v{v}/flyctl_{v}_checksums.txt"
+      },
+      "writer": {
+        "kind": "fleet",
+        "labels": {
+          "linux-x64": "Linux x86_64",
+          "linux-arm64": "Linux aarch64",
+          "darwin-arm64": "Darwin arm64"
+        }
+      },
+      "floor": {
+        "tools": ["fly"]
+      }
+    },
+    {
+      "name": "hcloud",
+      "file": "infra/ci-host/ci-fleet-tools.sh",
+      "lines": ["hcloud"],
+      "datasource": "github-releases",
+      "depName": "hetznercloud/cli",
+      "extractVersion": "^v(?<version>.+)$",
+      "match": "\"hcloud Linux x86_64\"\\) echo \"https://github\\.com/hetznercloud/cli/releases/download/v(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)/",
+      "assets": {
+        "linux-x64": "https://github.com/hetznercloud/cli/releases/download/v{v}/hcloud-linux-amd64.tar.gz",
+        "linux-arm64": "https://github.com/hetznercloud/cli/releases/download/v{v}/hcloud-linux-arm64.tar.gz",
+        "darwin-arm64": "https://github.com/hetznercloud/cli/releases/download/v{v}/hcloud-darwin-arm64.tar.gz"
+      },
+      "sums": {
+        "kind": "list",
+        "url": "https://github.com/hetznercloud/cli/releases/download/v{v}/checksums.txt"
+      },
+      "writer": {
+        "kind": "fleet",
+        "labels": {
+          "linux-x64": "Linux x86_64",
+          "linux-arm64": "Linux aarch64",
+          "darwin-arm64": "Darwin arm64"
+        }
+      },
+      "signature": {
+        "keys": "hetzner-cli",
+        "over": "list",
+        "suffix": ".sig"
+      },
+      "floor": {
+        "tools": ["hcloud"]
+      }
+    },
+    {
+      "name": "doppler",
+      "file": "infra/ci-host/ci-fleet-tools.sh",
+      "lines": ["doppler"],
+      "datasource": "github-releases",
+      "depName": "DopplerHQ/cli",
+      "match": "\"doppler Linux x86_64\"\\) echo \"https://github\\.com/DopplerHQ/cli/releases/download/(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)/",
+      "assets": {
+        "linux-x64": "https://github.com/DopplerHQ/cli/releases/download/{v}/doppler_{v}_linux_amd64.tar.gz",
+        "linux-arm64": "https://github.com/DopplerHQ/cli/releases/download/{v}/doppler_{v}_linux_arm64.tar.gz",
+        "darwin-arm64": "https://github.com/DopplerHQ/cli/releases/download/{v}/doppler_{v}_macOS_arm64.tar.gz"
+      },
+      "sums": {
+        "kind": "list",
+        "url": "https://github.com/DopplerHQ/cli/releases/download/{v}/checksums.txt"
+      },
+      "writer": {
+        "kind": "fleet",
+        "labels": {
+          "linux-x64": "Linux x86_64",
+          "linux-arm64": "Linux aarch64",
+          "darwin-arm64": "Darwin arm64"
+        }
+      },
+      "signature": {
+        "keys": "doppler",
+        "over": "list",
+        "suffix": ".sig"
+      },
+      "floor": {
+        "tools": ["doppler"]
+      }
+    },
+    {
+      "name": "vp",
+      "file": "infra/ci-host/ci-hosts.json",
+      "lines": ["vp"],
+      "datasource": "github-releases",
+      "depName": "voidzero-dev/vite-plus",
+      "extractVersion": "^v(?<version>.+)$",
+      "match": "\"vp\": \\{[^\\n]*?ci-vp\\.sh\\\\\" (?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+) ",
+      "assets": {
+        "linux-x64": "https://github.com/voidzero-dev/vite-plus/releases/download/v{v}/vp-x86_64-unknown-linux-gnu.tar.gz",
+        "linux-arm64": "https://github.com/voidzero-dev/vite-plus/releases/download/v{v}/vp-aarch64-unknown-linux-gnu.tar.gz",
+        "darwin-arm64": "https://github.com/voidzero-dev/vite-plus/releases/download/v{v}/vp-aarch64-apple-darwin.tar.gz"
+      },
+      "sums": {
+        "kind": "list",
+        "url": "https://github.com/voidzero-dev/vite-plus/releases/download/v{v}/vp-checksums.txt"
+      },
+      "writer": {
+        "kind": "words",
+        "keys": {
+          "linux-x64": "linux-x64",
+          "linux-arm64": "linux-arm64",
+          "darwin-arm64": "darwin-arm64"
+        }
+      },
+      "floor": {
+        "tools": ["vp"]
+      }
+    }
+  ],
+  "unmanaged": [
+    {
+      "file": "infra/ci-host/ci-fleet-tools.sh",
+      "line": "op",
+      "why": "1Password publishes its CLI releases on its own update server, which no Renovate datasource reads; raised by hand with the sums of its downloads"
+    }
+  ],
+  "keys": {
+    "node-releasers": {
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/main/keys/{fpr}.asc",
+      "fingerprints": [
+        "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+        "DD792F5973C6DE52C432CBDAC77ABFA00DDBF2B7",
+        "CC68F5A3106FF448322E48ED27F5E38D5B0A215F",
+        "890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4",
+        "C82FA3AE1CBEDC6BE46B9360C43CEC45C17AB93C",
+        "108F52B48DB57BB0CC439B2997B01419BD92F80A",
+        "655F3B5C1FB3FA8D1A0CA6BDE4A7D232B936D2FD",
+        "A363A499291CBBC940DD62E41F10027AF002F8B0"
+      ],
+      "why": "the Node.js releasers' primary keys, as nodejs/node's README lists them (2026-11-15); a new releaser's release fails until a human adds the key"
+    },
+    "adoptium": {
+      "url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x{fpr}",
+      "fingerprints": ["3B04D753C9050D9A5D343F39843C48A565F8F04B"],
+      "why": "Eclipse Adoptium's signing key, which signs each Temurin download (.sig)"
+    },
+    "ktlint": {
+      "url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x{fpr}",
+      "fingerprints": ["ADBC987D1A7B91DB6B0AAA81995EFBF4A3D20BEB"],
+      "why": "the ktlint release key the manifest's note names; it signs the jar (ktlint.asc)"
+    },
+    "hetzner-cli": {
+      "url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x{fpr}",
+      "fingerprints": ["81DF3546AA43EB287D276C87D1F231005DCF1180"],
+      "why": "the key that signs hcloud's checksums.txt (checksums.txt.sig)"
+    },
+    "doppler": {
+      "url": "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x{fpr}",
+      "fingerprints": ["B70BD7FCA460C4A3D0EEB965D3D593D50EE79DEC"],
+      "why": "the key that signs Doppler's checksums.txt (checksums.txt.sig)"
+    }
+  },
+  "unsigned": {
+    "gitleaks": "the release publishes checksums.txt and no signature of it",
+    "squawk": "no checksum file and no signature: the sum is GitHub's record of the uploaded asset",
+    "shellcheck": "no checksum file and no signature: the sum is GitHub's record of the uploaded asset",
+    "osv-scanner": "its signature is SLSA provenance (multiple.intoto.jsonl), which needs slsa-verifier; no CI host has it",
+    "ffmpeg": "BtbN's autobuilds publish checksums.sha256 and no signature",
+    "uv": "astral signs with GitHub artifact attestations (sigstore), which need gh attestation or cosign online; no offline check on the hosts",
+    "python": "python-build-standalone publishes SHA256SUMS and GitHub attestations, no GPG signature",
+    "rustup": "static.rust-lang.org signs the toolchains, not rustup-init (no rustup-init.asc)",
+    "biome": "npm checks the package's integrity; its registry signatures need the npm CLI (npm audit signatures)",
+    "typescript": "npm checks the package's integrity; its registry signatures need the npm CLI (npm audit signatures)",
+    "pnpm": "npm checks the package's integrity; its registry signatures need the npm CLI (npm audit signatures)",
+    "fly": "flyctl's release publishes checksums and no signature",
+    "vp": "the release publishes vp-checksums.txt and no GPG signature of it"
+  }
+}

@@ -1,9 +1,9 @@
-// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Native T3 Fleet Service replacing DevDeck daemon for host metrics, servers, sessions, CI hosts, SSE, and ship-queue nodes JSON.
-import * as NodeFS from "node:fs";
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Native T3 Fleet Service replacing DevDeck daemon for host metrics, servers, sessions, CI hosts, SSE, and in-memory routing telemetry.
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import type { HostPowerSnapshot, HostResourcesSnapshot } from "@t3tools/contracts";
+import type { FleetTelemetryProvider } from "@t3tools/ship-queue/ciRouter";
 
 import { FleetActionTracker } from "./FleetActionTracker.ts";
 import { buildFleetAlertsPanel, defaultGitHubAuditPath } from "./FleetAlerts.ts";
@@ -34,7 +34,6 @@ const BACKGROUND_INTERVAL_MS = 30_000;
 const ON_DEMAND_SCAN_TTL_MS = 15_000;
 const KICK_LEASE_MS = 12_000;
 const KICK_MIN_INTERVAL_MS = 4_500;
-const NODES_FILE_THROTTLE_MS = 5_000;
 const WORKTREES_TTL_MS = 60_000;
 
 export interface NativeFleetServiceDeps {
@@ -43,7 +42,6 @@ export interface NativeFleetServiceDeps {
   readonly stateDir?: string | undefined;
   readonly manifestPath?: string | undefined;
   readonly enableBackgroundPolling?: boolean | undefined;
-  readonly writeNodesFile?: boolean | undefined;
   readonly readHostResources?: (() => Promise<HostResourcesSnapshot | null>) | undefined;
   readonly readDesktopPower?: (() => Promise<HostPowerSnapshot | null>) | undefined;
   readonly listPeerLinks?: (() => Promise<ReadonlyArray<PeerLinkCandidate>>) | undefined;
@@ -56,11 +54,9 @@ export interface NativeFleetServiceDeps {
 
 export class NativeFleetService {
   private readonly hostname: string;
-  private readonly nodesFilePath: string;
   private readonly manifestPath: string | undefined;
   private readonly enableBackgroundPolling: boolean;
   private readonly activeScansIntervalMs: number;
-  private readonly writeNodesFileEnabled: boolean;
 
   private readonly hostSampler: NativeHostSampler;
   private readonly serversScanner: NativeServersScanner;
@@ -81,7 +77,6 @@ export class NativeFleetService {
   private bgTimer: ReturnType<typeof setInterval> | null = null;
   private activeHostTimer: ReturnType<typeof setInterval> | null = null;
   private activeScansTimer: ReturnType<typeof setInterval> | null = null;
-  private lastNodesWriteAt = 0;
   private lastWorkloadScanAt = 0;
   private closed = false;
   private samplingLocal = false;
@@ -91,11 +86,9 @@ export class NativeFleetService {
   constructor(deps: NativeFleetServiceDeps = {}) {
     this.hostname = deps.hostname ?? NodeOS.hostname();
     const stateDir = deps.stateDir ?? defaultT3StateDir();
-    this.nodesFilePath = NodePath.join(stateDir, "fleet-nodes.json");
     this.manifestPath = deps.manifestPath;
     this.enableBackgroundPolling = deps.enableBackgroundPolling ?? true;
     this.activeScansIntervalMs = deps.activeScansIntervalMs ?? ACTIVE_SCANS_INTERVAL_MS;
-    this.writeNodesFileEnabled = deps.writeNodesFile ?? true;
 
     const platform = deps.platform ?? "linux";
     this.hostSampler = new NativeHostSampler({
@@ -145,7 +138,6 @@ export class NativeFleetService {
         await this.scanLocalWorkloads(false);
       }
       await this.probeAllRemotes();
-      this.persistNodesFile(false);
     } catch {
       // keep background telemetry loop resilient
     }
@@ -229,7 +221,6 @@ export class NativeFleetService {
       const sample = await this.hostSampler.sample({ preferFastLinux });
       this.emit("host", sample.host);
       this.emit("nodes", this.getNodesMap());
-      this.persistNodesFile(false);
     } catch {
       // isolate OS read failures
     } finally {
@@ -270,7 +261,6 @@ export class NativeFleetService {
     try {
       await this.remoteProber.probeManifest(manifest, this.hostname);
       this.emit("nodes", this.getNodesMap());
-      this.persistNodesFile(true);
     } catch {
       // isolate remote probe errors
     } finally {
@@ -295,7 +285,6 @@ export class NativeFleetService {
         .probeTarget({ name, ssh: sshAlias, note: hostEntry?.note })
         .then(() => {
           this.emit("nodes", this.getNodesMap());
-          this.persistNodesFile(false);
         })
         .catch(() => undefined);
     }
@@ -349,20 +338,16 @@ export class NativeFleetService {
     };
   }
 
-  private persistNodesFile(force: boolean): void {
-    if (!this.writeNodesFileEnabled || this.closed) return;
-    const now = Date.now();
-    if (!force && now - this.lastNodesWriteAt < NODES_FILE_THROTTLE_MS) return;
-    this.lastNodesWriteAt = now;
-    try {
-      NodeFS.mkdirSync(NodePath.dirname(this.nodesFilePath), { recursive: true, mode: 0o700 });
-      const tmp = `${this.nodesFilePath}.tmp.${process.pid}.${now}`;
-      // Always write strict ~30s-cadence cpu_hist so ship-queue/sq_route.py's 10-sample window stays ~5m.
-      NodeFS.writeFileSync(tmp, JSON.stringify(this.getNodesMap(true)), { mode: 0o600 });
-      NodeFS.renameSync(tmp, this.nodesFilePath);
-    } catch {
-      // best-effort publish for ship-queue routing
-    }
+  /** In-memory telemetry provider for `@t3tools/ship-queue/ciRouter` (replaces legacy `fleet-nodes.json`). */
+  getTelemetryProvider(): FleetTelemetryProvider {
+    return {
+      getNodesMap: () => this.getNodesMap(true),
+      getLocalPower: () => {
+        const latest = this.hostSampler.getLatest();
+        if (!latest?.power.power) return { onBattery: "unknown" };
+        return { onBattery: latest.power.power === "battery" ? "true" : "false" };
+      },
+    };
   }
 
   async getSnapshot(requestedPanels?: ReadonlySet<string>): Promise<Record<string, unknown>> {
