@@ -379,6 +379,10 @@
       "types": "./src/FeatureFlags.ts",
       "import": "./src/FeatureFlags.ts"
     },
+    "./procIdentity": {
+      "types": "./src/procIdentity.ts",
+      "import": "./src/procIdentity.ts"
+    },
     "./HostProcess": {
       "types": "./src/HostProcess.ts",
       "import": "./src/HostProcess.ts"

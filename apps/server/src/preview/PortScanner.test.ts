@@ -24,6 +24,7 @@ import { FetchHttpClient } from "effect/http";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as ProcIdentity from "@t3tools/shared/procIdentity";
 import * as PortScanner from "./PortScanner.ts";
 
 vi.mock("@t3tools/provider-core/server/processGroup", { spy: true });
@@ -743,7 +744,7 @@ effectIt.effect("rechecks the socket owner before stopping a Linux server withou
         }
         if (/^\/proc\/(4242|5000)\/comm$/.test(path)) return Effect.succeed("node\n");
         if (/^\/proc\/(4242|5000)\/environ$/.test(path)) {
-          return Effect.succeed(`${PortScanner.AGENT_THREAD_ENV}=thread-agent\0`);
+          return Effect.succeed(`${ProcIdentity.AGENT_THREAD_ENV}=thread-agent\0`);
         }
         return missing.readFileString(path);
       },
@@ -842,7 +843,7 @@ effectIt.effect.each(["linux", "darwin"] as const)(
   (platform) => {
     const appPort = 43_126;
     const devToolsPort = 43_127;
-    const agentEnvironment = `PATH=/usr/bin\0${PortScanner.AGENT_THREAD_ENV}=thread-agent\0`;
+    const agentEnvironment = `PATH=/usr/bin\0${ProcIdentity.AGENT_THREAD_ENV}=thread-agent\0`;
     const procFiles: Record<string, string> = {
       "/proc/4242/environ": agentEnvironment,
       "/proc/4242/cmdline": "node\0server.js\0",
@@ -865,8 +866,8 @@ effectIt.effect.each(["linux", "darwin"] as const)(
                 processOutput(
                   input.command === "lsof"
                     ? `p4242\ncnode\nn127.0.0.1:${appPort}\np6000\ncchrome\nn127.0.0.1:${devToolsPort}\n`
-                    : `  4242 1 node server.js PATH=/usr/bin ${PortScanner.AGENT_THREAD_ENV}=thread-agent\n` +
-                        `  6000 1 /opt/google/chrome/chrome --remote-debugging-port=0 about:blank PATH=/usr/bin ${PortScanner.AGENT_THREAD_ENV}=thread-agent\n`,
+                    : `  4242 1 node server.js PATH=/usr/bin ${ProcIdentity.AGENT_THREAD_ENV}=thread-agent\n` +
+                        `  6000 1 /opt/google/chrome/chrome --remote-debugging-port=0 about:blank PATH=/usr/bin ${ProcIdentity.AGENT_THREAD_ENV}=thread-agent\n`,
                 ),
               ),
           }),
@@ -907,17 +908,17 @@ effectIt.effect.each(["linux", "darwin"] as const)(
     const requests: string[] = [];
     const missing = FileSystem.makeNoop({});
     const procEnviron: Record<string, string> = {
-      "/proc/4242/environ": `PATH=/usr/bin\0${PortScanner.AGENT_THREAD_ENV}=thread-agent\0`,
+      "/proc/4242/environ": `PATH=/usr/bin\0${ProcIdentity.AGENT_THREAD_ENV}=thread-agent\0`,
       "/proc/5000/environ": "PATH=/usr/bin\0",
     };
     const procAgent: Record<string, string> = {
       "/proc/4242/stat": "4242 (node) S 4300 4300 4300 0",
-      "/proc/4300/environ": `${PortScanner.AGENT_THREAD_ENV}=thread-agent\0`,
+      "/proc/4300/environ": `${ProcIdentity.AGENT_THREAD_ENV}=thread-agent\0`,
       "/proc/4300/stat": `4300 (agy acp) S ${process.pid} 4300 4300 0`,
       "/proc/4299/stat": `4299 (t3code) S ${process.pid} 4299 4299 0`,
       "/proc/4299/cmdline":
         "/tmp/.mount_T3/t3code\0/tmp/.mount_T3/resources/app.asar/apps/server/dist/process-launcher.mjs\0",
-      "/proc/4301/environ": `${PortScanner.AGENT_THREAD_ENV}=thread-agent\0`,
+      "/proc/4301/environ": `${ProcIdentity.AGENT_THREAD_ENV}=thread-agent\0`,
       "/proc/4301/stat": "4301 (antigravity) S 4299 4301 4301 0",
     };
     const layer = layerScanner.pipe(
@@ -964,8 +965,8 @@ effectIt.effect.each(["linux", "darwin"] as const)(
               environmentReads += 1;
               return Effect.succeed(
                 processOutput(
-                  `  4242 4300 node server.js PATH=/usr/bin ${PortScanner.AGENT_THREAD_ENV}=thread-agent HOME=/Users/dev\n` +
-                    `  4300 ${process.pid} agy acp ${PortScanner.AGENT_THREAD_ENV}=thread-agent\n` +
+                  `  4242 4300 node server.js PATH=/usr/bin ${ProcIdentity.AGENT_THREAD_ENV}=thread-agent HOME=/Users/dev\n` +
+                    `  4300 ${process.pid} agy acp ${ProcIdentity.AGENT_THREAD_ENV}=thread-agent\n` +
                     "  5000     1 postgres -D /data PATH=/usr/bin\n",
                 ),
               );
@@ -1087,7 +1088,7 @@ const agentServer = () =>
       readonly port: number;
       readonly exited: Promise<void>;
     }>((resume) => {
-      const env = { ...process.env, [PortScanner.AGENT_THREAD_ENV]: "thread-live" };
+      const env = { ...process.env, [ProcIdentity.AGENT_THREAD_ENV]: "thread-live" };
       // dash ignores `set -m` without a terminal; bash, like agent tool shells, honors it.
       const child = NodeChildProcess.spawn(
         "bash",

@@ -39,3 +39,13 @@ export const definition = defineSecretProvider({
   referencePlaceholder: "op://vault/item/field",
   invalidReferenceMessage: "Use a 1Password reference like op://vault/item/field.",
 });
+
+/**
+ * Secret Service attributes of the keyring item holding the 1Password service-account token.
+ * Every `op` call reads it, so a keyring monitor matches it by attribute rather than object path:
+ * rotating the token recreates the item at a new path.
+ */
+export const ONE_PASSWORD_SERVICE_ACCOUNT_KEYRING_ATTRIBUTES: Readonly<Record<string, string>> = {
+  service: "1password",
+  key: "service-account",
+};

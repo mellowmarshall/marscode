@@ -9,6 +9,11 @@ import {
 import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { isLoopbackHost, LSOF_LOCAL_HOST_TOKENS } from "@t3tools/shared/preview";
+import {
+  AGENT_THREAD_ENV,
+  parseProcEnvironValue,
+  parseProcStatParent,
+} from "@t3tools/shared/procIdentity";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -70,12 +75,6 @@ export class PortDiscovery extends Context.Service<
     ) => Effect.Effect<void, PreviewStopLocalServerError>;
   }
 >()("t3/preview/PortScanner/PortDiscovery") {}
-
-/**
- * Agents launch with this set to their thread, and every job they start inherits it, so a
- * server stays attributed after its launching shell exits or the agent settles.
- */
-export const AGENT_THREAD_ENV = "T3CODE_THREAD_ID";
 
 export interface AgentCommandStopWatcher {
   /** The variable the CLI sets on each command it starts, naming that command. */
@@ -390,14 +389,8 @@ const isProcessLauncherCmdline = (raw: string): boolean => {
   return false;
 };
 
-/** Reads `/proc/<pid>/environ`, whose entries are NUL-separated. */
 const parseProcEnvironThread = (raw: string): ThreadId | null => {
-  const prefix = `${AGENT_THREAD_ENV}=`;
-  const value = raw
-    .split("\0")
-    .find((entry) => entry.startsWith(prefix))
-    ?.slice(prefix.length)
-    .trim();
+  const value = parseProcEnvironValue(raw, AGENT_THREAD_ENV);
   return value ? ThreadId.make(value) : null;
 };
 
@@ -409,17 +402,6 @@ interface AgentListener {
   readonly threadId: ThreadId;
   readonly isAgentCli: boolean;
 }
-
-/** Reads the parent pid from `/proc/<pid>/stat`, whose command field can hold spaces. */
-const parseProcStatParent = (raw: string): number | null => {
-  const parent = Number(
-    raw
-      .slice(raw.lastIndexOf(")") + 1)
-      .trim()
-      .split(" ")[1],
-  );
-  return Number.isInteger(parent) ? parent : null;
-};
 
 /**
  * Reads macOS `ps -E -o pid=,ppid=,command=`, which appends each process's launch environment

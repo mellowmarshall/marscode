@@ -1,0 +1,31 @@
+{
+  "name": "@t3tools/secret-monitor",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./SecretMonitor": {
+      "types": "./src/SecretMonitor.ts",
+      "import": "./src/SecretMonitor.ts"
+    },
+    "./secretAccessHandler": {
+      "types": "./src/secretAccessHandler.ts",
+      "import": "./src/secretAccessHandler.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "effect-tsgo tsrs --noEmit",
+    "test": "vp test run --config ../../vite.config.ts --dir ."
+  },
+  "dependencies": {
+    "@t3tools/secret-provider-onepassword": "workspace:*",
+    "@t3tools/shared": "workspace:*",
+    "dbus-next": "0.10.2",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

@@ -114,6 +114,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { resolveAttachmentPath, resolveAttachmentPathById } from "../../attachmentStore.ts";
 import * as TrustedProviderRegistry from "../../devtools/TrustedProviderRegistry.ts";
+import * as ProcIdentity from "@t3tools/shared/procIdentity";
 import * as PortScanner from "../../preview/PortScanner.ts";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
@@ -1679,11 +1680,11 @@ function codexThreadRuntimeParams(input: {
       ...(input.threadId === null
         ? {}
         : {
-            [`shell_environment_policy.set.${PortScanner.AGENT_THREAD_ENV}`]: input.threadId,
+            [`shell_environment_policy.set.${ProcIdentity.AGENT_THREAD_ENV}`]: input.threadId,
             // Codex starts the user's stdio MCP servers per thread, outside the shell policy.
             ...Object.fromEntries(
               (input.stdioMcpServers ?? []).map((name) => [
-                `mcp_servers.${name}.env.${PortScanner.AGENT_THREAD_ENV}`,
+                `mcp_servers.${name}.env.${ProcIdentity.AGENT_THREAD_ENV}`,
                 input.threadId,
               ]),
             ),
@@ -1772,7 +1773,7 @@ function readCodexProtocolPath(value: unknown, ...path: ReadonlyArray<string>): 
 
 /** Codex sets this on every command it starts, to that command's item id. */
 const CODEX_COMMAND_ITEM_ENV = "CODEX_TOOL_CALL_ID";
-const CODEX_THREAD_ENV_CONFIG_KEY = `shell_environment_policy.set.${PortScanner.AGENT_THREAD_ENV}`;
+const CODEX_THREAD_ENV_CONFIG_KEY = `shell_environment_policy.set.${ProcIdentity.AGENT_THREAD_ENV}`;
 
 /**
  * One app-server serves every Codex thread on an instance, so each frame is routed to the

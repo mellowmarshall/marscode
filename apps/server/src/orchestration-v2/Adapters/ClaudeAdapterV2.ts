@@ -190,6 +190,7 @@ import {
   type CompiledClaudeModelSelection,
 } from "../../claudeModelOptions.ts";
 import * as ServerConfig from "../../config.ts";
+import * as ProcIdentity from "@t3tools/shared/procIdentity";
 import * as PortScanner from "../../preview/PortScanner.ts";
 import * as ProcessRunner from "../../processRunner.ts";
 import * as ServerSettings from "../../serverSettings.ts";
@@ -1734,7 +1735,7 @@ export const layerQueryRunner: Layer.Layer<
                 CLAUDE_CODE_RESUME_REASON: "user_resume",
               }
             : {}),
-          [PortScanner.AGENT_THREAD_ENV]: input.threadId,
+          [ProcIdentity.AGENT_THREAD_ENV]: input.threadId,
         },
       };
       // The SDK can prepend a scope wrapper to native binaries; script entries run through node.

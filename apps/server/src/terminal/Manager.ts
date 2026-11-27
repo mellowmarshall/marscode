@@ -76,6 +76,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { increment, terminalSessionsTotal } from "../observability/Metrics.ts";
 import { expandHomeVariable } from "@t3tools/provider-core/server/pathExpansion";
 import * as ProcessRunner from "../processRunner.ts";
+import * as ProcIdentity from "@t3tools/shared/procIdentity";
 import * as PortScanner from "../preview/PortScanner.ts";
 import * as NativeTelemetryClient from "../resourceTelemetry/NativeTelemetryClient.ts";
 import { terminalOutputStream } from "./OutputProtocol.ts";
@@ -1712,7 +1713,7 @@ function createTerminalSpawnEnv(
       );
     }
   }
-  spawnEnv[PortScanner.AGENT_THREAD_ENV] = threadId;
+  spawnEnv[ProcIdentity.AGENT_THREAD_ENV] = threadId;
   if (!spawnEnv.COLORTERM && runtimeEnv?.COLORTERM === undefined) {
     spawnEnv.COLORTERM = "truecolor";
   }
