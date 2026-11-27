@@ -478,10 +478,16 @@ describe("NativeFleetService + DevtoolsHttp integration + sq_route.py parity", (
         const selfBody = (await selfRes.json()) as {
           host: { name: string };
           servers: Array<Record<string, unknown>>;
-          sessions?: unknown;
+          sessions?: Array<Record<string, unknown>>;
         };
         expect(selfBody.host.name).toBe("dev-host-x");
-        expect(selfBody.sessions).toBeUndefined();
+        expect(Array.isArray(selfBody.sessions)).toBe(true);
+        for (const s of selfBody.sessions ?? []) {
+          expect(s.pid).toBeUndefined();
+          expect(s.command).toBeUndefined();
+          expect(s.cwd).toBeUndefined();
+          expect(s.close_allowed).toBe(false);
+        }
         for (const s of selfBody.servers) {
           expect(s.pid).toBeUndefined();
           expect(s.cwd).toBeUndefined();

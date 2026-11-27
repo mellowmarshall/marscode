@@ -41,8 +41,7 @@ import {
 import { refreshSharedDevdeck, useSharedCapabilities, useSharedDevdeck } from "./devtoolsStreams";
 import { FleetMachinesView } from "./FleetMachinesView";
 import { FleetReaperTab } from "./FleetReaperTab";
-import { refreshSharedJobs, useSharedJobs } from "./jobs/jobsStore";
-import { isHostJob } from "./jobs/jobTypes";
+import { useFleetHostJobs } from "./useFleetHostJobs";
 import { TallShipIcon } from "./TallShipIcon";
 
 const OPEN_OVERLAY_SELECTOR =
@@ -93,7 +92,6 @@ function FleetConsoleBody({ environmentId }: { readonly environmentId: Environme
 
   const capsState = useSharedCapabilities(environmentId);
   const devdeckState = useSharedDevdeck(environmentId, "active");
-  const jobsState = useSharedJobs(environmentId);
   const [feedback, setFeedback] = useState<ConsoleActionFeedback | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -114,14 +112,18 @@ function FleetConsoleBody({ environmentId }: { readonly environmentId: Environme
     mergedHosts[0] ??
     null;
 
-  const hostJobs = jobsState.jobs.filter(isHostJob);
+  const {
+    jobs: hostJobs,
+    targets: jobTargets,
+    refresh: refreshHostJobs,
+  } = useFleetHostJobs(environmentId, selectedHost);
   const onlineHostCount = mergedHosts.filter((h) => h.status !== "offline").length;
   const degradedHostCount = mergedHosts.filter((h) => h.status !== "online").length;
 
   const handleGlobalRefresh = async () => {
     setRefreshing(true);
     setFeedback({ tone: "busy", text: gt("Refreshing fleet telemetry…") });
-    await Promise.all([refreshSharedDevdeck(environmentId), refreshSharedJobs(environmentId)]);
+    await Promise.all([refreshSharedDevdeck(environmentId), refreshHostJobs()]);
     setRefreshing(false);
     setFeedback({ tone: "ok", text: gt("Fleet telemetry refreshed") });
   };
@@ -322,6 +324,7 @@ function FleetConsoleBody({ environmentId }: { readonly environmentId: Environme
             hosts={mergedHosts}
             selectedHost={selectedHost}
             hostJobs={hostJobs}
+            jobTargets={jobTargets}
             selectedJobId={selectedJobId}
             devdeckStatus={devdeckState.status}
             devdeckError={devdeckState.error}

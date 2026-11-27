@@ -8,6 +8,7 @@ import type {
 } from "./FleetTypes.ts";
 import { parseDockerPsLines } from "./DockerPsParser.ts";
 import { parseGpuLines, parseProcMeminfo, parseProcStat } from "./NativeHostSampler.ts";
+import { parseRemoteProcs, REMOTE_PROCS_PROBE } from "./RemoteProcsParser.ts";
 
 export const REMOTE_PROBE_SCRIPT = `os=$(uname)
 echo "---OS---"
@@ -56,7 +57,7 @@ else
     "$nv" --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null | awk -F',' 'NF==3{gsub(/ /,"",$1);gsub(/ /,"",$2);gsub(/ /,"",$3);print "NV "$1" "$2" "$3}'
   fi
 fi
-echo "---CPU---"; [ -z "$cpid" ] || { wait "$cpid" 2>/dev/null; cat "$tmp/cpu" 2>/dev/null; }
+${REMOTE_PROCS_PROBE}echo "---CPU---"; [ -z "$cpid" ] || { wait "$cpid" 2>/dev/null; cat "$tmp/cpu" 2>/dev/null; }
 echo "---DOCKER---"
 if [ -n "$docker" ]; then
   timeout 4 "$docker" ps -a --format '{{.ID}}\t{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Image}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.service"}}\t{{.Label "com.docker.compose.oneoff"}}\t{{.Label "com.docker.compose.project.working_dir"}}\t{{.Ports}}' 2>/dev/null || true
@@ -234,7 +235,7 @@ export function parseRemoteProbeOutput(
   return {
     host,
     servers,
-    sessions: [],
+    sessions: parseRemoteProcs(sec.get("PROCS") ?? ""),
     status: "up",
     is_local: false,
     ssh: sshAlias,

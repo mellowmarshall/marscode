@@ -118,7 +118,8 @@ export function setConsoleSection(section: FleetConsoleSection): void {
 
 export function setConsoleHost(host: string | null): void {
   if (state.selectedHost === host) return;
-  state = { ...state, selectedHost: host };
+  // A job key belongs to one host's view; a new host starts with no job open.
+  state = { ...state, selectedHost: host, selectedJobId: null };
   notify();
 }
 

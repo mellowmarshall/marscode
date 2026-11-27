@@ -31,6 +31,7 @@ import {
   FleetStorageReportBanner,
   type FleetStorageBannerData,
 } from "./FleetHostBanners";
+import { resolveFleetJobTarget, type FleetJobTarget } from "./fleetHostEnvironment";
 import { FleetJobsAndProcsPanel } from "./FleetJobsAndProcsPanel";
 import { FleetLocalhostsPanel, serverActionBody, serverActionPath } from "./FleetLocalhostsPanel";
 import { FleetThreadsPanel } from "./FleetThreadsPanel";
@@ -44,6 +45,7 @@ export function FleetMachinesView({
   hosts,
   selectedHost,
   hostJobs,
+  jobTargets,
   selectedJobId,
   devdeckStatus,
   devdeckError = null,
@@ -53,6 +55,8 @@ export function FleetMachinesView({
   readonly hosts: ReadonlyArray<MergedFleetHost>;
   readonly selectedHost: MergedFleetHost | null;
   readonly hostJobs: ReadonlyArray<JobSummary>;
+  /** Shown job key -> owning environment and real job id (remote hosts' own environments). */
+  readonly jobTargets?: ReadonlyMap<string, FleetJobTarget> | undefined;
   readonly selectedJobId: string | null;
   readonly devdeckStatus?: DevtoolsResourceStatus | undefined;
   readonly devdeckError?: string | null;
@@ -207,10 +211,13 @@ export function FleetMachinesView({
     }
   };
 
-  const handleCancelJob = async (jobId: string) => {
-    const res = await withBusyKey(`job:${jobId}`, () => cancelTrackedJob(environmentId, jobId));
+  const handleCancelJob = async (jobKey: string) => {
+    const target = resolveFleetJobTarget(jobTargets, jobKey, environmentId);
+    const res = await withBusyKey(`job:${jobKey}`, () =>
+      cancelTrackedJob(target.environmentId, target.jobId),
+    );
     if (res.ok) {
-      void refreshSharedJobs(environmentId);
+      void refreshSharedJobs(target.environmentId);
       onFeedback({ tone: "ok", text: gt("Sent cancel/kill signal to job") });
     } else {
       onFeedback({ tone: "error", text: res.error ?? gt("Failed to kill job") });
@@ -347,14 +354,17 @@ export function FleetMachinesView({
         : resolvedDevdeckStatus
       : null;
 
-  const handleOpenThread = (threadId: string) => {
+  const handleOpenThread = (threadId: string, threadEnvId: EnvironmentId = environmentId) => {
     setConsoleJobId(null);
     closeFleetConsole();
     void navigate({
       to: "/$environmentId/$threadId",
-      params: { environmentId, threadId },
+      params: { environmentId: threadEnvId, threadId },
     });
   };
+  const inspectedTarget = inspectedJob
+    ? resolveFleetJobTarget(jobTargets, inspectedJob.id, environmentId)
+    : null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -398,6 +408,7 @@ export function FleetMachinesView({
             <div className="space-y-4">
               <FleetThreadsPanel environmentId={environmentId} host={selectedHost} />
               <FleetJobsAndProcsPanel
+                key={selectedHost.id}
                 host={selectedHost}
                 hostJobs={hostJobs}
                 selectedJobId={selectedJobId}
@@ -442,20 +453,23 @@ export function FleetMachinesView({
             </SheetTitle>
           </SheetHeader>
           <div className="min-h-0 flex-1 overflow-y-auto border-t border-border/60 p-4">
-            {inspectedJob ? (
+            {inspectedJob && inspectedTarget ? (
               <DevtoolsErrorBoundary
                 panelName="Job Inspector"
-                resetKeys={[inspectedJob.id, inspectedJob.revision]}
+                resetKeys={[inspectedTarget.environmentId, inspectedJob.id, inspectedJob.revision]}
               >
                 <ManagedJobInspector
-                  environmentId={environmentId}
-                  job={inspectedJob}
+                  key={inspectedJob.id}
+                  environmentId={inspectedTarget.environmentId}
+                  job={{ ...inspectedJob, id: inspectedTarget.jobId }}
                   nowMs={nowMs}
                   localHost={selectedHost?.telemetry ?? null}
                   hosts={hosts}
                   cancelling={busyKeys.has(`job:${inspectedJob.id}`)}
                   onCancel={() => void handleCancelJob(inspectedJob.id)}
-                  onOpenThread={handleOpenThread}
+                  onOpenThread={(threadId) =>
+                    handleOpenThread(threadId, inspectedTarget.environmentId)
+                  }
                 />
               </DevtoolsErrorBoundary>
             ) : null}

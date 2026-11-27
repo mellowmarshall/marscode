@@ -10,6 +10,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import type { DevdeckSessionItem } from "./devtoolsClient";
 import type { MergedFleetHost } from "./devdeckTypes";
+import { fleetHostTokens, normalizeFleetHostToken } from "./fleetHostEnvironment";
 import {
   formatJobBytes,
   formatJobElapsed,
@@ -20,24 +21,10 @@ import {
   type JobSummary,
 } from "./jobs/jobTypes";
 
-function normalizeHostToken(raw: string | undefined): string {
-  return (raw ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/^dev-/, "")
-    .replace(/\.local$/, "")
-    .replace(/[^a-z0-9]+/g, "");
-}
-
 function jobMatchesFleetHost(job: JobSummary, host: MergedFleetHost): boolean {
-  const jh = normalizeHostToken(job.binding.host);
+  const jh = normalizeFleetHostToken(job.binding.host);
   if (!jh) return host.isLocal;
-  const tokens = new Set(
-    [host.id, host.shortName, host.probeHostName ?? "", ...host.members]
-      .map(normalizeHostToken)
-      .filter(Boolean),
-  );
-  return tokens.has(jh);
+  return fleetHostTokens(host).has(jh);
 }
 
 function isWatchdogTree(s: DevdeckSessionItem): boolean {
@@ -264,6 +251,15 @@ export function FleetJobsAndProcsPanel({
                           {sess.managed}
                         </Badge>
                       ) : null}
+                      {host.isLocal ? null : (
+                        <Badge
+                          size="sm"
+                          variant="secondary"
+                          title={sess.close_blocked_reason ?? gt("Close it from its own host")}
+                        >
+                          <T>View only</T>
+                        </Badge>
+                      )}
                     </div>
                     <div className="flex flex-wrap gap-x-2 font-mono text-3xs text-muted-foreground tabular-nums">
                       {sess.pid ? <span>{`PID ${sess.pid}`}</span> : null}

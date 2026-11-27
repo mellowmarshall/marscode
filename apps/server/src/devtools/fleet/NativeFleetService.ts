@@ -8,7 +8,11 @@ import type { HostPowerSnapshot, HostResourcesSnapshot } from "@t3tools/contract
 import { FleetActionTracker } from "./FleetActionTracker.ts";
 import { buildFleetAlertsPanel, defaultGitHubAuditPath } from "./FleetAlerts.ts";
 import { FleetCachedPanel } from "./FleetCachedPanel.ts";
-import { redactPeerServerItem } from "./FleetPeerWire.ts";
+import {
+  buildLocalHostTelemetry,
+  buildSelfNodeState,
+  type SelfNodeOptions,
+} from "./FleetSelfNode.ts";
 import { createFleetEventStream, type FleetSseListener } from "./FleetSseStream.ts";
 import type {
   FleetAction,
@@ -309,52 +313,28 @@ export class NativeFleetService {
   }
 
   private buildLocalHostFallback(forRouting = false): FleetHostTelemetry {
-    const latest = this.hostSampler.getLatest();
-    if (latest) {
-      return forRouting
-        ? { ...latest.host, cpu_hist: this.hostSampler.getRouteCpuHist() }
-        : latest.host;
-    }
-    return {
-      name: this.hostname,
-      uptime_s: Math.max(0, Math.floor(NodeOS.uptime())),
-      cpus: Math.max(1, NodeOS.cpus().length),
-      cpu_hist: [],
-      mem: {
-        used: Math.max(0, NodeOS.totalmem() - NodeOS.freemem()),
-        total: NodeOS.totalmem(),
-      },
-      disks: [],
-      ts: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
-    };
+    return buildLocalHostTelemetry(this.hostname, this.hostSampler, forRouting);
   }
 
-  getSelfNodeState(options?: {
-    readonly includeSessions?: boolean;
-    readonly redactPeer?: boolean;
-    readonly forRouting?: boolean;
-  }): FleetNodeState {
-    const latest = this.hostSampler.getLatest();
-    const host = this.buildLocalHostFallback(options?.forRouting ?? false);
-    const rawServers = this.serversScanner.getLatest();
-    const servers = options?.redactPeer ? rawServers.map(redactPeerServerItem) : rawServers;
-    return {
-      host,
-      servers,
-      ...(options?.includeSessions ? { sessions: this.sessionsScanner.getLatest() } : {}),
-      status: "up",
-      is_local: true,
-      ...(latest?.power.power ? { power: latest.power.power } : {}),
-      ...(latest?.power.powerSaver ? { power_saver: true } : {}),
-      updated_at: host.ts,
-    };
+  getSelfNodeState(options?: SelfNodeOptions): FleetNodeState {
+    return buildSelfNodeState(
+      {
+        hostname: this.hostname,
+        hostSampler: this.hostSampler,
+        servers: this.serversScanner.getLatest(),
+        sessions: this.sessionsScanner.getLatest(),
+      },
+      options,
+    );
   }
 
   async readFreshSelfNodeState(): Promise<FleetNodeState> {
     if (!this.hostSampler.getLatest()) {
       await this.sampleLocalHost(false);
     }
-    return this.getSelfNodeState({ includeSessions: false, redactPeer: true, forRouting: false });
+    // Peers read hot processes from here, so a stale scan refreshes first (TTL-bounded).
+    await this.ensureRecentWorkloadScan();
+    return this.getSelfNodeState({ includeSessions: true, redactPeer: true, forRouting: false });
   }
 
   getNodesMap(forRouting = false): Readonly<Record<string, FleetNodeState>> {

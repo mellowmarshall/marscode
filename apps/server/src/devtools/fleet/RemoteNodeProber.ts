@@ -10,6 +10,7 @@ import {
   type FleetNodeState,
   type FleetServerItem,
 } from "./FleetTypes.ts";
+import { sanitizeRemoteSessions } from "./FleetPeerWire.ts";
 import { parseRemoteProbeOutput, REMOTE_PROBE_SCRIPT } from "./RemoteProbeParser.ts";
 
 const PEER_FETCH_TIMEOUT_MS = 4_000;
@@ -37,7 +38,7 @@ function normalizeToken(raw: string): string {
     .toLowerCase()
     .replace(/^dev-/, "")
     .replace(/\.local$/, "")
-    .replace(/\s+wsl$/, "")
+    .replace(/(?:[\s_-]+wsl)+$/, "")
     .replace(/[^a-z0-9]+/g, "");
 }
 
@@ -152,7 +153,7 @@ export function sanitizePeerNodeState(
   return {
     host,
     servers,
-    sessions: [],
+    sessions: sanitizeRemoteSessions(rec.sessions),
     status: "up",
     is_local: false,
     ssh: entry.ssh,

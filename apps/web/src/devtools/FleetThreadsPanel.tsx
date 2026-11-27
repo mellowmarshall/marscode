@@ -14,19 +14,11 @@ import { useEnvironments } from "../state/environments";
 import type { MergedFleetHost } from "./devdeckTypes";
 import { useSharedShipQueueDeps } from "./devtoolsDepsStore";
 import { closeFleetConsole, useDevtoolsSelector } from "./devtoolsStore";
-import { readCachedCapabilities } from "./devtoolsStreams";
+import { matchHostEnvironmentId } from "./fleetHostEnvironment";
 import { useSharedJobs } from "./jobs/jobsStore";
 import { isShipQueueJobLive } from "./ShipQueueSteps";
 import { deriveThreadDevtoolsApprovals } from "./threadApprovals";
 import { collectDescendantSubagentIds } from "./useThreadDevtoolsApprovals";
-
-function normalizeHostToken(raw: string | null | undefined): string {
-  return (raw ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/\.local$/, "")
-    .replace(/[^a-z0-9]+/g, "");
-}
 
 function formatRelativeShort(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -39,34 +31,6 @@ function formatRelativeShort(iso: string | null | undefined): string {
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h`;
   return `${Math.floor(hrs / 24)}d`;
-}
-
-function matchHostEnvironmentId(
-  host: MergedFleetHost,
-  activeEnvironmentId: EnvironmentId,
-  environments: ReadonlyArray<{
-    readonly environmentId: EnvironmentId;
-    readonly label: string;
-    readonly serverConfig: { readonly environment: { readonly label: string } } | null;
-  }>,
-): EnvironmentId | null {
-  if (host.isLocal) return activeEnvironmentId;
-  const hostTokens = new Set(
-    [host.id, host.shortName, host.probeHostName ?? "", ...host.members]
-      .map(normalizeHostToken)
-      .filter(Boolean),
-  );
-  for (const env of environments) {
-    const capHost = readCachedCapabilities(env.environmentId)?.capabilities?.host;
-    const candidates = [capHost, env.serverConfig?.environment.label, env.label];
-    for (const candidate of candidates) {
-      const token = normalizeHostToken(candidate);
-      if (token && hostTokens.has(token)) {
-        return env.environmentId;
-      }
-    }
-  }
-  return null;
 }
 
 function threadStatusRank(status: ReturnType<typeof resolveSidebarRowStatus>): number {
