@@ -100,9 +100,5 @@ export async function handleNativeFleetRequest(
     return { status: 200, body: fleet.kickNode(decodeURIComponent(kickMatch[1])) };
   }
 
-  if (cleanPath === "/api/usage/refresh") {
-    return { status: 200, body: { ok: true } };
-  }
-
   return { status: 404, body: { error: "Fleet action not found" } };
 }

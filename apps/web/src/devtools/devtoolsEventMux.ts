@@ -60,7 +60,6 @@ const TOPIC_EVENTS: Readonly<Record<BaseMuxTopic, ReadonlyArray<string>>> = {
     "hosts",
     "alerts",
     "ship",
-    "usage",
     "worktrees",
     "unavailable",
   ],
@@ -104,7 +103,7 @@ function computeDesiredQuery(ch: MuxChannel): {
 
   const query: Record<string, string> = { topics: topics.join(",") };
   if (wantDevdeckActive) {
-    query.panels = "host,servers,sessions,nodes,hosts,alerts,ship,usage,worktrees";
+    query.panels = "host,servers,sessions,nodes,hosts,alerts,ship,worktrees";
   } else if (wantDevdeckPassive) {
     query.panels = "sessions,ship";
     query.passive = "1";

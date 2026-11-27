@@ -130,12 +130,6 @@ export function defaultHostConfigPath(): string {
   return NodePath.join(NodeOS.homedir(), ".local", "lib", "ship-queue", "host-config.json");
 }
 
-function defaultUsageStatePath(): string {
-  const stateHome =
-    process.env.XDG_STATE_HOME?.trim() || NodePath.join(NodeOS.homedir(), ".local", "state");
-  return NodePath.join(stateHome, "usage", "state.json");
-}
-
 function normalizeProviderId(raw: unknown): string {
   if (typeof raw !== "string") return "";
   const trimmed = raw.trim();
@@ -465,102 +459,17 @@ function remainingFromUsageLimits(
   return Math.max(0, Math.min(100, Math.round((100 - Math.max(...activeUsed)) * 10) / 10));
 }
 
-const usageBoardCache = new Map<
-  string,
-  { readonly mtimeMs: number; readonly size: number; readonly providers: Record<string, unknown> }
->();
-
-function readUsageBoardRemaining(
-  usageStatePath: string,
-  nowMs: number,
-): Record<string, number | null> {
-  const result: Record<string, number | null> = {};
-  let providers: Record<string, unknown> = {};
-  try {
-    const stat = NodeFS.statSync(usageStatePath);
-    const cached = usageBoardCache.get(usageStatePath);
-    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-      providers = cached.providers;
-    } else {
-      const parsed = JSON.parse(NodeFS.readFileSync(usageStatePath, "utf8"));
-      if (
-        parsed &&
-        typeof parsed === "object" &&
-        parsed.providers &&
-        typeof parsed.providers === "object"
-      ) {
-        providers = parsed.providers as Record<string, unknown>;
-      }
-      usageBoardCache.set(usageStatePath, {
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-        providers,
-      });
-    }
-  } catch {
-    usageBoardCache.delete(usageStatePath);
-    return result;
-  }
-
-  const entryRemaining = (entry: Record<string, unknown>, bucketPrefix?: string): number | null => {
-    const rows = entry.ok ? entry.rows : entry.last_ok_rows;
-    if (!Array.isArray(rows) || rows.length === 0) return null;
-    const used: number[] = [];
-    for (const rawRow of rows) {
-      if (!rawRow || typeof rawRow !== "object") continue;
-      const row = rawRow as Record<string, unknown>;
-      const label = typeof row.label === "string" ? row.label : "";
-      if (bucketPrefix && !label.toLowerCase().startsWith(bucketPrefix.toLowerCase())) continue;
-      if (typeof row.used_pct !== "number" || !Number.isFinite(row.used_pct)) continue;
-      if (typeof row.resets_at === "string" && row.resets_at.trim()) {
-        const ts = Date.parse(row.resets_at);
-        if (Number.isFinite(ts) && ts <= nowMs) continue;
-      }
-      used.push(row.used_pct);
-    }
-    if (used.length === 0) return null;
-    return Math.max(0, Math.min(100, Math.round((100 - Math.max(...used)) * 10) / 10));
-  };
-
-  const claudeAccounts: number[] = [];
-  for (const [name, rawEntry] of Object.entries(providers)) {
-    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) continue;
-    const entry = rawEntry as Record<string, unknown>;
-    if (name.startsWith("claude/")) {
-      const rem = entryRemaining(entry);
-      if (rem !== null) claudeAccounts.push(rem);
-    } else if (name === "codex") {
-      result.codex = entryRemaining(entry);
-    } else if (name === "gemini") {
-      result["antigravity:gemini"] = entryRemaining(entry, "gemini/");
-      result["antigravity:claude+gpt"] = entryRemaining(entry, "claude+gpt/");
-      result.antigravity = result["antigravity:gemini"] ?? entryRemaining(entry);
-    } else if (name === "grok") {
-      result.grok = entryRemaining(entry);
-    } else if (name === "zai") {
-      result.acpRegistry_glm_agent = entryRemaining(entry);
-    }
-  }
-  if (claudeAccounts.length > 0) {
-    result.claudeAgent = Math.max(...claudeAccounts);
-  } else if (providers.claude && typeof providers.claude === "object") {
-    result.claudeAgent = entryRemaining(providers.claude as Record<string, unknown>);
-  }
-  return result;
-}
-
 function collectUsageRemainingMap(
   options: {
     readonly providers?: ReadonlyArray<ServerProvider> | undefined;
     readonly limitSources?: ReadonlyArray<UsageLimitSourceSnapshot> | undefined;
-    readonly usageStatePath?: string | undefined;
     readonly nowMs?: number | undefined;
   } = {},
 ): Record<string, number | null> {
   const nowMs = options.nowMs ?? Date.now();
-  const map = readUsageBoardRemaining(options.usageStatePath ?? defaultUsageStatePath(), nowMs);
+  const map: Record<string, number | null> = {};
 
-  // Overlay live T3 Code provider usageLimits (most authoritative when available).
+  // Live T3 Code provider usageLimits.
   for (const prov of options.providers ?? []) {
     const key = normalizeProviderId(prov.instanceId);
     const rem = remainingFromUsageLimits(prov.usageLimits, nowMs);
@@ -617,7 +526,6 @@ export function resolveReviewRolePlan(
     readonly providers?: ReadonlyArray<ServerProvider> | undefined;
     readonly limitSources?: ReadonlyArray<UsageLimitSourceSnapshot> | undefined;
     readonly availability?: Readonly<Record<string, boolean>> | undefined;
-    readonly usageStatePath?: string | undefined;
     readonly nowMs?: number | undefined;
   } = {},
 ): ResolvedRolePlan {

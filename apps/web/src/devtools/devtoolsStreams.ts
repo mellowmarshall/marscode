@@ -27,7 +27,6 @@ import {
   type DevdeckServerItem,
   type DevdeckSessionItem,
   type DevdeckShipPanel,
-  type DevdeckUsagePanel,
   type DevdeckWorktreesPanel,
   type DevleaseOverview,
   type DevtoolsCapabilities,
@@ -62,7 +61,6 @@ export interface SharedDevdeckPanels {
   readonly hosts: DevdeckHostsPanel | null;
   readonly alerts: DevdeckAlertsPanel | null;
   readonly ship: DevdeckShipPanel | null;
-  readonly usage: DevdeckUsagePanel | null;
   readonly worktrees: DevdeckWorktreesPanel | null;
 }
 
@@ -176,12 +174,6 @@ function parseShip(raw: unknown): DevdeckShipPanel | null | undefined {
   return decoded;
 }
 
-function parseUsage(raw: unknown): DevdeckUsagePanel | null | undefined {
-  if (raw === null) return null;
-  if (typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  return raw as DevdeckUsagePanel;
-}
-
 function parseWorktrees(raw: unknown): DevdeckWorktreesPanel | null | undefined {
   if (raw === null) return null;
   if (typeof raw !== "object" || Array.isArray(raw)) return undefined;
@@ -200,7 +192,6 @@ function mergeDevdeckPanels(
     hosts: patch.hosts !== undefined ? patch.hosts : (prev?.hosts ?? null),
     alerts: patch.alerts !== undefined ? patch.alerts : (prev?.alerts ?? null),
     ship: patch.ship !== undefined ? patch.ship : (prev?.ship ?? null),
-    usage: patch.usage !== undefined ? patch.usage : (prev?.usage ?? null),
     worktrees: patch.worktrees !== undefined ? patch.worktrees : (prev?.worktrees ?? null),
   };
 }
@@ -682,7 +673,6 @@ const DEVDECK_PANEL_PARSERS: Readonly<
   hosts: parseHosts,
   alerts: parseAlerts,
   ship: parseShip,
-  usage: parseUsage,
   worktrees: parseWorktrees,
 };
 
@@ -705,7 +695,6 @@ function applyDevdeckSnapshotJson(ch: DevdeckChannel, rawData: string): void {
         ...("hosts" in parsed ? { hosts: parseHosts(parsed.hosts) } : {}),
         ...("alerts" in parsed ? { alerts: parseAlerts(parsed.alerts) } : {}),
         ...("ship" in parsed ? { ship: parseShip(parsed.ship) } : {}),
-        ...("usage" in parsed ? { usage: parseUsage(parsed.usage) } : {}),
         ...("worktrees" in parsed ? { worktrees: parseWorktrees(parsed.worktrees) } : {}),
       }),
       live: true,
@@ -935,7 +924,7 @@ function connectDevdeckChannel(ch: DevdeckChannel): void {
 
       const query: Record<string, string> =
         mode === "active"
-          ? { panels: "host,servers,sessions,nodes,hosts,alerts,ship,usage,worktrees" }
+          ? { panels: "host,servers,sessions,nodes,hosts,alerts,ship,worktrees" }
           : { panels: "sessions,ship", passive: "1" };
 
       const url = buildDevtoolsStreamUrl(access, "/devdeck/events", query);
@@ -969,7 +958,6 @@ function connectDevdeckChannel(ch: DevdeckChannel): void {
                 ...("hosts" in parsed ? { hosts: parseHosts(parsed.hosts) } : {}),
                 ...("alerts" in parsed ? { alerts: parseAlerts(parsed.alerts) } : {}),
                 ...("ship" in parsed ? { ship: parseShip(parsed.ship) } : {}),
-                ...("usage" in parsed ? { usage: parseUsage(parsed.usage) } : {}),
                 ...("worktrees" in parsed ? { worktrees: parseWorktrees(parsed.worktrees) } : {}),
               }),
               live: true,
@@ -1016,7 +1004,6 @@ function connectDevdeckChannel(ch: DevdeckChannel): void {
       bindPanel("hosts", "hosts", parseHosts);
       bindPanel("alerts", "alerts", parseAlerts);
       bindPanel("ship", "ship", parseShip);
-      bindPanel("usage", "usage", parseUsage);
       bindPanel("worktrees", "worktrees", parseWorktrees);
 
       es.addEventListener("unavailable", () => {
@@ -1168,7 +1155,7 @@ export async function refreshSharedDevdeck(envId: EnvironmentId): Promise<void> 
   await ensureCapabilities(envId, true);
   const wasUnhealthy = !ch.snapshot.live || ch.snapshot.error !== null;
   const res = await fetchDevtoolsJson<Record<string, unknown>>(envId, "/devdeck/snapshot", {
-    query: { panels: "host,servers,sessions,nodes,hosts,alerts,ship,usage,worktrees" },
+    query: { panels: "host,servers,sessions,nodes,hosts,alerts,ship,worktrees" },
   });
   if (res.ok && res.data) {
     ch.lastRawByPanel.clear();
@@ -1182,7 +1169,6 @@ export async function refreshSharedDevdeck(envId: EnvironmentId): Promise<void> 
         ...("hosts" in res.data ? { hosts: parseHosts(res.data.hosts) } : {}),
         ...("alerts" in res.data ? { alerts: parseAlerts(res.data.alerts) } : {}),
         ...("ship" in res.data ? { ship: parseShip(res.data.ship) } : {}),
-        ...("usage" in res.data ? { usage: parseUsage(res.data.usage) } : {}),
         ...("worktrees" in res.data ? { worktrees: parseWorktrees(res.data.worktrees) } : {}),
       }),
       error: null,

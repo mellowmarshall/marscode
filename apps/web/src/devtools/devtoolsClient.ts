@@ -88,7 +88,6 @@ export type {
   DevdeckShipHostCheck,
   DevdeckShipPanel,
   DevdeckToolProbe,
-  DevdeckUsagePanel,
   DevdeckWorktreesPanel,
   MergedFleetHost,
   NormalizedWaiver,

@@ -4,6 +4,11 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { afterEach, describe, expect, it } from "@effect/vitest";
+import {
+  ProviderDriverKind,
+  UsageLimitSourceId,
+  type UsageLimitSourceSnapshot,
+} from "@t3tools/contracts";
 
 import {
   DEFAULT_DEVTOOLS_HOST_CONFIG,
@@ -44,6 +49,37 @@ function makeTempDir(prefix: string): string {
   tempDirs.push(dir);
   return dir;
 }
+
+type TestWindow = { readonly usedPercent: number; readonly resetsAt: string };
+
+function limitSource(
+  accounts: ReadonlyArray<{ readonly driver: string; readonly windows: ReadonlyArray<TestWindow> }>,
+): UsageLimitSourceSnapshot {
+  const checkedAt = "2026-01-01T00:00:00Z";
+  return {
+    id: UsageLimitSourceId.make("test-hub"),
+    kind: "cliproxy",
+    label: "Test hub",
+    checkedAt,
+    accounts: accounts.map((acc, idx) => ({
+      id: `${acc.driver}-${idx}`,
+      driver: ProviderDriverKind.make(acc.driver),
+      usageLimits: {
+        checkedAt,
+        windows: acc.windows.map((w, wIdx) => ({
+          id: `w${wIdx}`,
+          kind: "weekly" as const,
+          label: `w${wIdx}`,
+          usedPercent: w.usedPercent,
+          resetsAt: w.resetsAt,
+        })),
+      },
+    })),
+  };
+}
+
+const FUTURE = "2099-01-01T00:00:00Z";
+const PAST = "2020-01-01T00:00:00Z";
 
 afterEach(() => {
   _resetFleetConfigCacheForTests();
@@ -97,38 +133,21 @@ describe("DevtoolsConfig & usage-based review model resolution", () => {
   });
 
   it("picks default first when healthy, and auto-picks highest remaining usage fallback when default is below threshold", () => {
-    const dir = makeTempDir("t3-devtools-usage-");
-    const usagePath = NodePath.join(dir, "usage.json");
-    NodeFS.writeFileSync(
-      usagePath,
-      JSON.stringify({
-        providers: {
-          codex: {
-            ok: true,
-            rows: [{ label: "main/week", used_pct: 96, resets_at: "2099-01-01T00:00:00Z" }],
-          },
-          "claude/a@example.com": {
-            ok: true,
-            rows: [{ label: "week", used_pct: 30, resets_at: "2099-01-01T00:00:00Z" }],
-          },
-          "claude/b@example.com": {
-            ok: true,
-            rows: [{ label: "week", used_pct: 5, resets_at: "2099-01-01T00:00:00Z" }],
-          },
-          gemini: {
-            ok: true,
-            rows: [
-              { label: "gemini/week", used_pct: 25, resets_at: "2099-01-01T00:00:00Z" },
-              { label: "gemini/5h", used_pct: 99, resets_at: "2020-01-01T00:00:00Z" },
-            ],
-          },
-          grok: {
-            ok: true,
-            rows: [{ label: "week", used_pct: 12, resets_at: "2099-01-01T00:00:00Z" }],
-          },
+    const limitSources = [
+      limitSource([
+        { driver: "codex", windows: [{ usedPercent: 96, resetsAt: FUTURE }] },
+        { driver: "claudeAgent", windows: [{ usedPercent: 30, resetsAt: FUTURE }] },
+        { driver: "claudeAgent", windows: [{ usedPercent: 5, resetsAt: FUTURE }] },
+        {
+          driver: "antigravity",
+          windows: [
+            { usedPercent: 25, resetsAt: FUTURE },
+            { usedPercent: 99, resetsAt: PAST },
+          ],
         },
-      }),
-    );
+        { driver: "grok", windows: [{ usedPercent: 12, resetsAt: FUTURE }] },
+      ]),
+    ];
 
     const cfg = {
       ...DEFAULT_DEVTOOLS_HOST_CONFIG,
@@ -143,7 +162,7 @@ describe("DevtoolsConfig & usage-based review model resolution", () => {
       },
     };
 
-    const pbPlan = resolveReviewRolePlan("playbook_challenge", cfg, { usageStatePath: usagePath });
+    const pbPlan = resolveReviewRolePlan("playbook_challenge", cfg, { limitSources });
     expect(pbPlan.fallbackUsed).toBe(true);
     // Claude proxy best account has 95% remaining > Grok 88% > Gemini 75% (expired 5h ignored)
     expect(pbPlan.selected.provider).toBe("claudeAgent");
@@ -155,7 +174,7 @@ describe("DevtoolsConfig & usage-based review model resolution", () => {
       "codex",
     ]);
 
-    const sqPlan = resolveReviewRolePlan("ship_queue_review", cfg, { usageStatePath: usagePath });
+    const sqPlan = resolveReviewRolePlan("ship_queue_review", cfg, { limitSources });
     expect(sqPlan.fallbackUsed).toBe(false);
     expect(sqPlan.selected.provider).toBe("claudeAgent");
     expect(sqPlan.selected.model).toBe("claude-fable-5-2");
@@ -315,22 +334,12 @@ describe("ReviewStats aggregation (reviewer + submitter sides)", () => {
     expect(invalidWrite.ok).toBe(false);
 
     // M5: default at 9% (< 10% threshold) still beats fallback at 1%.
-    const m5UsagePath = NodePath.join(dir, "usage-m5.json");
-    NodeFS.writeFileSync(
-      m5UsagePath,
-      JSON.stringify({
-        providers: {
-          codex: {
-            ok: true,
-            rows: [{ label: "main/week", used_pct: 91, resets_at: "2099-01-01T00:00:00Z" }],
-          },
-          "claude/a@example.com": {
-            ok: true,
-            rows: [{ label: "week", used_pct: 99, resets_at: "2099-01-01T00:00:00Z" }],
-          },
-        },
-      }),
-    );
+    const m5LimitSources = [
+      limitSource([
+        { driver: "codex", windows: [{ usedPercent: 91, resetsAt: FUTURE }] },
+        { driver: "claudeAgent", windows: [{ usedPercent: 99, resetsAt: FUTURE }] },
+      ]),
+    ];
     const plan = resolveReviewRolePlan(
       "playbook_challenge",
       {
@@ -341,7 +350,7 @@ describe("ReviewStats aggregation (reviewer + submitter sides)", () => {
           min_remaining_pct: 10,
         },
       },
-      { usageStatePath: m5UsagePath },
+      { limitSources: m5LimitSources },
     );
     expect(plan.selected.provider).toBe("codex");
     expect(plan.fallbackUsed).toBe(false);

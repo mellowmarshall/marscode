@@ -72,27 +72,6 @@ export interface DevdeckServerItem {
   readonly guest?: string;
 }
 
-export interface DevdeckUsageLimit {
-  readonly label?: string;
-  readonly used_pct?: number;
-  readonly resets_at?: string;
-}
-
-export interface DevdeckUsageProvider {
-  readonly id?: string;
-  readonly name?: string;
-  readonly account?: string;
-  readonly status?: string;
-  readonly reason?: string;
-  readonly limits?: ReadonlyArray<DevdeckUsageLimit>;
-}
-
-export interface DevdeckUsagePanel {
-  readonly collected_at?: string;
-  readonly stale?: boolean;
-  readonly providers?: ReadonlyArray<DevdeckUsageProvider>;
-}
-
 export interface DevdeckWorktreeItem {
   readonly path?: string;
   readonly branch?: string;

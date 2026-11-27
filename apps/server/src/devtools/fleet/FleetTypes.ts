@@ -135,7 +135,6 @@ export interface FleetSnapshot {
   readonly hosts: FleetHostsPanel;
   readonly alerts: { readonly items: ReadonlyArray<never> };
   readonly worktrees: null;
-  readonly usage: null;
 }
 
 export interface CiHostManifestEntry {

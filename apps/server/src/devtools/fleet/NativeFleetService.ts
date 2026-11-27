@@ -394,7 +394,6 @@ export class NativeFleetService {
       hosts: this.ciHosts.getPanel(),
       alerts: { items: [] },
       worktrees: null,
-      usage: null,
     };
     if (!requestedPanels || requestedPanels.size === 0) {
       return full as unknown as Record<string, unknown>;

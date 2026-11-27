@@ -22,7 +22,6 @@ const ALLOWED_POST_PATHS: ReadonlyArray<RegExp> = [
   new RegExp(`^/api/servers/${SAFE_SEG}/${SAFE_SEG}/(start|stop)$`),
   /^\/api\/hosts\/check$/,
   new RegExp(`^/api/hosts/${SAFE_SEG}/(provision|ci)$`),
-  /^\/api\/usage\/refresh$/,
   SESSION_CLOSE_PATH_RE,
   new RegExp(`^/api/nodes/${SAFE_SEG}/kick$`),
 ];
