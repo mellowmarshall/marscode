@@ -536,6 +536,10 @@ describe("sq_pins.json specification validation, version extraction, digests, an
     expect(vpPin).toBeDefined();
     expect(vpPin?.depName).toBe("voidzero-dev/vite-plus");
 
+    const sccachePin = spec.pins.find((p) => p.name === "sccache");
+    expect(sccachePin).toBeDefined();
+    expect(sccachePin?.depName).toBe("mozilla/sccache");
+
     const sampleHostsObj = JSON.parse(
       NodeFS.readFileSync(
         NodePath.join(repoRoot, "infra", "ci-host", "ci-hosts.example.json"),
@@ -544,6 +548,8 @@ describe("sq_pins.json specification validation, version extraction, digests, an
     ) as { toolchain: Record<string, unknown> };
     const singleLineVpManifest = `{\n  "vp": ${JSON.stringify(sampleHostsObj.toolchain.vp)}\n}`;
     expect(extractCurrentPinValue(singleLineVpManifest, vpPin!)).toBe("0.1.18");
+    const singleLineSccacheManifest = `{\n  "sccache": ${JSON.stringify(sampleHostsObj.toolchain.sccache)}\n}`;
+    expect(extractCurrentPinValue(singleLineSccacheManifest, sccachePin!)).toBe("0.20.1");
 
     const digests = computePinDigests(
       { "infra/ci-host/ci-hosts.json": singleLineVpManifest },

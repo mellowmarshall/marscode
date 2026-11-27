@@ -115,6 +115,12 @@ export function resolveStepArgv(
   return { ok: true, argv: ["bash", scriptPath, ...parsed.args, ...extraArgs] };
 }
 
+/** Short per-job Unix socket path (fits macOS's 104-byte `sun_path` limit). */
+export function buildSccacheSocketPath(jobId: string): string {
+  const safeId = jobId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 32) || "job";
+  return `/tmp/sq-sc-${safeId}.sock`;
+}
+
 /**
  * Builds the environment for local step execution using the ONE unified `buildToolchainEnv`.
  * In `ci` mode, scrubs all ambient secret variables and injects only the declared secrets.
@@ -130,6 +136,8 @@ export function buildLocalStepEnv(input: {
   const env = buildToolchainEnv(input.baseEnv ?? process.env, {
     homeDir: input.homeDir,
     dataRoot: input.ctx.dataRoot,
+    worktreeDir: input.ctx.worktree,
+    sccacheSocketPath: buildSccacheSocketPath(input.ctx.jobId),
   });
 
   env.SHIP_QUEUE_JOB = input.ctx.jobId;
@@ -176,6 +184,9 @@ export function buildLocalStepEnv(input: {
   }
   if (input.mode === "ci") {
     env.SHIP_QUEUE_CI = "1";
+    if (env.RUSTC_WRAPPER === "sccache") {
+      env.CARGO_INCREMENTAL = "0";
+    }
     if (!input.withholdSecrets && input.secrets) {
       for (const [key, value] of Object.entries(input.secrets)) {
         env[key] = value;
@@ -248,8 +259,10 @@ export function buildRemoteStepScript(input: {
     ...(input.ctx.tipSha ? [`SHIP_QUEUE_TIP=${shellSingleQuote(input.ctx.tipSha)}`] : []),
   ].join(" ");
 
+  const remoteSocketPath = buildSccacheSocketPath(input.ctx.jobId);
   return [
     setup,
+    `if [ "\${RUSTC_WRAPPER:-}" = sccache ]; then export CARGO_INCREMENTAL=0 SCCACHE_BASEDIRS=${shellSingleQuote(`${input.remoteWorktree}:`)}"${dataRootShell}" SCCACHE_SERVER_UDS=${shellSingleQuote(remoteSocketPath)}; fi`,
     `cd ${shellSingleQuote(input.remoteWorktree)} || exit 99`,
     `sq_g=$(git rev-parse --absolute-git-dir) || exit 99`,
     `mkdir -p "$sq_g/ship-queue-playbook-evidence" || exit 99`,

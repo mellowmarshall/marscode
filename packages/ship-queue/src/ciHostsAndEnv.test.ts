@@ -89,6 +89,8 @@ describe("canonical ci-hosts.json loader and validator", () => {
     expect(loaded.manifest?.hosts.map((h) => h.name)).toEqual(["local", "ci-host-1"]);
     expect(loaded.manifest?.toolchain.vp?.probe).toBe("vp --version");
     expect(loaded.manifest?.toolchain.vp?.install).toContain("ci-vp.sh");
+    expect(loaded.manifest?.toolchain.sccache?.probe).toBe("sccache --version");
+    expect(loaded.manifest?.toolchain.sccache?.install).toContain("ci-sccache.sh");
   });
 
   it("rejects malformed hosts, bad SSH aliases, unsafe data_root, and invalid versions", () => {
@@ -145,15 +147,56 @@ describe("unified toolchain PATH/env builder parity", () => {
     expect(pathValue.split(":")).toContain(`${home}/.local/share/ship-queue-ci/bin`);
     expect(pathValue.split(":")).toContain(`${home}/.cargo/bin`);
 
-    const env = buildToolchainEnv({ PATH: "/usr/bin:/bin" }, { homeDir: home, dataRoot });
+    const env = buildToolchainEnv(
+      { PATH: "/usr/bin:/bin" },
+      {
+        homeDir: home,
+        dataRoot,
+        worktreeDir: "/tmp/test-data/demo/wt-a",
+        sccacheSocketPath: "/tmp/sq-sc-job-1.sock",
+        hasSccache: true,
+      },
+    );
     expect(env.VP_HOME).toBe(`${home}/.local/share/ship-queue-ci/vite-plus`);
     expect(env.SHIP_QUEUE_DATA_ROOT).toBe(dataRoot);
     expect(env.UV_PYTHON_PREFERENCE).toBe("only-managed");
+    expect(env.TURBO_CACHE_DIR).toBe(`${dataRoot}/turbo-cache`);
+    expect(env.UV_CACHE_DIR).toBe(`${dataRoot}/uv-cache`);
+    expect(env.RUSTC_WRAPPER).toBe("sccache");
+    expect(env.SCCACHE_DIR).toBe(`${dataRoot}/sccache`);
+    expect(env.SCCACHE_IDLE_TIMEOUT).toBe("60");
+    expect(env.SCCACHE_CLIENT_SIDE).toBe("1");
+    expect(env.SCCACHE_SERVER_UDS).toBe("/tmp/sq-sc-job-1.sock");
+    expect(env.SCCACHE_BASEDIRS).toBe(`/tmp/test-data/demo/wt-a:${dataRoot}`);
+    expect(env.SCCACHE_BASEDIRS_VERBATIM_ENV_DEPS).toBe("CARGO_MANIFEST_DIR,CARGO_MANIFEST_PATH");
+
+    const envWithCustomWrapper = buildToolchainEnv(
+      { PATH: "/usr/bin:/bin", RUSTC_WRAPPER: "/opt/custom-wrapper" },
+      { homeDir: home, dataRoot, hasSccache: true },
+    );
+    expect(envWithCustomWrapper.RUSTC_WRAPPER).toBe("/opt/custom-wrapper");
+    expect(envWithCustomWrapper.SCCACHE_DIR).toBeUndefined();
+
+    const envWithoutSccache = buildToolchainEnv(
+      { PATH: "/usr/bin:/bin" },
+      { homeDir: home, dataRoot, hasSccache: false },
+    );
+    expect(envWithoutSccache.TURBO_CACHE_DIR).toBe(`${dataRoot}/turbo-cache`);
+    expect(envWithoutSccache.UV_CACHE_DIR).toBe(`${dataRoot}/uv-cache`);
+    expect(envWithoutSccache.RUSTC_WRAPPER).toBeUndefined();
+    expect(envWithoutSccache.SCCACHE_DIR).toBeUndefined();
 
     const baseShellSetup = buildToolchainShellSetup();
     const stepShellSetup = buildToolchainShellSetup({ dataRootShell: "$HOME/Dev-data" });
     expect(baseShellSetup).toContain("$HOME/.vite-plus/bin");
     expect(baseShellSetup).toContain("VP_HOME=");
+    expect(stepShellSetup).toContain('TURBO_CACHE_DIR="$HOME/Dev-data/turbo-cache"');
+    expect(stepShellSetup).toContain('UV_CACHE_DIR="$HOME/Dev-data/uv-cache"');
+    expect(stepShellSetup).toContain('SCCACHE_DIR="$HOME/Dev-data/sccache"');
+    expect(stepShellSetup).toContain("SCCACHE_CLIENT_SIDE=1");
+    expect(stepShellSetup).toContain("CARGO_MANIFEST_DIR,CARGO_MANIFEST_PATH");
+    expect(stepShellSetup).not.toContain("OUT_DIR");
+    expect(stepShellSetup).not.toContain("'");
 
     const manifest = validateCiHostsManifest({
       schema: 1,
@@ -196,6 +239,38 @@ describe("unified toolchain PATH/env builder parity", () => {
     // Local step PATH contains the exact same ~/.vite-plus/bin and VP_HOME.
     expect(localStepEnv.PATH?.split(":")).toContain(`${home}/.vite-plus/bin`);
     expect(localStepEnv.VP_HOME).toBe(env.VP_HOME);
+    expect(localStepEnv.TURBO_CACHE_DIR).toBe(`${dataRoot}/turbo-cache`);
+    expect(localStepEnv.UV_CACHE_DIR).toBe(`${dataRoot}/uv-cache`);
+    expect(remoteStepScript).toContain("CARGO_INCREMENTAL=0");
+    expect(remoteStepScript).toContain("SCCACHE_BASEDIRS='/tmp/remote-wt:'\"$HOME/Dev-data\"");
+    expect(remoteStepScript).toContain("SCCACHE_SERVER_UDS='/tmp/sq-sc-job-1.sock'");
+
+    // When sccache is installed in PATH, CI mode isolates per-job socket + worktree basedir and disables incremental compilation.
+    const fakeBinDir = mkTempDir("sq-sccache-bin-");
+    const fakeSccache = NodePath.join(fakeBinDir, "sccache");
+    NodeFS.writeFileSync(fakeSccache, "#!/bin/sh\necho sccache 0.20.1\n", { mode: 0o755 });
+    const ciWithSccache = buildLocalStepEnv({
+      mode: "ci",
+      ctx: stepCtx,
+      baseEnv: { PATH: `${fakeBinDir}:/usr/bin:/bin` },
+      homeDir: home,
+    });
+    expect(ciWithSccache.RUSTC_WRAPPER).toBe("sccache");
+    expect(ciWithSccache.CARGO_INCREMENTAL).toBe("0");
+    expect(ciWithSccache.SCCACHE_CLIENT_SIDE).toBe("1");
+    expect(ciWithSccache.SCCACHE_SERVER_UDS).toBe("/tmp/sq-sc-job-1.sock");
+    expect(ciWithSccache.SCCACHE_BASEDIRS).toBe(`${stepCtx.worktree}:${dataRoot}`);
+
+    // Custom RUSTC_WRAPPER is preserved untouched without forcing CARGO_INCREMENTAL=0.
+    const ciWithCustomWrapper = buildLocalStepEnv({
+      mode: "ci",
+      ctx: stepCtx,
+      baseEnv: { PATH: `${fakeBinDir}:/usr/bin:/bin`, RUSTC_WRAPPER: "/opt/custom" },
+      homeDir: home,
+    });
+    expect(ciWithCustomWrapper.RUSTC_WRAPPER).toBe("/opt/custom");
+    expect(ciWithCustomWrapper.CARGO_INCREMENTAL).toBeUndefined();
+    expect(ciWithCustomWrapper.SCCACHE_DIR).toBeUndefined();
   });
 });
 

@@ -21,6 +21,10 @@ export const TOOLCHAIN_APPEND_REL_DIRS: ReadonlyArray<string> = [
 
 export const TOOLCHAIN_VP_HOME_REL_DIR = ".local/share/ship-queue-ci/vite-plus";
 
+export const DEFAULT_SCCACHE_CACHE_SIZE = "20G";
+export const DEFAULT_SCCACHE_IDLE_TIMEOUT = "60";
+export const SCCACHE_VERBATIM_ENV_DEPS = "CARGO_MANIFEST_DIR,CARGO_MANIFEST_PATH";
+
 export const TOOLCHAIN_STATIC_ENV: Readonly<Record<string, string>> = {
   FLY_NO_UPDATE_CHECK: "1",
   UV_PYTHON_PREFERENCE: "only-managed",
@@ -29,12 +33,30 @@ export const TOOLCHAIN_STATIC_ENV: Readonly<Record<string, string>> = {
 export interface ToolchainEnvOptions {
   readonly homeDir?: string | undefined;
   readonly dataRoot?: string | undefined;
+  readonly worktreeDir?: string | undefined;
+  readonly sccacheSocketPath?: string | undefined;
   readonly includeGnuDir?: boolean | undefined;
+  readonly hasSccache?: boolean | undefined;
   readonly pathSeparator?: string | undefined;
 }
 
 function joinHomeRel(homeDir: string, rel: string): string {
   return NodePath.posix.join(homeDir.replaceAll("\\", "/"), rel);
+}
+
+function hasExecutableInPath(pathValue: string, binName: string, sep: string): boolean {
+  for (const dir of pathValue.split(sep)) {
+    const trimmed = dir.trim();
+    if (!trimmed) continue;
+    const candidate = NodePath.join(trimmed, binName);
+    try {
+      NodeFS.accessSync(candidate, NodeFS.constants.X_OK);
+      return true;
+    } catch {
+      // continue searching PATH
+    }
+  }
+  return false;
 }
 
 /**
@@ -89,11 +111,33 @@ export function buildToolchainEnv(
   }
   out.VP_HOME = joinHomeRel(homeDir, TOOLCHAIN_VP_HOME_REL_DIR);
   if (options.dataRoot) {
+    const dataRootPosix = options.dataRoot.replaceAll("\\", "/");
+    // Pin all shared cache directories onto the declared data root so CI stays off `/`.
     out.SHIP_QUEUE_DATA_ROOT = options.dataRoot;
-    out.npm_config_store_dir = NodePath.posix.join(
-      options.dataRoot.replaceAll("\\", "/"),
-      "pnpm-store",
-    );
+    out.npm_config_store_dir = NodePath.posix.join(dataRootPosix, "pnpm-store");
+    out.TURBO_CACHE_DIR = NodePath.posix.join(dataRootPosix, "turbo-cache");
+    out.UV_CACHE_DIR = NodePath.posix.join(dataRootPosix, "uv-cache");
+    const customWrapper = Boolean(out.RUSTC_WRAPPER && out.RUSTC_WRAPPER !== "sccache");
+    const sccacheAvailable =
+      !customWrapper &&
+      (options.hasSccache ??
+        hasExecutableInPath(out.PATH, "sccache", options.pathSeparator ?? NodePath.delimiter));
+    if (sccacheAvailable) {
+      const worktreePosix = options.worktreeDir?.replaceAll("\\", "/");
+      out.RUSTC_WRAPPER = "sccache";
+      out.SCCACHE_DIR = NodePath.posix.join(dataRootPosix, "sccache");
+      out.SCCACHE_CACHE_SIZE = out.SCCACHE_CACHE_SIZE || DEFAULT_SCCACHE_CACHE_SIZE;
+      out.SCCACHE_IDLE_TIMEOUT = DEFAULT_SCCACHE_IDLE_TIMEOUT;
+      out.SCCACHE_CLIENT_SIDE = "1";
+      out.SCCACHE_BASEDIRS =
+        worktreePosix && worktreePosix !== dataRootPosix
+          ? `${worktreePosix}:${dataRootPosix}`
+          : dataRootPosix;
+      out.SCCACHE_BASEDIRS_VERBATIM_ENV_DEPS = SCCACHE_VERBATIM_ENV_DEPS;
+      if (options.sccacheSocketPath) {
+        out.SCCACHE_SERVER_UDS = options.sccacheSocketPath;
+      }
+    }
   }
   return out;
 }
@@ -162,7 +206,8 @@ export function buildToolchainShellSetup(options?: {
 
   if (options?.dataRootShell) {
     parts.push(
-      `export SHIP_QUEUE_DATA_ROOT="${options.dataRootShell}" npm_config_store_dir="${options.dataRootShell}/pnpm-store"`,
+      `export SHIP_QUEUE_DATA_ROOT="${options.dataRootShell}" npm_config_store_dir="${options.dataRootShell}/pnpm-store" TURBO_CACHE_DIR="${options.dataRootShell}/turbo-cache" UV_CACHE_DIR="${options.dataRootShell}/uv-cache"`,
+      `if [ -z "\${RUSTC_WRAPPER:-}" ] || [ "\${RUSTC_WRAPPER:-}" = sccache ]; then if command -v sccache >/dev/null 2>&1; then export RUSTC_WRAPPER=sccache SCCACHE_DIR="${options.dataRootShell}/sccache" SCCACHE_CACHE_SIZE="\${SCCACHE_CACHE_SIZE:-${DEFAULT_SCCACHE_CACHE_SIZE}}" SCCACHE_IDLE_TIMEOUT="${DEFAULT_SCCACHE_IDLE_TIMEOUT}" SCCACHE_CLIENT_SIDE=1 SCCACHE_BASEDIRS="${options.dataRootShell}" SCCACHE_BASEDIRS_VERBATIM_ENV_DEPS="${SCCACHE_VERBATIM_ENV_DEPS}"; fi; fi`,
     );
   }
 
