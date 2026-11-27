@@ -66,6 +66,7 @@ import * as ReaperPolicy from "./ReaperPolicy.ts";
 import * as ReaperScan from "./ReaperScan.ts";
 import * as ReviewStats from "./ReviewStats.ts";
 import * as StorageManifest from "./StorageManifest.ts";
+import * as TrustedProviderRegistry from "./TrustedProviderRegistry.ts";
 
 const DEVTOOLS_ROUTE_PREFIX = "/api/devtools";
 
@@ -1505,7 +1506,12 @@ export function makeLayer(deps: DevtoolsDeps = {}) {
       const pathSvc = yield* Path.Path;
       const serverConfig = yield* Effect.serviceOption(ServerConfig.ServerConfig);
       const settingsService = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
-      const broker = deps.broker ?? new GuardGrantBroker();
+      const trustedProviders = yield* TrustedProviderRegistry.TrustedProviderRegistry;
+      const broker =
+        deps.broker ??
+        new GuardGrantBroker({
+          getTrustedCodexAppServers: trustedProviders.snapshotCodexAppServers,
+        });
       const jobRegistry = yield* JobRegistry.JobRegistry;
       const sseLimiter = createSseLimiter();
       const shouldStart = deps.startBroker ?? shouldAutoStartBroker(pathSvc, serverConfig);

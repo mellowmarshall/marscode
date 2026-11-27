@@ -39,6 +39,7 @@ import * as DevdeckProxy from "./DevdeckProxy.ts";
 import * as DevtoolsHttp from "./DevtoolsHttp.ts";
 import * as JobRegistry from "./jobs/JobRegistry.ts";
 import { GuardGrantBroker, redactArgvCommand, type GuardBrokerEvent } from "./GuardGrantBroker.ts";
+import { makeTrustedProviderRegistry, readProcStartTime } from "./TrustedProviderRegistry.ts";
 
 const cleanupDirs: Array<string> = [];
 
@@ -761,6 +762,255 @@ if (mode === "direct") {
       await broker.close();
     }
   });
+
+  it("handles op=identify cleanly when peerPid is absent or peer verification fails", async () => {
+    const dir = mkTempDir("t3-guard-identify-meta-");
+    const customSock = NodePath.join(dir, "custom.sock");
+    const customBroker = new GuardGrantBroker({
+      socketPath: customSock,
+      resolvePeerThreadId: async () => ({ verified: true, threadId: "thread-custom-no-pid" }),
+    });
+    await customBroker.start("linux");
+    try {
+      const resp = await sendSocketNdjson(customSock, { v: 1, op: "identify" });
+      expect(resp).toEqual({ ok: true, thread_id: "thread-custom-no-pid" });
+      expect("pid" in resp).toBe(false);
+    } finally {
+      await customBroker.close();
+    }
+
+    const unverifiedSock = NodePath.join(dir, "unverified.sock");
+    const unverifiedBroker = new GuardGrantBroker({
+      socketPath: unverifiedSock,
+      resolvePeerThreadId: async () => ({
+        verified: false,
+        error: "cannot verify caller thread ownership",
+      }),
+    });
+    await unverifiedBroker.start("linux");
+    try {
+      const resp = await sendSocketNdjson(unverifiedSock, { v: 1, op: "identify" });
+      expect(resp).toEqual({ ok: false, error: "cannot verify caller thread ownership" });
+    } finally {
+      await unverifiedBroker.close();
+    }
+  });
+
+  it.skipIf(!NodeFS.existsSync("/proc/self"))(
+    "supports read-only op=identify and trusts registered Codex app-server (pid, startTime) hops on Linux",
+    async () => {
+      const dir = mkTempDir("t3-guard-identify-");
+      const socketPath = NodePath.join(dir, "t3-guard-grant.sock");
+      const registry = makeTrustedProviderRegistry();
+      const broker = new GuardGrantBroker({
+        socketPath,
+        getTrustedCodexAppServers: registry.snapshotCodexAppServers,
+      });
+      await broker.start("linux");
+      try {
+        const pyBin = NodeFS.existsSync("/usr/bin/python3") ? "/usr/bin/python3" : "python3";
+        const clientPy = `
+import json, os, socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect(sys.argv[1])
+s.sendall((sys.argv[2] + "\\n").encode("utf-8"))
+buf = b""
+while b"\\n" not in buf:
+    c = s.recv(4096)
+    if not c: break
+    buf += c
+s.close()
+resp = json.loads(buf.decode("utf-8").splitlines()[0])
+sys.stdout.write(json.dumps({"self_pid": os.getpid(), "resp": resp}))
+`;
+        const clientScriptPath = NodePath.join(dir, "identify_client.py");
+        NodeFS.writeFileSync(clientScriptPath, clientPy, "utf8");
+
+        const runIdentify = (
+          env: NodeJS.ProcessEnv,
+          payload: Record<string, unknown> = { v: 1, op: "identify" },
+        ): Promise<{ self_pid: number; resp: Record<string, unknown> }> =>
+          new Promise((resolve, reject) => {
+            NodeChildProcess.execFile(
+              pyBin,
+              ["-I", clientScriptPath, socketPath, JSON.stringify(payload)],
+              { env, timeout: 10_000 },
+              (err, stdout) => {
+                if (err) {
+                  reject(err);
+                  return;
+                }
+                resolve(
+                  JSON.parse(stdout.trim()) as { self_pid: number; resp: Record<string, unknown> },
+                );
+              },
+            );
+          });
+
+        // 1. Tagged direct child: identify returns kernel-verified pid and thread_id, ignoring spoofed thread_id.
+        const tagged = await runIdentify(
+          { ...process.env, T3CODE_THREAD_ID: "thread-identify-direct" },
+          { v: 1, op: "identify", thread_id: "thread-spoofed" },
+        );
+        expect(tagged.resp).toEqual({
+          ok: true,
+          pid: tagged.self_pid,
+          thread_id: "thread-identify-direct",
+        });
+
+        // 2. Untagged direct child: identify returns ok=true with empty thread_id.
+        const untaggedEnv: NodeJS.ProcessEnv = { ...process.env };
+        delete untaggedEnv.T3CODE_THREAD_ID;
+        const untagged = await runIdentify(untaggedEnv);
+        expect(untagged.resp).toEqual({
+          ok: true,
+          pid: untagged.self_pid,
+          thread_id: "",
+        });
+
+        // 3. Real untagged child acting as a registered shared codex app-server (no systemd scope or codex binary).
+        const codexSimPy = `
+import json, os, subprocess, sys
+print("READY", flush=True)
+for line in sys.stdin:
+    req = json.loads(line)
+    mode = req["mode"]
+    tid = req["tid"]
+    sock = req.get("sock") or sys.argv[2]
+    if mode == "direct":
+        env = dict(os.environ, T3CODE_THREAD_ID=tid)
+        out = subprocess.check_output(
+            [sys.executable, "-I", sys.argv[1], sock, json.dumps({"v": 1, "op": "identify"})],
+            env=env,
+            text=True,
+        )
+    else:
+        inner = (
+            "import os, subprocess, sys; "
+            "env = dict(os.environ, T3CODE_THREAD_ID=sys.argv[4]); "
+            "sys.stdout.write(subprocess.check_output([sys.executable, '-I', sys.argv[1], sys.argv[2], sys.argv[3]], env=env, text=True))"
+        )
+        env = {k: v for k, v in os.environ.items() if k != "T3CODE_THREAD_ID"}
+        out = subprocess.check_output(
+            [sys.executable, "-I", "-c", inner, sys.argv[1], sock, json.dumps({"v": 1, "op": "identify"}), tid],
+            env=env,
+            text=True,
+        )
+    print(out.strip(), flush=True)
+`;
+        const codexSim = NodeChildProcess.spawn(
+          pyBin,
+          ["-I", "-c", codexSimPy, clientScriptPath, socketPath],
+          { env: untaggedEnv, stdio: ["pipe", "pipe", "pipe"] },
+        );
+        let simStderr = "";
+        codexSim.stderr.on("data", (chunk: Buffer) => {
+          simStderr += chunk.toString("utf8");
+        });
+        const readLine = (): Promise<string> =>
+          new Promise((resolve, reject) => {
+            let buf = "";
+            const cleanup = () => {
+              codexSim.stdout.off("data", onData);
+              codexSim.off("error", onError);
+              codexSim.off("exit", onExit);
+            };
+            const onData = (chunk: Buffer) => {
+              buf += chunk.toString("utf8");
+              const idx = buf.indexOf("\n");
+              if (idx !== -1) {
+                cleanup();
+                resolve(buf.slice(0, idx).trim());
+              }
+            };
+            const onError = (err: Error) => {
+              cleanup();
+              reject(err);
+            };
+            const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+              cleanup();
+              reject(
+                new Error(
+                  `codex simulator exited early (code=${code}, signal=${signal}): ${simStderr.trim()}`,
+                ),
+              );
+            };
+            codexSim.stdout.on("data", onData);
+            codexSim.once("error", onError);
+            codexSim.once("exit", onExit);
+          });
+        try {
+          expect(await readLine()).toBe("READY");
+          const simPid = codexSim.pid!;
+          const askSim = async (mode: "direct" | "nested", tid: string, sock?: string) => {
+            const linePromise = readLine();
+            codexSim.stdin.write(`${JSON.stringify({ mode, tid, ...(sock ? { sock } : {}) })}\n`);
+            return JSON.parse(await linePromise) as {
+              self_pid: number;
+              resp: Record<string, unknown>;
+            };
+          };
+
+          // Before registration: untagged non-codex child is NOT stepped past.
+          const beforeReg = await askSim("direct", "thread-codex-registered");
+          expect(beforeReg.resp).toEqual({ ok: true, pid: beforeReg.self_pid, thread_id: "" });
+
+          // After registering its exact (pid, startTime): direct tagged child resolves.
+          const release = registry.registerCodexAppServer(simPid);
+          const afterReg = await askSim("direct", "thread-codex-registered");
+          expect(afterReg.resp).toEqual({
+            ok: true,
+            pid: afterReg.self_pid,
+            thread_id: "thread-codex-registered",
+          });
+
+          // Still at most ONE hop past registered Codex: an untagged wrapper between codex and leaf fails to resolve.
+          const nestedUnderCodex = await askSim("nested", "thread-codex-nested-escape");
+          expect(nestedUnderCodex.resp).toEqual({
+            ok: true,
+            pid: nestedUnderCodex.self_pid,
+            thread_id: "",
+          });
+
+          // After release (unregister): direct child no longer resolves.
+          release();
+          const afterRelease = await askSim("direct", "thread-codex-registered");
+          expect(afterRelease.resp).toEqual({
+            ok: true,
+            pid: afterRelease.self_pid,
+            thread_id: "",
+          });
+
+          // Mismatched startTime for the exact same PID (simPid) is rejected (PID-reuse defense).
+          const wrongStartBroker = new GuardGrantBroker({
+            socketPath: NodePath.join(dir, "wrong-start.sock"),
+            getTrustedCodexAppServers: () => [
+              { pid: simPid, startTime: `${readProcStartTime(simPid) ?? "1"}999` },
+            ],
+          });
+          await wrongStartBroker.start("linux");
+          try {
+            const wrongStart = await askSim(
+              "direct",
+              "thread-wrong-start",
+              wrongStartBroker.socketPath,
+            );
+            expect(wrongStart.resp).toEqual({
+              ok: true,
+              pid: wrongStart.self_pid,
+              thread_id: "",
+            });
+          } finally {
+            await wrongStartBroker.close();
+          }
+        } finally {
+          codexSim.kill("SIGTERM");
+        }
+      } finally {
+        await broker.close();
+      }
+    },
+  );
 });
 
 describe("DevdeckProxy & CliRunners validation", () => {

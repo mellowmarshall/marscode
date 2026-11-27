@@ -70,6 +70,7 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as EffectWorker from "../EffectWorker.ts";
+import * as TrustedProviderRegistry from "../../devtools/TrustedProviderRegistry.ts";
 import * as Orchestrator from "../Orchestrator.ts";
 import * as ProviderReplayHarness from "../testkit/ProviderReplayHarness.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -1112,7 +1113,13 @@ describe("CodexAdapterV2 process exit", () => {
 
   it.effect("counts the app-server as a running agent until its session closes", () => {
     let runningAgents = 0;
+    const trustedRegistry = TrustedProviderRegistry.makeTrustedProviderRegistry((pid) =>
+      pid === 999_999_999 ? "424242" : undefined,
+    );
     const factoryLayer = CodexAdapterV2.layerAppServerClientFactory.pipe(
+      Layer.provide(
+        Layer.succeed(TrustedProviderRegistry.TrustedProviderRegistry, trustedRegistry),
+      ),
       Layer.provide(
         Layer.mock(PortScanner.PortDiscovery)({
           trackAgent: () => {
@@ -1164,9 +1171,19 @@ describe("CodexAdapterV2 process exit", () => {
             settings: DEFAULT_CODEX_SETTINGS,
             environment: {},
           })
-          .pipe(Effect.tap(() => Effect.sync(() => assert.equal(runningAgents, 1)))),
+          .pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                assert.equal(runningAgents, 1);
+                assert.deepEqual(trustedRegistry.snapshotCodexAppServers(), [
+                  { pid: 999_999_999, startTime: "424242" },
+                ]);
+              }),
+            ),
+          ),
       );
       assert.equal(runningAgents, 0);
+      assert.deepEqual(trustedRegistry.snapshotCodexAppServers(), []);
     }).pipe(Effect.provide(factoryLayer));
   });
 });

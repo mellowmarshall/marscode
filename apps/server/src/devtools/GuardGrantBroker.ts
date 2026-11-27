@@ -35,6 +35,11 @@ export type GuardBrokerEvent =
       readonly decision: "approved" | "denied" | "expired" | "disconnected";
     };
 
+export interface TrustedCodexAppServerRef {
+  readonly pid: number;
+  readonly startTime: string;
+}
+
 export interface GuardGrantBrokerOptions {
   readonly socketPath?: string | undefined;
   readonly defaultGrantTtlMs?: number | undefined;
@@ -43,6 +48,7 @@ export interface GuardGrantBrokerOptions {
   readonly maxPreapproved?: number | undefined;
   readonly auditLogPath?: string | undefined;
   readonly exceptionsPaths?: ReadonlyArray<string> | undefined;
+  readonly getTrustedCodexAppServers?: (() => ReadonlyArray<TrustedCodexAppServerRef>) | undefined;
   readonly resolvePeerThreadId?:
     | ((socket: NodeNet.Socket) => Promise<PeerThreadResolution>)
     | undefined;
@@ -541,6 +547,13 @@ import os, re, socket, struct, sys
 
 ino = int(sys.argv[1])
 srv = int(sys.argv[2])
+trusted_codex = {}
+if len(sys.argv) > 3 and sys.argv[3]:
+    for pair in sys.argv[3].split(","):
+        if ":" in pair:
+            k, v = pair.split(":", 1)
+            if k.isdigit() and v.isdigit():
+                trusted_codex[int(k)] = v
 s = socket.socket(socket.AF_NETLINK, socket.SOCK_DGRAM, 4)
 s.settimeout(1.0)
 body = struct.pack("=BBHIIIII", socket.AF_UNIX, 0, 0, 0xFFFFFFFF, ino, 0x04, 0xFFFFFFFF, 0xFFFFFFFF)
@@ -597,12 +610,19 @@ if len(pids) != 1:
     print("ERR:ambiguous-peer-holders")
     sys.exit(0)
 
-def ppid_of(p):
+def stat_info(p):
     try:
         with open(f"/proc/{p}/stat", encoding="utf-8", errors="replace") as fh:
-            return int(fh.read().rsplit(")", 1)[1].split()[1])
+            fields = fh.read().rsplit(")", 1)[1].split()
+        return int(fields[1]), fields[19]
     except Exception:
-        return 0
+        return 0, ""
+
+def ppid_of(p):
+    return stat_info(p)[0]
+
+def starttime_of(p):
+    return stat_info(p)[1]
 
 def env_tid(p):
     try:
@@ -623,6 +643,9 @@ def is_codex_app_server(p):
     try:
         if os.stat(f"/proc/{p}").st_uid != os.getuid():
             return False
+        expected_start = trusted_codex.get(p)
+        if expected_start and starttime_of(p) == expected_start:
+            return True
         exe = os.readlink(f"/proc/{p}/exe").removesuffix(" (deleted)")
         if not exe or exe.startswith(UNTRUSTED_EXE_PFX):
             return False
@@ -705,9 +728,28 @@ peer_pid = pids[0]
 print(f"OK:{peer_pid}:{resolve_pid(peer_pid)}")
 `.trim();
 
+function formatTrustedCodexArg(
+  entries: ReadonlyArray<TrustedCodexAppServerRef> | undefined,
+): string {
+  if (!entries || entries.length === 0) return "";
+  const encoded: string[] = [];
+  for (const entry of entries) {
+    if (
+      Number.isInteger(entry.pid) &&
+      entry.pid > 1 &&
+      typeof entry.startTime === "string" &&
+      /^\d+$/.test(entry.startTime)
+    ) {
+      encoded.push(`${entry.pid}:${entry.startTime}`);
+    }
+  }
+  return encoded.join(",");
+}
+
 function defaultResolvePeerThreadId(
   socket: NodeNet.Socket,
   platform: NodeJS.Platform,
+  trustedCodexAppServers?: ReadonlyArray<TrustedCodexAppServerRef>,
 ): Promise<PeerThreadResolution> {
   if (platform !== "linux") {
     return Promise.resolve({
@@ -731,10 +773,11 @@ function defaultResolvePeerThreadId(
     return Promise.resolve({ verified: false, error: "cannot inspect client socket inode" });
   }
   const pythonBin = NodeFS.existsSync("/usr/bin/python3") ? "/usr/bin/python3" : "python3";
+  const trustedArg = formatTrustedCodexArg(trustedCodexAppServers);
   return new Promise((resolve) => {
     NodeChildProcess.execFile(
       pythonBin,
-      ["-I", "-c", LINUX_PEER_THREAD_PY, serverIno, String(process.pid)],
+      ["-I", "-c", LINUX_PEER_THREAD_PY, serverIno, String(process.pid), trustedArg],
       { timeout: 2_000, maxBuffer: 4096 },
       (err, stdout) => {
         if (err) {
@@ -797,7 +840,11 @@ export class GuardGrantBroker {
     this.auditLogPathOverride = options.auditLogPath;
     this.exceptionsPathsOverride = options.exceptionsPaths;
     this.hasCustomResolver = options.resolvePeerThreadId !== undefined;
-    this.resolvePeerThreadId = options.resolvePeerThreadId ?? defaultResolvePeerThreadId;
+    const getTrustedCodexAppServers = options.getTrustedCodexAppServers;
+    this.resolvePeerThreadId =
+      options.resolvePeerThreadId ??
+      ((socket, platform) =>
+        defaultResolvePeerThreadId(socket, platform, getTrustedCodexAppServers?.()));
   }
 
   get listening(): boolean {
@@ -1275,6 +1322,22 @@ export class GuardGrantBroker {
     }
 
     const op = typeof msg.op === "string" ? msg.op : "";
+    if (op === "identify") {
+      const peer = await this.resolvePeerThreadId(socket, this.platform);
+      if (this.closed || socket.destroyed) {
+        return;
+      }
+      if (!peer.verified) {
+        this.writeAndClose(socket, { ok: false, error: peer.error });
+        return;
+      }
+      this.writeAndClose(socket, {
+        ok: true,
+        ...(peer.peerPid !== undefined && peer.peerPid > 0 ? { pid: peer.peerPid } : {}),
+        thread_id: peer.threadId,
+      });
+      return;
+    }
     if (op !== "peek" && op !== "check" && op !== "request") {
       this.writeAndClose(socket, { ok: false, error: "unsupported op" });
       return;

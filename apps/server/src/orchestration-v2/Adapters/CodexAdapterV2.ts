@@ -113,6 +113,7 @@ import { FetchHttpClient, HttpClient } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { resolveAttachmentPath, resolveAttachmentPathById } from "../../attachmentStore.ts";
+import * as TrustedProviderRegistry from "../../devtools/TrustedProviderRegistry.ts";
 import * as PortScanner from "../../preview/PortScanner.ts";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
@@ -1922,6 +1923,7 @@ export const layerAppServerClientFactory: Layer.Layer<
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
     const agentScope = yield* AgentScope;
     const portDiscovery = yield* PortScanner.PortDiscovery;
+    const trustedProviders = yield* TrustedProviderRegistry.TrustedProviderRegistry;
 
     return CodexAppServerClientFactory.of({
       open: Effect.fn("CodexAdapterV2.open")(function* (input) {
@@ -1948,6 +1950,12 @@ export const layerAppServerClientFactory: Layer.Layer<
                 cause,
               }),
           ),
+        );
+        // Record the exact spawned (pid, starttime) so GuardGrantBroker trusts this shared app-server
+        // without relying solely on external exe/cmdline/cgroup heuristics.
+        yield* Effect.acquireRelease(
+          Effect.sync(() => trustedProviders.registerCodexAppServer(Number(handle.pid))),
+          (release) => Effect.sync(release),
         );
         // Its shells carry each thread's T3CODE_THREAD_ID, so port discovery reads listeners' threads.
         yield* Effect.acquireRelease(Effect.sync(portDiscovery.trackAgent), (release) =>

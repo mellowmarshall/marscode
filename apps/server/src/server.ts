@@ -108,6 +108,7 @@ import * as DeviceService from "./device/DeviceService.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as DevtoolsHttp from "./devtools/DevtoolsHttp.ts";
 import * as JobRegistry from "./devtools/jobs/JobRegistry.ts";
+import * as TrustedProviderRegistry from "./devtools/TrustedProviderRegistry.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as PreviewTunnel from "./preview/PreviewTunnel.ts";
@@ -801,9 +802,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   // One gate for the server, below hydration so the Claude adapter sees it: layers memoize by
   // reference, so the runtime layer shares it.
   Layer.provideMerge(ProviderInstallationGate.layer),
-  // Provider hydration builds the Claude runner, which reports agents to the same scanner the
-  // terminal and preview layers share.
-  Layer.provideMerge(layerPortScanner),
+  // Provider hydration builds the Claude and Codex runners, which share the port scanner and
+  // trusted provider registry with the terminal, preview, and devtools layers.
+  Layer.provideMerge(Layer.merge(layerPortScanner, TrustedProviderRegistry.layer)),
   Layer.provideMerge(
     Layer.mergeAll(
       AntigravityInstallation.AntigravityInstallation.layer.pipe(
