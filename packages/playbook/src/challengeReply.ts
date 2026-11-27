@@ -14,6 +14,12 @@ const Defect = Schema.Struct({
   what: Schema.optional(Schema.String),
 });
 
+const Violation = Schema.Struct({
+  section: Schema.String,
+  file: Schema.optional(Schema.String),
+  what: Schema.optional(Schema.String),
+});
+
 const RejectedRise = Schema.Struct({
   subject: Schema.String,
   why: Schema.optional(Schema.String),
@@ -25,6 +31,7 @@ export const PlaybookChallengeReply = Schema.Struct({
   diagnosis: Schema.String,
   bypass_detected: Schema.Boolean,
   playbook_friction: Schema.Boolean,
+  violations: Schema.optional(Schema.Array(Violation)),
   rejected_rises: Schema.Array(RejectedRise),
   rises_accepted: Schema.Boolean,
   defects: Schema.Array(Defect),
@@ -37,8 +44,8 @@ export const NO_RISES = "(none)";
 const UNREADABLE_RISES = "(the budgets cannot be compared here: judge no rise as accepted)";
 export const RISE_REFUSED = 3;
 
-/** Severities that never block; `medium` is listed, anything else (or unknown) is severe. */
-const MINOR_SEVERITIES = new Set(["low", "info", "nit", "minor"]);
+/** Severities ignored by the challenger: only breaking, critical, high (or unknown, fail-closed) challenge. */
+const IGNORED_SEVERITIES = new Set(["medium", "low", "info", "nit", "minor"]);
 
 export interface ChallengeDefect {
   /** Lower-cased; an empty or unrecognized severity reads as `unknown` and is severe. */
@@ -47,10 +54,17 @@ export interface ChallengeDefect {
   readonly what: string;
 }
 
+export interface ChallengeViolation {
+  readonly section: string;
+  readonly file: string;
+  readonly what: string;
+}
+
 export interface ChallengeVerdict {
   readonly passed: boolean;
   readonly label: "PASS" | "CHALLENGED" | "REJECTED BUDGET REASON";
   readonly rejected: ReadonlyArray<{ readonly subject: string; readonly why: string }>;
+  readonly violations: ReadonlyArray<ChallengeViolation>;
   readonly defects: ReadonlyArray<ChallengeDefect>;
 }
 
@@ -77,21 +91,34 @@ export function judgeChallengeReply(
   rises: string,
 ): ChallengeVerdict {
   const rejected = rejectedRises(reply, rises);
+  const violations = (reply.violations ?? [])
+    .map((v) => ({
+      section: v.section.trim() || "PLAYBOOK.md",
+      file: (v.file ?? "").trim(),
+      what: (v.what ?? "").trim(),
+    }))
+    .filter((v) => v.section.length > 0 || v.what.length > 0);
   const defects = reply.defects
     .map((d) => ({
       severity: d.severity.trim().toLowerCase() || "unknown",
       file: (d.file ?? "").trim(),
       what: (d.what ?? "").trim(),
     }))
-    .filter((d) => !MINOR_SEVERITIES.has(d.severity));
-  // Friction is a report on the playbook, never on the change. Fail closed: every listed defect
-  // but a medium one (breaking, critical, high, or a severity the engine does not know) challenges.
-  const severe = defects.some((d) => d.severity !== "medium");
-  const passed = reply.acceptable && !reply.bypass_detected && rejected.length === 0 && !severe;
+    .filter((d) => !IGNORED_SEVERITIES.has(d.severity));
+  // Friction is a report on the playbook, never on the change. Fail closed: any applicable
+  // playbook violation or severe production-path defect (breaking, critical, high) challenges (§2.2).
+  const severe = defects.length > 0;
+  const passed =
+    reply.acceptable &&
+    !reply.bypass_detected &&
+    violations.length === 0 &&
+    rejected.length === 0 &&
+    !severe;
   return {
     passed,
     label: passed ? "PASS" : rejected.length > 0 ? "REJECTED BUDGET REASON" : "CHALLENGED",
     rejected,
+    violations,
     defects,
   };
 }
@@ -146,6 +173,13 @@ export function renderChallengeReport(
   if (rises !== NO_RISES) lines.push("", `Budget rises and their reasons:\n${rises}`);
   if (verdict.rejected.length > 0) {
     lines.push("", "Rejected reasons:", ...verdict.rejected.map((r) => `- ${r.subject}: ${r.why}`));
+  }
+  if (verdict.violations.length > 0) {
+    lines.push(
+      "",
+      "Playbook violations:",
+      ...verdict.violations.map((v) => `- ${v.section}${v.file ? ` (${v.file})` : ""}: ${v.what}`),
+    );
   }
   if (verdict.defects.length > 0) {
     lines.push(

@@ -1,11 +1,11 @@
 /**
- * `playbook amend <file>`: an amended PLAYBOOK.md or CHALLENGE.md must stay whole, and its diff
+ * `playbook amend <file>`: an amended PLAYBOOK.md must stay whole, and its diff
  * is the owner's call: a `playbook-amend` guard bundle, printed (collect) or sent to the broker.
  */
 import { canonicalProtectedDiffSha256, sha256Hex } from "@t3tools/guard-protocol/digests";
 import type { WireGuardBundle } from "@t3tools/guard-protocol/bundle-inspect";
 
-import { standardsProblems, templateProblems } from "./challengePrompt.ts";
+import { standardsProblems } from "./challengePrompt.ts";
 import {
   currentBranch,
   git,
@@ -16,12 +16,7 @@ import {
 } from "./git.ts";
 
 const AMEND_GATE = "playbook-amend";
-const AMENDABLE = new Map<string, "standards" | "template">([
-  ["PLAYBOOK.md", "standards"],
-  ["playbook/PLAYBOOK.md", "standards"],
-  ["CHALLENGE.md", "template"],
-  ["playbook/CHALLENGE.md", "template"],
-]);
+const AMENDABLE = new Set(["PLAYBOOK.md", "playbook/PLAYBOOK.md", "packages/playbook/PLAYBOOK.md"]);
 
 export interface AmendDescriptor {
   readonly file: string;
@@ -42,16 +37,15 @@ export function planAmend(input: {
   readonly issue?: string | undefined;
 }): AmendPlan {
   const rel = input.file.replace(/^\.\//, "");
-  const kind = AMENDABLE.get(rel);
-  if (!kind) {
+  if (!AMENDABLE.has(rel)) {
     return {
       ok: false,
-      problems: [`${rel}: only ${[...AMENDABLE.keys()].join(", ")} can be amended`],
+      problems: [`${rel}: only ${[...AMENDABLE].join(", ")} can be amended`],
     };
   }
   const text = readWorktreeFile(input.root, rel);
   if (text === null) return { ok: false, problems: [`${rel}: not a regular file in the worktree`] };
-  const problems = kind === "standards" ? standardsProblems(text) : templateProblems(text);
+  const problems = standardsProblems(text);
   if (problems.length > 0) return { ok: false, problems };
   const baseSha = resolveCommit(input.root, input.base);
   if (!baseSha) return { ok: false, problems: [`base ${input.base} is not a commit here`] };

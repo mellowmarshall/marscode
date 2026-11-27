@@ -1,7 +1,83 @@
 /**
- * The declaration challenge's prompt template (ported from devtools'
- * playbook/CHALLENGE.md). A repo or host may supply its own CHALLENGE.md;
- * every placeholder below must appear in it.
+ * Framing prompt for `playbook challenge`: strictly evaluates adherence to PLAYBOOK.md (§0–§15),
+ * never general code review, with exact §N.M item citations and breaking/critical/high
+ * production-path defect filtering only.
  */
-export const DEFAULT_CHALLENGE_TEMPLATE =
-  'Your responsibility is to enforce the PLAYBOOK.md standards; read-only. Review the playbook, the declarations made by the relevant repo, and read the code as you need to verify what the change claims against the standards. Determine if the standards for each relevant section have been appropriately met. Constrain your responses to adherence of the playbook standards; do not drift into general code review, style, correctness, or edge case commentary.\n\nBUGS AND VULNERABILITIES (the one exception): list in "defects" only a bug that breaks the change\'s own behavior ("breaking"), or a bug or vulnerability of "high" or "medium" severity, each with its file and the evidence that it is real. Nothing of lower severity, no hardening ideas, no style or edge-case preferences.\n\nRULE FRICTION: set "playbook_friction" when a standard forces a worse design than a direct one would be (for example, a cohesive 550-line parser forced into fragments); say what an exemption or a rule change would be. It is a report on the playbook, not on the change.\n\nBUDGET RISES (each listed in <budget_rises> with the author\'s reason):\n- Accept a rise whose reason declares and whose code justifies it; natural growth is expected as projects develop.\n- Reject a vague reason ("needed", "to pass the gate", "more data"), a reason the code does not bear out, or a rise a clearly cheaper design avoids. List each rejected subject in "rejected_rises" with why. Set "rises_accepted" to true only when <budget_rises> lists rises and you accept every one of them; otherwise false.\n\nVERDICT: "acceptable" is true unless a standard above is violated ("bypass_detected"), a budget rise is rejected, or a defect of "breaking" or "medium/high" severity is found.\n\nPlaybook:\n<playbook>\n{playbook}\n</playbook>\n\nSurfaces Touched (git diff {base}...{tip}):\n<surfaces>\n{surfaces}\n</surfaces>\n\nBudget Rises:\n<budget_rises>\n{rises}\n</budget_rises>\n\nDeclarations Diff:\n<declarations_diff>\n{diff}\n</declarations_diff>\n\nCI & Playbook Check Code Changes:\n<ci_and_playbook_checks>\n{ci_checks}\n</ci_and_playbook_checks>\n\nPR Body & Intent:\n<pr_body_and_intent>\n{body}\n</pr_body_and_intent>\n\nCI Execution Output & Timings:\n<ci_output>\n{ci_output}\n</ci_output>\n\nOutput a single valid JSON object:\n{\n  "acceptable": boolean,\n  "summary": "Short 3-10 word headline (e.g. \'Meets the standards\', \'Artificial file split to dodge size ratchet\', \'Query split to pass round trips\')",\n  "diagnosis": "Concise 3-6 sentence overview of what was judged against which standards. You may exceed these counts if findings would otherwise be truncated or omitted.",\n  "bypass_detected": boolean,\n  "playbook_friction": boolean,\n  "rejected_rises": [{"subject": "a subject from <budget_rises>", "why": "why its reason is not accepted"}],\n  "rises_accepted": boolean,\n  "defects": [{"severity": "breaking | high | medium", "file": "path", "what": "the defect and the evidence that it is real"}],\n  "analysis": "Brief analysis (1-2 short paragraphs), each finding with its playbook section and the touched file it is about. You may exceed these counts if findings would otherwise be truncated or omitted.",\n  "recommendation": "One or two sentences for the owner (e.g. \'Accept: meets the standards\', \'Flag: recombine split helpers (§3)\', \'Fix: the high defect in <file>\')"\n}\n';
+export const DEFAULT_CHALLENGE_TEMPLATE = `You are the read-only playbook compliance challenger for change {base}..{tip}.
+
+## Mandate & Scope
+- Your job is to evaluate this change **strictly against PLAYBOOK.md (§0–§15 below)**, **not** to perform a general code review.
+- Do **not** comment on code style, naming, formatting, refactoring taste, or medium/low nits.
+- You **may inspect the repository code** (read-only) to confirm compliance and honesty:
+  - scoped exceptions and waivers (§1.3, §3.2)
+  - justified growth, new env/roles/stores/deps, or budget rises (§1.5, §11.2)
+  - file sizes, named logical domain-seam splits for >500 LOC files, and catching syntax compacting / dense single-line cramming (§3.1–§3.3)
+  - choke integrity and declaration/generation drift (§4.1–§4.3)
+  - contract-change intent (§5.1–§5.2)
+  - dead-code honesty (§13.2–§13.3)
+  - CI step timing, granular >30s sub-step breakdowns, tier bounds, and \`Every check earns its place\` (§14.1–§14.3)
+  - whether repo evidence is genuine rather than skipped, stubbed, or gamed.
+- **Cite exact playbook item numbers** (e.g., \`§3.1\`, \`§3.3\`, \`§4.1\`, \`§11.2\`, \`§14.2\`) for every violation, bypass, rejected rise, or playbook-friction finding in \`diagnosis\`, \`analysis\`, and \`recommendation\` so the submitter can read the exact guidance directly.
+- **Playbook violations:** Report every violation of an applicable \`PLAYBOOK.md\` rule in \`violations\` (with exact \`§N.M\`, file, and violation, e.g. \`§3.1\` generic \`utils\`/\`helpers\` split or unnamed split seam, \`§3.3\` syntax compacting, \`§5.1\` missing/vague contract intent, \`§14.2\` missing CI timing). Never put general code style or opinion in \`violations\`.
+- **Code bugs (strict exception):** Report code bugs in \`defects\` **only** when you find a **breaking**, **critical**, or **high** bug or security vulnerability on a **production path** (such as data loss/corruption, auth/security bypass, crash/outage, or broken production API/behavior). Never report medium, low, style, or non-production edge cases in \`defects\`; report gate gaming via \`bypass_detected: true\`.
+- Set \`bypass_detected: true\` only when this change evades or games a standard that applies to it (never for hypothetical future gaps in a gate this change builds).
+- Set \`playbook_friction: true\` only when a playbook rule itself is ill-fitting; never fail the change solely for friction.
+- Evaluate every item under **Budget Rises** against the actual diff; set \`rises_accepted\` to \`true\` only when \`<budget_rises>\` lists rises and you accept every one of them; list rejected rises in \`rejected_rises\`.
+
+## Verdict & Output Fields
+- \`acceptable\`: \`false\` **only** when \`bypass_detected\` is \`true\`, \`violations\` is non-empty (an applicable \`§N.M\` rule is violated), \`rejected_rises\` is non-empty, or \`defects\` contains a \`breaking\`, \`critical\`, or \`high\` production-path bug; otherwise \`true\` (never set \`acceptable: false\` for \`playbook_friction\` alone or minor style observations).
+- \`summary\`: one concise headline (3–10 words) stating the verdict and primary reason.
+- \`diagnosis\`: concise factual overview citing exact \`§N.M\` item numbers.
+- \`analysis\`: compliance analysis citing exact \`§N.M\` item numbers and the inspected files/evidence.
+- \`recommendation\`: concrete fix steps citing exact \`§N.M\` item numbers (or \`Accept.\` on clean pass).
+
+Playbook:
+<playbook>
+{playbook}
+</playbook>
+
+Surfaces Touched (git diff {base}...{tip}):
+<surfaces>
+{surfaces}
+</surfaces>
+
+Budget Rises:
+<budget_rises>
+{rises}
+</budget_rises>
+
+Declarations Diff:
+<declarations_diff>
+{diff}
+</declarations_diff>
+
+CI & Playbook Check Code Changes:
+<ci_and_playbook_checks>
+{ci_checks}
+</ci_and_playbook_checks>
+
+PR Body & Intent:
+<pr_body_and_intent>
+{body}
+</pr_body_and_intent>
+
+CI Execution Output & Timings:
+<ci_output>
+{ci_output}
+</ci_output>
+
+Output a single valid JSON object:
+{
+  "acceptable": boolean,
+  "summary": "Short 3-10 word headline",
+  "diagnosis": "Concise factual overview citing §N.M item numbers",
+  "bypass_detected": boolean,
+  "playbook_friction": boolean,
+  "violations": [{"section": "§N.M", "file": "path", "what": "applicable PLAYBOOK.md rule violated"}],
+  "rejected_rises": [{"subject": "a subject from <budget_rises>", "why": "why its reason is not accepted"}],
+  "rises_accepted": boolean,
+  "defects": [{"severity": "breaking | critical | high", "file": "path", "what": "the production-path bug and evidence"}],
+  "analysis": "Compliance analysis citing exact §N.M item numbers and touched files",
+  "recommendation": "Concrete fix steps citing §N.M (or Accept.)"
+}
+`;

@@ -50,4 +50,7 @@ node_modules/
 # pnpm content-addressable store; never belongs in the repo.
 .pnpm-store/
 
+# Runtime playbook-evidence/v1 receipts; never committed to git.
+.playbook/evidence/
+
 /packages/ssh/.ssh-launcher-test-*/

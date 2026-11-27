@@ -21,6 +21,20 @@ const PLAYBOOK_CI_KEYS: Readonly<Record<string, string>> = {
   arch: "ship_ci_arch",
 };
 
+/** Playbook §14 CI standards keys validated by `@t3tools/playbook`, ignored by ship-queue host routing. */
+const PLAYBOOK_CI_STANDARDS_KEYS = new Set([
+  "none",
+  "parallel",
+  "select",
+  "full",
+  "always",
+  "granularThresholdMs",
+  "maxTier1Ms",
+  "maxTier2Ms",
+  "maxTier3Ms",
+  "exceptions",
+]);
+
 const SCALAR_KEYS: Readonly<Record<string, keyof MutableDeclScalars>> = {
   base_ref: "baseRef",
   ship_repo: "repo",
@@ -403,18 +417,20 @@ function parsePlaybookCiBlock(
   }
   const obj = ci as Record<string, unknown>;
   const extra = Object.keys(obj)
-    .filter((k) => !(k in PLAYBOOK_CI_KEYS))
+    .filter((k) => !(k in PLAYBOOK_CI_KEYS) && !PLAYBOOK_CI_STANDARDS_KEYS.has(k))
     .toSorted();
   if (extra.length > 0) {
     return {
       ok: false,
-      warning: `playbook.json=ci has unknown key ${extra.join(", ")} (allowed: ${Object.keys(PLAYBOOK_CI_KEYS).join(", ")})`,
+      warning: `playbook.json=ci has unknown key ${extra.join(", ")} (allowed: ${[...Object.keys(PLAYBOOK_CI_KEYS), ...PLAYBOOK_CI_STANDARDS_KEYS].join(", ")})`,
     };
   }
   const entries: Array<readonly [string, string]> = [];
   for (const [k, confKey] of Object.entries(PLAYBOOK_CI_KEYS)) {
     const raw = obj[k];
     if (raw === undefined) continue;
+    // A string ci.evidence points to a playbook-evidence/v1 receipt, not ship-queue failure artifact dirs.
+    if (k === "evidence" && typeof raw === "string") continue;
     if (k === "settings") {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
         return { ok: false, warning: "playbook.json=ci.settings is not an object of tool lists" };

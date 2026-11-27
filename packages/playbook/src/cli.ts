@@ -36,24 +36,29 @@ export interface CliIo {
 }
 
 const USAGE = `usage: playbook [-C DIR] <command>
-  check [contract...] [--pr-body FILE] [--json]   run the declared contracts' gates
+  check [contract...] [--pr-body FILE] [--json]   validate playbook.json and repo-emitted playbook-evidence/v1 receipts
   challenge [--base REF] [--tip REF] [--response FILE] [--out FILE] [--advisory] [--json]
                                                   the declaration challenge on the real worktree
-  amend <PLAYBOOK.md|CHALLENGE.md> [--base REF] [--issue #N] [--collect]
+  amend <PLAYBOOK.md> [--base REF] [--issue #N] [--collect]
                                                   amend the standards under the owner's override
-  init [--dry-run]                                write the minimal playbook.json
+  init [--dry-run]                                write the minimal evidence-only playbook.json
   stats [--side S] [--by G] [--source S] [--repo R] [--days N] [--json]
                                                   review verdict statistics
   version                                         print the host playbook version`;
 
-/** The minimal valid declaration: every repo's required contracts, each with its nothing-here value. */
+/** The minimal valid evidence-only declaration. */
 const MINIMAL_DECLARATION = {
+  evidenceDir: ".playbook/evidence",
   contracts: {
-    size: { command: "echo '{}'" },
-    fleet: { file: "fleet.json", reads: "echo '{}'" },
-    tools: { steps: [] },
-    generations: { command: null },
+    size: { evidence: ".playbook/evidence/size.json" },
+    generations: { none: "no generated artifacts yet" },
+    fleet: { none: "no deployed infrastructure yet" },
     optimization: { none: "nothing to budget: no route, job or action" },
+    tools: { evidence: ".playbook/evidence/tools.json" },
+  },
+  ci: {
+    evidence: ".playbook/evidence/ci.json",
+    granularThresholdMs: 30000,
   },
 } as const;
 
@@ -179,7 +184,7 @@ async function cmdAmend(root: string, args: ReadonlyArray<string>, io: CliIo): P
   });
   const file = positionals[0];
   if (!file || positionals.length > 1) {
-    io.err("usage: playbook amend <PLAYBOOK.md|CHALLENGE.md> [--base REF] [--collect]");
+    io.err("usage: playbook amend <PLAYBOOK.md> [--base REF] [--collect]");
     return EXIT_USAGE;
   }
   const base = values.base ?? gateBase(root, io.env).sha;

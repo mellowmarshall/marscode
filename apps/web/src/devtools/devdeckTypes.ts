@@ -306,9 +306,8 @@ export interface MergedFleetHost {
 export interface DeclaredContractSummary {
   readonly name: string;
   readonly gate: string;
-  readonly baselinePath: string | null;
-  readonly baselineCount: number | null;
-  readonly nearestExpiry: string | null;
+  readonly evidencePath: string | null;
+  readonly exceptionCount: number;
   readonly status: "enforced" | "waived";
   readonly waivedReason: string | null;
 }

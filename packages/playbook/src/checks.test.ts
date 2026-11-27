@@ -5,17 +5,18 @@ import { runCheck } from "./checks.ts";
 import { gateBase, repoName, showFiles } from "./git.ts";
 import {
   cleanupTempDirs,
-  declarationWithSize,
+  evidenceDeclaration,
   FIXED_TODAY,
   makeFixtureRepo,
   NO_BROKER_ENV,
+  writeEvidence,
 } from "./testing/fixtureRepo.ts";
 
 afterEach(cleanupTempDirs);
 
-function repoWithBase(extra: object = {}) {
+function repoWithBase(extra: object = {}, ci?: object) {
   const repo = makeFixtureRepo();
-  repo.writeJson("playbook.json", declarationWithSize({ "src/a.ts": 10 }, extra));
+  repo.writeJson("playbook.json", evidenceDeclaration(extra, ci));
   repo.writeJson("fleet.json", starterShape("sample-repo"));
   repo.write("src/a.ts", "export const a = 1;\n");
   const base = repo.commit("base");
@@ -37,7 +38,7 @@ const check = (root: string, base: string, over: Partial<Parameters<typeof runCh
 const statusOf = (report: Awaited<ReturnType<typeof runCheck>>, name: string) =>
   report.results.find((r) => r.check === name)?.status;
 
-describe("playbook check on a real worktree", () => {
+describe("playbook check (evidence-only) on a real worktree", () => {
   it("names the fixture repo by its origin and finds the queue's base", () => {
     const { repo, base } = repoWithBase();
     expect(repoName(repo.root)).toBe("sample-repo");
@@ -57,8 +58,12 @@ describe("playbook check on a real worktree", () => {
     ]);
   });
 
-  it("passes every declared deterministic gate on a clean branch", async () => {
-    const { repo, base } = repoWithBase();
+  it("passes every declared contract when valid tree-bound evidence receipts exist", async () => {
+    const { repo, base } = repoWithBase({}, { evidence: ".playbook/evidence/ci.json" });
+    writeEvidence(repo, "size");
+    writeEvidence(repo, "fleet");
+    writeEvidence(repo, "tools");
+    writeEvidence(repo, "ci");
     const report = await check(repo.root, base);
     expect(statusOf(report, "declaration")).toBe("PASS");
     expect(statusOf(report, "ratchet")).toBe("PASS");
@@ -67,6 +72,7 @@ describe("playbook check on a real worktree", () => {
     expect(statusOf(report, "fleet")).toBe("PASS");
     expect(statusOf(report, "generations")).toBe("PASS");
     expect(statusOf(report, "optimization")).toBe("PASS");
+    expect(statusOf(report, "ci")).toBe("PASS");
     expect(report.exitCode).toBe(0);
     const sizeOnly = await check(repo.root, base, { contracts: ["size", "tools"] });
     expect(sizeOnly.exitCode).toBe(0);
@@ -74,10 +80,15 @@ describe("playbook check on a real worktree", () => {
 
   it("fails a declaration that loosens against the base unless the owner overrides", async () => {
     const { repo, base } = repoWithBase();
-    const head = declarationWithSize({ "src/a.ts": 10 });
+    const head = evidenceDeclaration();
     const { optimization: _dropped, ...rest } = head.contracts;
-    repo.writeJson("playbook.json", { contracts: rest });
+    repo.writeJson("playbook.json", {
+      evidenceDir: head.evidenceDir,
+      contracts: rest,
+      ci: head.ci,
+    });
     repo.commit("drop optimization");
+    writeEvidence(repo, "size");
     const refused = await check(repo.root, base, { contracts: ["size"] });
     expect(refused.results.find((r) => r.check === "ratchet")).toMatchObject({
       status: "FAIL",
@@ -96,65 +107,19 @@ describe("playbook check on a real worktree", () => {
     expect(statusOf(granted, "ratchet")).toBe("PASS");
   });
 
-  it("holds files over 500 lines to their Baseline, which may only shrink", async () => {
+  it("fails when a repo's evidence receipt reports a failing check", async () => {
     const { repo, base } = repoWithBase();
-    repo.writeJson("playbook.json", declarationWithSize({ "src/a.ts": 10, "src/big.ts": 640 }));
-    repo.commit("grow");
-    const over = await check(repo.root, base, { contracts: ["size"] });
-    expect(over.results.find((r) => r.check === "size")?.errors).toEqual([
-      "src/big.ts: 640 code lines, over the 500-line limit",
-    ]);
-    repo.writeJson("playbook.json", {
-      contracts: {
-        ...declarationWithSize({ "src/a.ts": 10, "src/big.ts": 640 }).contracts,
-        size: {
-          command: `echo '${JSON.stringify({ "src/a.ts": 10, "src/big.ts": 640 })}'`,
-          baseline: "config/baselines/size.json",
-        },
-      },
-    });
-    repo.writeJson("config/baselines/size.json", {
-      entries: [
-        { rule: "size", file: "src/big.ts", lines: 640, issue: "#7", expires: "2027-01-31" },
+    writeEvidence(repo, "tools", {
+      status: "fail",
+      checks: [
+        { name: "lint", status: "pass", durationMs: 50 },
+        { name: "typecheck", status: "fail", durationMs: 110, detail: "broken type in src/a.ts" },
       ],
     });
-    repo.commit("adopt a size Baseline");
-    const held = await check(repo.root, base, { contracts: ["size"] });
-    expect(statusOf(held, "size")).toBe("PASS");
-    expect(statusOf(held, "baseline size")).toBe("PASS");
-    const expired = await check(repo.root, base, { contracts: ["size"], today: "2027-02-01" });
-    expect(expired.results.find((r) => r.check === "baseline size")?.summary).toBe(
-      "1 expired, 0 past the 180-day limit",
-    );
-  });
-
-  it("runs declared tool steps in the checkout and fails on a non-zero exit", async () => {
-    const { repo, base } = repoWithBase();
-    repo.writeJson(
-      "playbook.json",
-      declarationWithSize(
-        { "src/a.ts": 10 },
-        {
-          tools: {
-            steps: [
-              { name: "lint", class: "lint", run: "test -f src/a.ts", languages: ["ts"] },
-              {
-                name: "typecheck",
-                class: "typecheck",
-                run: "echo broken >&2; exit 4",
-                languages: ["ts"],
-              },
-            ],
-          },
-        },
-      ),
-    );
-    repo.commit("steps");
     const report = await check(repo.root, base, { contracts: ["tools"] });
-    expect(statusOf(report, "tools lint")).toBe("PASS");
-    expect(report.results.find((r) => r.check === "tools typecheck")).toMatchObject({
+    expect(report.results.find((r) => r.check === "tools")).toMatchObject({
       status: "FAIL",
-      errors: ["broken"],
+      errors: ["check 'typecheck' failed: broken type in src/a.ts"],
     });
   });
 
@@ -184,8 +149,6 @@ describe("playbook check on a real worktree", () => {
 
   it("skips a waived contract and reports the owner's reason", async () => {
     const { repo, base } = repoWithBase();
-    repo.writeJson("playbook.json", declarationWithSize({ "src/a.ts": 900 }));
-    repo.commit("over");
     const report = await check(repo.root, base, {
       contracts: ["size"],
       bypasses: { size: "refactor tracked in acme-fixture#2" },
@@ -195,11 +158,26 @@ describe("playbook check on a real worktree", () => {
     );
   });
 
-  it("fails an invalid declaration before any gate runs", async () => {
+  it("emits UNPROVEN for any contract or ci block omitted without an explicit opt-out (§1.2)", async () => {
+    const repo = makeFixtureRepo();
+    repo.writeJson("playbook.json", {
+      contracts: { size: { evidence: ".playbook/evidence/size.json" } },
+    });
+    const base = repo.commit("base");
+    writeEvidence(repo, "size");
+    const report = await check(repo.root, base);
+    expect(statusOf(report, "size")).toBe("PASS");
+    expect(statusOf(report, "fleet")).toBe("UNPROVEN");
+    expect(statusOf(report, "ci")).toBe("UNPROVEN");
+    expect(report.exitCode).toBe(3);
+  });
+
+  it("fails an invalid declaration (including retired baseline/command) before any check runs", async () => {
     const { repo, base } = repoWithBase();
-    repo.write("playbook.json", '{"contracts": {"size": {"limit": 400}}}');
+    repo.write("playbook.json", '{"contracts": {"size": {"baseline": "b.json"}}}');
     const report = await check(repo.root, base);
     expect(report.results).toHaveLength(1);
     expect(report.results[0]).toMatchObject({ check: "declaration", status: "FAIL" });
+    expect(report.results[0]?.errors[0]).toContain("baselines are removed");
   });
 });

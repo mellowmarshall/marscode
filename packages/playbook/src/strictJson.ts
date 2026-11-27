@@ -78,18 +78,3 @@ export function parseStrictJson(text: string): unknown {
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
-/** JSON with object keys sorted, so key order is never a change. */
-export function canonicalJson(value: unknown): string {
-  return JSON.stringify(sortKeys(value));
-}
-
-function sortKeys(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortKeys);
-  if (isRecord(value)) {
-    const out: Record<string, unknown> = {};
-    for (const key of Object.keys(value).toSorted()) out[key] = sortKeys(value[key]);
-    return out;
-  }
-  return value;
-}

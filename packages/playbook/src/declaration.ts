@@ -2,7 +2,7 @@
 /**
  * playbook.json: the single loader and parser (strict JSON, retired keys and
  * settings, closed-field schema validation). Every reader of the declaration
- * (the CLI, the gates, the challenger, the server's declaration view) uses it.
+ * (the CLI, the evidence validator, the challenger, the server's declaration view) uses it.
  */
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -11,71 +11,68 @@ import * as Schema from "effect/Schema";
 
 import schemaJson from "../schema/playbook.schema.json" with { type: "json" };
 import { validateAgainstSchema } from "./declarationSchema.ts";
+import { DEFAULT_EVIDENCE_DIR } from "./evidence.ts";
 import { isRecord, parseStrictJson, StrictJsonError } from "./strictJson.ts";
 
 const isStrictJsonError = Schema.is(StrictJsonError);
 
-export const HOST_VERSION = "7";
+export const HOST_VERSION = "8";
 export const DECLARATION = "playbook.json";
 const MAX_DECLARATION_BYTES = 512 * 1024;
 
-/** Contracts in gate order: design first so its scan reads files before any check runs repo code. */
 export const CONTRACT_NAMES = [
-  "design",
   "size",
-  "tools",
-  "migrations",
-  "dictionary",
-  "fleet",
   "generations",
   "intent",
+  "fleet",
+  "dictionary",
+  "migrations",
   "actions",
+  "design",
   "optimization",
+  "maps",
+  "tools",
+  "docs",
 ] as const;
 export type ContractName = (typeof CONTRACT_NAMES)[number];
 
 const PIN =
   "the version pin is removed: one rule set applies to every repo the moment it is released; delete";
 const MOVED =
-  "no longer read here: the owner's exceptions are in host-guards/exceptions.json; delete bypass from playbook.json";
-const ONE = "one rule set for every repo: ";
-const OWN = "the repo declares its own checks: ";
+  "no longer read here: host-level waivers live in host-guards/exceptions.json; delete bypass from playbook.json";
+const NO_BASELINE =
+  "baselines are removed (PLAYBOOK §1.2): fix violations or declare narrow scoped exceptions in exceptions[]";
+const EVIDENCE_ONLY =
+  "playbook does not execute repo checks or scanners itself (§1): run the check in repo CI and emit a playbook-evidence/v1 receipt declared via evidence";
 
 const RETIRED_KEYS: Readonly<Record<string, string>> = {
   playbook: `${PIN} the 'playbook' key from playbook.json`,
   version: `${PIN} the 'version' key from playbook.json`,
   stack_overrides:
-    "removed: whether a repo has a DB, a UI or an API is detected from its tree; delete stack_overrides",
+    "removed: declare applicable sections explicitly in contracts; delete stack_overrides",
   bypass: MOVED,
 };
 
 const RETIRED_SETTING_LIST: ReadonlyArray<readonly [string, string, string]> = [
-  ["size", "limit", `${ONE}the limit is 500 for every repo; delete size.limit`],
-  ["size", "scope", `${ONE}the scope is every source language the host counts; delete size.scope`],
-  ["size", "formatter", `${OWN}the repo's size.command counts its files; delete size.formatter`],
-  ["fleet", "form", `${ONE}one fleet schema with providers as data; delete fleet.form`],
-  ["dictionary", "markdown", `${ONE}a generated catalog is the generations contract's`],
-  ["dictionary", "protection", `${ONE}every table declares its protection tier`],
-  ["tools", "tools", `${OWN}declare each lint, typecheck and other step in tools.steps`],
-  ["tools", "osv", `${OWN}declare the dependency audit as a deps step in tools.steps`],
-  ["tools", "baselines", `${OWN}the playbook holds no tool Baseline; delete tools.baselines`],
-  ["tools", "exceptions", `${OWN}accepted advisories are the deps step's own config`],
-  ["tools", "knip_env", `${OWN}a step's environment is its own command's`],
-  ["migrations", "name", `${ONE}a new migration's name follows its runner's naming`],
-  ["migrations", "runner", `${OWN}declare migrations.lint and migrations.replay.command`],
-  ["actions", "tests", `${OWN}declare actions.evidence`],
-  ...[
-    "size",
-    "tools",
-    "migrations",
-    "dictionary",
-    "fleet",
-    "generations",
-    "intent",
-    "actions",
-    "design",
-    "optimization",
-  ].map((c) => [c, "bypass", MOVED] as const),
+  ...CONTRACT_NAMES.map((c) => [c, "baseline", NO_BASELINE] as const),
+  ...CONTRACT_NAMES.map((c) => [c, "bypass", MOVED] as const),
+  ["actions", "walk_baseline", NO_BASELINE],
+  ["size", "command", EVIDENCE_ONLY],
+  ["size", "limit", "removed (§3.1): use maxLines (<= 500) or omit for default 500"],
+  ["size", "scope", EVIDENCE_ONLY],
+  ["size", "formatter", EVIDENCE_ONLY],
+  ["fleet", "reads", EVIDENCE_ONLY],
+  ["fleet", "form", "removed: use fleet-shape.json and emit playbook-evidence/v1"],
+  ["generations", "command", EVIDENCE_ONLY],
+  ["tools", "steps", EVIDENCE_ONLY],
+  ["tools", "tools", EVIDENCE_ONLY],
+  ["tools", "osv", EVIDENCE_ONLY],
+  ["tools", "baselines", NO_BASELINE],
+  ["migrations", "lint", EVIDENCE_ONLY],
+  ["migrations", "render", EVIDENCE_ONLY],
+  ["migrations", "replay", EVIDENCE_ONLY],
+  ["migrations", "runner", EVIDENCE_ONLY],
+  ["design", "command", EVIDENCE_ONLY],
 ];
 
 const RETIRED_SETTINGS: ReadonlyMap<string, string> = new Map(
@@ -83,7 +80,7 @@ const RETIRED_SETTINGS: ReadonlyMap<string, string> = new Map(
 );
 
 const RETIRED_CONTRACTS: Readonly<Record<string, string>> = {
-  junk: `${ONE}tracked junk is the ship queue's house stage in every repo; delete contracts.junk`,
+  junk: "tracked junk is the ship queue's house stage in every repo; delete contracts.junk",
 };
 
 export type DeclarationData = Readonly<Record<string, unknown>>;
@@ -105,6 +102,11 @@ export function contractSettings(
 ): Readonly<Record<string, unknown>> {
   const body = contractsOf(data)[name];
   return isRecord(body) ? body : {};
+}
+
+export function evidenceDirOf(data: DeclarationData | null): string {
+  const raw = data?.evidenceDir;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : DEFAULT_EVIDENCE_DIR;
 }
 
 /** A contract declared only as `{"none": "<reason>"}`. */

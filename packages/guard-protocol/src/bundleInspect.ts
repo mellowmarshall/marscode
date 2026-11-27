@@ -43,14 +43,10 @@ const PROTECTED_RULES: ReadonlyArray<ProtectedRule> = [
     reason: "secret-scanner allowlist modified",
   },
   {
-    test: (p) => p === "playbook/PLAYBOOK.md" || p === "PLAYBOOK.md",
+    test: (p) =>
+      p === "playbook/PLAYBOOK.md" || p === "PLAYBOOK.md" || p === "packages/playbook/PLAYBOOK.md",
     gateId: "playbook-amend",
     reason: "PLAYBOOK.md amended",
-  },
-  {
-    test: (p) => p === "playbook/CHALLENGE.md" || p === "CHALLENGE.md",
-    gateId: "playbook-amend",
-    reason: "CHALLENGE.md amended",
   },
   {
     test: (p) => p === "playbook.json",
@@ -285,9 +281,8 @@ function listPlaybookCandidateProtectedPaths(topLevel: string, mergeBase: string
       "host-guards",
       ".github/workflows",
       "playbook/PLAYBOOK.md",
-      "playbook/CHALLENGE.md",
+      "packages/playbook/PLAYBOOK.md",
       "PLAYBOOK.md",
-      "CHALLENGE.md",
       "playbook.json",
       ".gitleaks.toml",
       ".gitleaksignore",

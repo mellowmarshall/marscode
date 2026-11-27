@@ -1,63 +1,111 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "playbook.schema.json",
-  "title": "playbook.json",
-  "description": "A repo's declaration for the agent-ready repo playbook (devtools/playbook/PLAYBOOK.md). Fields are closed: an unknown key fails. There is no version pin: one rule set applies to every repo at release (private-repo).",
+  "$id": "https://example.dev/schemas/playbook.schema.json",
+  "title": "Playbook declaration (evidence-only, stack-agnostic)",
+  "description": "Repo declaration of applicable playbook sections, scoped exceptions, and repo-emitted playbook-evidence/v1 receipt locations. Playbook never runs linters, scanners, SQL parsers, or DB replays itself.",
   "type": "object",
   "additionalProperties": false,
   "required": ["contracts"],
   "properties": {
     "$schema": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1
     },
-    "contracts": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "size": {
-          "$ref": "#/$defs/size"
-        },
-        "tools": {
-          "$ref": "#/$defs/tools"
-        },
-        "migrations": {
-          "$ref": "#/$defs/migrations"
-        },
-        "dictionary": {
-          "$ref": "#/$defs/dictionary"
-        },
-        "fleet": {
-          "$ref": "#/$defs/fleet"
-        },
-        "generations": {
-          "$ref": "#/$defs/generations"
-        },
-        "intent": {
-          "$ref": "#/$defs/intent"
-        },
-        "actions": {
-          "$ref": "#/$defs/actions"
-        },
-        "design": {
-          "$ref": "#/$defs/design"
-        },
-        "optimization": {
-          "$ref": "#/$defs/optimization"
-        }
-      }
+    "evidenceDir": {
+      "$ref": "#/$defs/path",
+      "description": "Default directory holding untracked playbook-evidence/v1 JSON receipts (default: .playbook/evidence)."
     },
     "ci": {
-      "$ref": "#/$defs/ci"
-    }
-  },
-  "$defs": {
-    "ci": {
-      "description": "What the repo's CI needs on a CI host. The ship queue reads these at the job's base sha in place of the ship_ci_tool, ship_ci_service, ship_ci_secret, ship_ci_doppler, ship_ci_path, ship_ci_evidence and ship_ci_arch keys of .tree-guard.conf, which are then ignored with a warning (devtools/ship-queue/README.md, The declaration).",
       "type": "object",
       "additionalProperties": false,
+      "description": "CI standards and execution tier evidence + ship-queue host routing metadata (PLAYBOOK §14).",
       "properties": {
+        "evidence": {
+          "type": ["string", "array"],
+          "minLength": 1,
+          "pattern": "^(?!/)(?!(.*/)?\\.\\.(/|$)).+",
+          "items": {
+            "type": "string",
+            "pattern": "^(?!.*(^|/)\\.{1,2}(/|$))(?!.*//)[A-Za-z0-9._][A-Za-z0-9._/-]*$"
+          },
+          "description": "Path to the repo-emitted CI playbook-evidence/v1 JSON receipt, or list of failed-run diagnostic paths for ship-queue."
+        },
+        "none": {
+          "$ref": "#/$defs/reason",
+          "description": "Explicit opt-out reason when the repo has no CI."
+        },
+        "exceptions": {
+          "$ref": "#/$defs/exceptions"
+        },
+        "parallel": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "description": "Declared CI worker concurrency."
+        },
+        "select": {
+          "type": ["string", "object"],
+          "minLength": 1,
+          "description": "Repo diff-selection command description, path, or path-to-suite map."
+        },
+        "full": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Globs whose change justifies full-suite selection."
+        },
+        "always": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Always-run gate commands."
+        },
+        "granularThresholdMs": {
+          "type": "integer",
+          "minimum": 1000,
+          "description": "Stages exceeding this duration (ms, default 30000) must emit granular substeps[] timings (§14.2)."
+        },
+        "maxTier1Ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "description": "Tier 1 wall-time ceiling in ms (default 60000)."
+        },
+        "maxTier2Ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "description": "Tier 2 wall-time ceiling in ms (default 180000)."
+        },
+        "maxTier3Ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "description": "Tier 3 wall-time ceiling in ms (default 300000)."
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "secrets": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
         "tools": {
-          "description": "NAME[@RANGE]: a tool of devtools/ship-queue/ci-hosts.json, beyond the hosts' base tools.",
           "type": "array",
           "items": {
             "type": "string",
@@ -65,7 +113,7 @@
           }
         },
         "settings": {
-          "description": "The repo's CI settings: each NAME lists the tools (NAME[@RANGE] of devtools/ship-queue/ci-hosts.json) every run of that setting needs on its host. The repo's ship_ci_needs step prints the settings one job's CI uses, and the queue routes that job only to a host with the declared tools and those settings' tools (private-repo).",
+          "description": "CI settings mapping setting name to required host tools for ship-queue routing.",
           "type": "object",
           "propertyNames": {
             "type": "string",
@@ -80,251 +128,210 @@
             }
           }
         },
-        "services": {
-          "description": "A compose service the CI needs; a remote CI host starts exactly these.",
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
-          }
-        },
-        "secrets": {
-          "description": "A vendor token the host hands the CI step (ship-queue's ci_secret_item names its 1Password item).",
-          "type": "array",
-          "items": {
-            "enum": [
-              "CLOUDFLARE_API_TOKEN",
-              "DOPPLER_TOKEN",
-              "FLY_API_TOKEN",
-              "HCLOUD_TOKEN",
-              "NEON_API_KEY",
-              "OP_SERVICE_ACCOUNT_TOKEN"
-            ]
-          }
-        },
         "doppler": {
-          "description": "PROJECT/CONFIG: a Doppler config the queue host mints a short-lived read token for during the CI (ship_ci_doppler; private-repo).",
+          "description": "PROJECT/CONFIG: Doppler configs minted for CI by ship-queue.",
           "type": "array",
           "items": {
             "type": "string",
             "pattern": "^[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*$"
           }
         },
-        "paths": {
-          "description": "A directory the CI writes, relative to each CI host's data root ($SHIP_QUEUE_DATA_ROOT).",
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^(?!.*(^|/)\\.{1,2}(/|$))(?!.*//)[A-Za-z0-9._-][A-Za-z0-9._/-]*$"
-          }
-        },
         "arch": {
-          "description": "x86_64, aarch64 or riscv64, as uname -m names it on Linux: the ship queue runs the CI only on a host of one of these (ship_ci_arch; private-repo). Absent: any host.",
+          "description": "Host architectures eligible to run CI (ship-queue routing).",
           "type": "array",
           "items": {
             "enum": ["x86_64", "aarch64", "riscv64"]
           }
-        },
-        "evidence": {
-          "description": "A path in the job tree that a failed run's evidence lives in (test traces, screenshots, lane logs). After a failed run on a CI host the ship queue brings it back to jobs/<id>/evidence/<host>/ before the run's worktree goes (private-repo).",
-          "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^(?!.*(^|/)\\.{1,2}(/|$))(?!.*//)[A-Za-z0-9._][A-Za-z0-9._/-]*$"
-          }
         }
       }
     },
+    "contracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "size": {
+          "$ref": "#/$defs/sizeContract"
+        },
+        "generations": {
+          "$ref": "#/$defs/sectionContract"
+        },
+        "intent": {
+          "$ref": "#/$defs/intentContract"
+        },
+        "fleet": {
+          "$ref": "#/$defs/fileSectionContract"
+        },
+        "dictionary": {
+          "$ref": "#/$defs/fileSectionContract"
+        },
+        "migrations": {
+          "$ref": "#/$defs/migrationsContract"
+        },
+        "actions": {
+          "$ref": "#/$defs/fileSectionContract"
+        },
+        "design": {
+          "$ref": "#/$defs/sectionContract"
+        },
+        "optimization": {
+          "$ref": "#/$defs/fileSectionContract"
+        },
+        "maps": {
+          "$ref": "#/$defs/fileSectionContract"
+        },
+        "tools": {
+          "$ref": "#/$defs/sectionContract"
+        },
+        "docs": {
+          "$ref": "#/$defs/docsContract"
+        }
+      }
+    }
+  },
+  "$defs": {
     "path": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?!/)(?!(.*/)?\\.\\.(/|$)).+",
-      "description": "A repo-relative path: no leading /, no .. segment."
+      "pattern": "^(?!/)(?!.*\\.\\.)[^\\0]+$"
     },
-    "optionalPath": {
-      "type": ["string", "null"],
-      "minLength": 1,
-      "pattern": "^(?!/)(?!(.*/)?\\.\\.(/|$)).+"
-    },
-    "baseline": {
-      "description": "A repo path to this contract's Baseline file.",
+    "reason": {
       "type": "string",
-      "minLength": 1,
-      "pattern": "^(?!/)(?!(.*/)?\\.\\.(/|$)).+"
+      "minLength": 8
     },
-    "size": {
+    "issueRef": {
+      "type": "string",
+      "pattern": "^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[1-9][0-9]*$"
+    },
+    "exception": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "reason", "issue"],
+      "properties": {
+        "subject": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        },
+        "issue": {
+          "$ref": "#/$defs/issueRef"
+        }
+      }
+    },
+    "exceptions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/exception"
+      }
+    },
+    "sectionContract": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "command": {
-          "$ref": "#/$defs/command",
-          "description": "The repo's line count (private-repo): it prints one JSON object, {\"<file>\": <code lines>}, covering every source file in the scope; an allowlisted function's own count is the key \"<file>#<function>\". The playbook holds each file to 500 code lines (and 500 raw lines, which it counts itself)."
+        "none": {
+          "$ref": "#/$defs/reason"
         },
-        "exempt": {
-          "description": "The repo's exempt places beyond the host's list (tests, drills, migrations, generated, CI files): each a regex of repo paths with the reason it is exempt. One scope and one 500-line limit apply to every repo (private-repo).",
-          "type": "object",
-          "additionalProperties": {
-            "type": "string",
-            "minLength": 10
-          }
+        "evidence": {
+          "$ref": "#/$defs/path"
         },
-        "baseline": {
-          "$ref": "#/$defs/baseline"
+        "exceptions": {
+          "$ref": "#/$defs/exceptions"
+        },
+        "choke": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "fileSectionContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "none": {
+          "$ref": "#/$defs/reason"
+        },
+        "evidence": {
+          "$ref": "#/$defs/path"
+        },
+        "exceptions": {
+          "$ref": "#/$defs/exceptions"
+        },
+        "file": {
+          "$ref": "#/$defs/path"
+        },
+        "choke": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "sizeContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "none": {
+          "$ref": "#/$defs/reason"
+        },
+        "evidence": {
+          "$ref": "#/$defs/path"
+        },
+        "exceptions": {
+          "$ref": "#/$defs/exceptions"
         },
         "allowlist": {
           "$ref": "#/$defs/path"
+        },
+        "maxLines": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
         }
-      },
-      "required": ["command"]
+      }
     },
-    "migrations": {
+    "migrationsContract": {
       "type": "object",
       "additionalProperties": false,
+      "description": "Stack-agnostic migration & destructive-DDL contract (§8): works with SurrealQL, Postgres, SQLite, Drizzle, Prisma, Alembic, Flyway, or any custom migrator via repo-emitted evidence.",
       "properties": {
-        "migrator": {
-          "description": "The repo's migration runner format and record table (private-repo): raw, drizzle, prisma, alembic, sqlx, or flyway.",
+        "none": {
+          "$ref": "#/$defs/reason"
+        },
+        "evidence": {
+          "$ref": "#/$defs/path"
+        },
+        "exceptions": {
+          "$ref": "#/$defs/exceptions"
+        },
+        "engine": {
           "type": "string",
-          "enum": ["raw", "drizzle", "prisma", "alembic", "sqlx", "flyway"]
+          "minLength": 1
+        },
+        "migrator": {
+          "type": "string",
+          "minLength": 1
         },
         "dir": {
-          "$ref": "#/$defs/optionalPath"
-        },
-        "list": {
-          "$ref": "#/$defs/optionalPath"
-        },
-        "baseline": {
-          "$ref": "#/$defs/baseline"
-        },
-        "protection": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["override", "guards"],
-          "description": "The member-data guards: the setting a migration sets before a protected write, and the guard functions' name prefix.",
-          "properties": {
-            "override": {
-              "type": "string",
-              "pattern": "^[a-z_][a-z0-9_.]*$"
-            },
-            "guards": {
-              "type": "string",
-              "pattern": "^[a-z_][a-z0-9_]*$"
-            }
-          }
-        },
-        "code": {
-          "description": "Runtime code directories that may not change the schema (and are read for TRUNCATE when listed in truncate).",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/path"
-          }
-        },
-        "truncate": {
-          "description": "Directories read for refused TRUNCATE statements.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/path"
-          }
-        },
-        "scripts": {
-          "description": "Scripts and ops directories that may not alter or misquote an app table.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/path"
-          }
-        },
-        "replay": {
-          "description": "How the migrations replay into a throwaway database for schema comparison (private-repo, #404, #771). `command` applies every migration with the repo's own runner, connecting through DATABASE_URL and the fleet shape's database env vars. `engine` is postgres (throwaway Postgres container; default when a Postgres image or dependency is present), sqlite (throwaway SQLite database file; default when SQLite is detected), or command (command prints the replayed schema JSON on stdout).",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "command": {
-              "$ref": "#/$defs/command"
-            },
-            "engine": {
-              "description": "How the migrations replay: postgres (throwaway Postgres container), sqlite (throwaway SQLite database file), or command (command prints the replayed schema JSON on stdout).",
-              "type": "string",
-              "enum": ["postgres", "sqlite", "command"]
-            },
-            "image": {
-              "description": "A Postgres-family image with every extension the migrations create, for example pgvector/pgvector:pg16.",
-              "type": "string",
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:@-]*$"
-            },
-            "database": {
-              "description": "The database name the migrations run in (default replay).",
-              "type": "string",
-              "pattern": "^[a-z_][a-z0-9_]*$"
-            },
-            "extensions": {
-              "description": "Extensions created before the first migration, for a system whose runner or platform creates them outside the migrations.",
-              "type": "array",
-              "items": {
-                "type": "string",
-                "pattern": "^[a-z_][a-z0-9_-]*$"
-              }
-            }
-          },
-          "required": ["command"]
-        },
-        "lint": {
-          "$ref": "#/$defs/command",
-          "description": "The repo's migration lint (private-repo), for example squawk with its own config: run on the commit going in with PLAYBOOK_BASE and PLAYBOOK_MIGRATIONS_NEW (the new migration files, one per line); it must exit 0."
-        },
-        "render": {
-          "$ref": "#/$defs/command",
-          "description": "For migrations that are not SQL files (private-repo): prints the SQL the migration PLAYBOOK_MIGRATION (a repo path) runs, for the static rules; for example `alembic upgrade <down>:<rev> --sql` behind a repo script."
-        }
-      }
-    },
-    "dictionary": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["file"],
-      "properties": {
-        "file": {
           "$ref": "#/$defs/path"
         },
-        "baseline": {
-          "$ref": "#/$defs/baseline"
+        "snapshot": {
+          "$ref": "#/$defs/path"
         }
       }
     },
-    "fleet": {
+    "intentContract": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["file", "reads"],
       "properties": {
-        "file": {
+        "none": {
+          "$ref": "#/$defs/reason"
+        },
+        "evidence": {
           "$ref": "#/$defs/path"
         },
-        "baseline": {
-          "$ref": "#/$defs/baseline"
+        "exceptions": {
+          "$ref": "#/$defs/exceptions"
         },
-        "reads": {
-          "type": "string",
-          "minLength": 1,
-          "description": "The repo's command that prints the env names its code reads, as {\"NAME\": [\"file\", ...]} (private-repo, PLAYBOOK §1.2)"
-        }
-      }
-    },
-    "generations": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["command"],
-      "properties": {
-        "command": {
-          "type": ["string", "null"],
-          "minLength": 1,
-          "description": "The umbrella generator command; null when the repo has no generator (then no file may carry a GENERATED marker)."
-        }
-      }
-    },
-    "intent": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["contracts"],
-      "properties": {
         "contracts": {
           "type": "object",
           "additionalProperties": false,
@@ -348,257 +355,24 @@
         }
       }
     },
-    "actions": {
+    "docsContract": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["file"],
       "properties": {
-        "file": {
-          "$ref": "#/$defs/path"
-        },
-        "baseline": {
-          "$ref": "#/$defs/baseline"
-        },
-        "source": {
-          "type": "string",
-          "minLength": 1,
-          "format": "regex",
-          "description": "The client source the whole-tree scan reads, as a regex of repo paths."
-        },
-        "ledger": {
-          "description": "The walk ledger: each action's last recorded walk pass.",
-          "$ref": "#/$defs/path"
-        },
-        "walk_baseline": {
-          "description": "The Baseline of entries not yet walked; its entries' issue names the ledger.",
-          "$ref": "#/$defs/baseline"
-        },
-        "held_back": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["file"],
-          "properties": {
-            "file": {
-              "$ref": "#/$defs/path"
-            },
-            "root": {
-              "type": "string",
-              "pattern": "^(?!/)(?!.*\\.\\.)",
-              "description": "The folder the declaration's module paths are relative to."
-            }
-          },
-          "description": "The repo's held-back feature declaration ({features: {name: {modules}}}): an action whose featureFlag names a listed feature, with every use of its testID in that feature's declared modules, is walked when the feature turns on, not before it merges (exp#4000). Known from playbook 4; a host built before private-repo refuses it by schema."
-        },
-        "chokepoint": {
-          "type": "boolean",
-          "description": "True when the repository enforces user actions at component or type choke points (e.g. action: ActionId in contracts.design.ui), eliminating whole-tree AST crawler overhead."
-        },
-        "floors": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "integer",
-              "minimum": 1
-            }
-          },
-          "description": "Declared runtime entity hydration floors for actions and journeys: maps action patterns or IDs to minimum required populated entity counts (e.g. {\"profile:*\": {\"proofs\": 1}})."
+        "none": {
+          "$ref": "#/$defs/reason"
         },
         "evidence": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["run", "tests"],
-          "description": "The repo's action-to-test evidence (private-repo): `run` prints {\"tests\": [{\"file\", \"line\", \"title\", \"kind\": \"e2e\"|\"component\", \"actions\": [ids], \"selectors\": [testIDs]}]}; `tests` is a regex of the test files it reads (a change to one runs the actions check).",
-          "properties": {
-            "run": {
-              "$ref": "#/$defs/command"
-            },
-            "tests": {
-              "type": "string",
-              "minLength": 1,
-              "format": "regex"
-            }
-          }
-        }
-      }
-    },
-    "design": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "tokens": {
-          "$ref": "#/$defs/optionalPath"
-        },
-        "ui": {
-          "$ref": "#/$defs/optionalPath"
-        },
-        "interactive": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "style_properties": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "slots": {
-          "$ref": "#/$defs/optionalPath"
-        },
-        "slot_calls": {
-          "description": "Functions or hooks that name an appearance slot (e.g. skinSlotHasArt, useSkinSlot; private-repo).",
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "system": {
-          "description": "The design system's folder (private-repo): a script under it that renders nothing is token source like the token module. Never a whole client scope, never holding the UI package.",
-          "$ref": "#/$defs/optionalPath"
-        },
-        "baseline": {
-          "$ref": "#/$defs/baseline"
-        },
-        "client": {
-          "description": "The client code: path prefixes ending in /, or single files (private-repo).",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/path"
-          }
-        },
-        "content_values": {
-          "description": "Authored rendering data within client scope (private-repo). Changes the classification of content values, never file coverage: DOM/native UI styles, CSS, embedded HTML and visitor interactions remain checked. The reason and scope are reviewed with declaration changes.",
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["source", "why"],
-          "properties": {
-            "source": {
-              "type": "array",
-              "minItems": 1,
-              "items": { "$ref": "#/$defs/path" }
-            },
-            "why": { "type": "string", "minLength": 1, "pattern": "\\S" }
-          }
-        },
-        "touch_calls": {
-          "description": "The UI package's functions or hooks whose result, spread on an element or as its hitSlop, gives it the 48dp touch target (private-repo; e.g. useTouchTarget).",
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "command": {
-          "$ref": "#/$defs/command",
-          "description": "The repo's declared design check command (required for `playbook check design`; private-repo): run on the commit going in with PLAYBOOK_BASE; it must exit 0 and emit {\"findings\": [{\"rule\", \"file\", \"line\", \"text\", \"message\"}], \"files\"?: <int>} on stdout."
-        },
-        "chokepoint": {
-          "type": "boolean",
-          "description": "True when the repository enforces design tokens and UI primitives at component choke points."
-        }
-      }
-    },
-    "tools": {
-      "description": "The repo's declared checks (PLAYBOOK §14; private-repo): the playbook runs each step and requires exit 0, and every language in the tree has a step of each class it needs. It holds no tool, config or Baseline.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["steps"],
-      "properties": {
-        "steps": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/step"
-          }
-        }
-      }
-    },
-    "optimization": {
-      "description": "Optimization budgets (PLAYBOOK §11): `file` (the budgets) and `receipts` (the ledger the repo's measurement run writes) or `measuredBy` (the merge gate measures, and no ledger is committed), with an optional `baseline`; or `none`, the reason a repo with no route, job or action has nothing to budget. The gate refuses a mix.",
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "file": {
           "$ref": "#/$defs/path"
         },
-        "receipts": {
+        "exceptions": {
+          "$ref": "#/$defs/exceptions"
+        },
+        "user": {
           "$ref": "#/$defs/path"
         },
-        "measuredBy": {
-          "description": "In place of `receipts`: the repo's merge gate is the measurement run, and the repo holds no receipts file. Accepted only where `.tree-guard.conf` declares `ship_merge_gate` and `ship_pass_record=merge`.",
-          "enum": ["merge-gate"]
-        },
-        "baseline": {
-          "$ref": "#/$defs/baseline"
-        },
-        "none": {
-          "type": "string",
-          "minLength": 10
-        }
-      }
-    },
-    "command": {
-      "type": "string",
-      "minLength": 1,
-      "pattern": "\\S",
-      "description": "A nonblank command the playbook runs with bash in the checkout (private-repo): the repo's own tool and config. It must exit 0; it reads, never writes."
-    },
-    "step": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "class", "run", "languages"],
-      "description": "One declared check (private-repo): the playbook runs `run` on the commit going in and requires exit 0. Which tool, config and rules are the repo's.",
-      "properties": {
-        "name": {
-          "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9._-]*$",
-          "description": "The step's name, unique in the list; results are `tools <name>`."
-        },
-        "class": {
-          "enum": ["lint", "typecheck", "deadcode", "deps", "format"],
-          "description": "The class of check: every language the tree holds needs the classes pb_languages names for it (lint and deadcode for every language; typecheck for a statically typed language), and a tracked lockfile needs deps."
-        },
-        "run": {
-          "$ref": "#/$defs/command"
-        },
-        "languages": {
-          "type": "array",
-          "description": "The languages the step checks (pb_languages names); empty for a deps step.",
-          "items": {
-            "enum": [
-              "ts",
-              "js",
-              "rust",
-              "python",
-              "shell",
-              "go",
-              "c",
-              "cpp",
-              "csharp",
-              "java",
-              "kotlin",
-              "swift",
-              "ruby",
-              "php",
-              "dart",
-              "elixir",
-              "scala",
-              "zig",
-              "lua",
-              "r"
-            ]
-          }
-        },
-        "config": {
-          "type": "array",
-          "description": "The config files the command reads: each must exist, and a change to one is reported in the result.",
-          "items": {
-            "$ref": "#/$defs/path"
-          }
+        "admin": {
+          "$ref": "#/$defs/path"
         }
       }
     }

@@ -4,6 +4,8 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import { DEFAULT_EVIDENCE_DIR, EVIDENCE_SCHEMA } from "../evidence.ts";
+
 /** A fixed clock for every test: no test reads the wall clock. */
 export const FIXED_TODAY = "2026-11-27";
 export const FIXED_NOW = "2026-11-27T12:00:00.000Z";
@@ -12,12 +14,15 @@ const FIXTURE_ORIGIN = "https://github.com/acme-fixture/sample-repo.git";
 /** An env in which the guard client never finds a broker socket (no owner prompt from a test). */
 export const NO_BROKER_ENV: NodeJS.ProcessEnv = {
   ...process.env,
+  CI: "",
   T3_GUARD_GRANT_SOCKET: "",
   SHIP_QUEUE_JOB: "",
   SHIP_QUEUE_BODYFILE: "",
   SHIP_QUEUE_ONTO: "",
   SHIP_QUEUE_BASE_SHA: "",
   PLAYBOOK_CHALLENGE_ADVISORY: "",
+  PLAYBOOK_EVIDENCE_DIR: "",
+  PLAYBOOK_EVIDENCE_JOB: "",
 };
 
 const created: string[] = [];
@@ -54,6 +59,7 @@ export interface FixtureRepo {
   readonly write: (rel: string, content: string) => void;
   readonly writeJson: (rel: string, value: unknown) => void;
   readonly commit: (message: string) => string;
+  readonly tree: () => string;
   readonly branch: (name: string) => void;
 }
 
@@ -78,15 +84,16 @@ export function makeFixtureRepo(prefix = "pb-fixture-"): FixtureRepo {
       runGit(root, ["commit", "-q", "--allow-empty", "-m", message]);
       return runGit(root, ["rev-parse", "HEAD"]);
     },
+    tree: () => runGit(root, ["rev-parse", "HEAD^{tree}"]),
     branch: (name) => runGit(root, ["checkout", "-q", "-b", name]),
   };
 }
 
-/** A PLAYBOOK.md with every numbered section the challenger requires, and §2's reviewer bullet. */
+/** A PLAYBOOK.md with every numbered section (§0–§15) the challenger requires, and §2.2's reviewer bullet. */
 export function fixturePlaybookMd(): string {
   const titles = [
     "Terms",
-    "What counts as a contract",
+    "Contracts, Growth & Scoped Exceptions",
     "Ship queue",
     "File size ratchet",
     "Declarations and generations",
@@ -97,34 +104,68 @@ export function fixturePlaybookMd(): string {
     "User actions catalog",
     "Design rules",
     "Optimization budgets",
-    "Host guards",
     "System maps",
-    "Declared checks",
+    "Declared checks & Dead code",
     "CI standards and execution tiers",
+    "Product docs",
   ];
   return titles
     .map((title, n) => {
       const extra =
         n === 2
-          ? "\n- **The reviewer**: judges the change.\n"
+          ? "\n- **2.2 The reviewer (`playbook challenge`):** judges strictly against this playbook.\n"
           : n === 3
-            ? "\n- **The limit**: 500 lines.\n- **The Baseline**: shrinks only.\n"
-            : "";
+            ? "\n- **3.1 Domain-seam splits (`<= 500` lines):** 500 lines.\n"
+            : n === 9
+              ? "\n- **9.2 Repo evidence:** test evidence.\n"
+              : "";
       return `## ${n}. ${title}\n\nSection ${n} text.\n${extra}`;
     })
     .join("\n");
 }
 
-/** The minimal valid declaration with a size command that reports COUNTS. */
-export function declarationWithSize(counts: Readonly<Record<string, number>>, extra: object = {}) {
+/** Minimal valid evidence-only declaration with explicit opt-outs for unused sections (§1.2). */
+export function evidenceDeclaration(extra: object = {}, ci?: object) {
   return {
+    evidenceDir: DEFAULT_EVIDENCE_DIR,
     contracts: {
-      size: { command: `echo '${JSON.stringify(counts)}'` },
-      fleet: { file: "fleet.json", reads: "echo '{}'" },
-      tools: { steps: [] },
-      generations: { command: null },
+      size: { evidence: `${DEFAULT_EVIDENCE_DIR}/size.json` },
+      fleet: { file: "fleet.json", evidence: `${DEFAULT_EVIDENCE_DIR}/fleet.json` },
+      tools: { evidence: `${DEFAULT_EVIDENCE_DIR}/tools.json` },
+      generations: { none: "no generated files in fixture" },
+      intent: { none: "no public contract surfaces in fixture" },
+      dictionary: { none: "no database schema in fixture" },
+      migrations: { none: "no database migrations in fixture" },
+      actions: { none: "no user action catalog in fixture" },
+      design: { none: "no UI surfaces in fixture" },
       optimization: { none: "nothing to budget: no route, job or action" },
+      maps: { none: "no system maps in fixture" },
+      docs: { none: "no product docs in fixture" },
       ...extra,
     },
+    ci: ci ?? { none: "no CI pipeline in minimal fixture" },
   };
+}
+
+/** Write a valid untracked `playbook-evidence/v1` receipt bound to REPO's current HEAD tree. */
+export function writeEvidence(
+  repo: FixtureRepo,
+  section: string,
+  overrides: Readonly<Record<string, unknown>> = {},
+  relPath?: string,
+): void {
+  const base: Record<string, unknown> = {
+    schema: EVIDENCE_SCHEMA,
+    section,
+    status: "pass",
+    tree: repo.tree(),
+    generatedAt: FIXED_NOW,
+    summary: `${section} checks passed`,
+    checks: [{ name: `${section}-check`, status: "pass", durationMs: 42 }],
+  };
+  if (section === "ci") {
+    base.durationMs = 500;
+    base.measurements = { setupMs: 120, testMs: 380, tier1Ms: 500, selectedSuites: ["unit"] };
+  }
+  repo.writeJson(relPath ?? `${DEFAULT_EVIDENCE_DIR}/${section}.json`, { ...base, ...overrides });
 }

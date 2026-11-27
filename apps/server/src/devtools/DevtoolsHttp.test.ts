@@ -1735,6 +1735,15 @@ describe("DevtoolsHttp routes", () => {
       }),
   );
 
+  const setPlaybookEvidenceDir = (dir: string): (() => void) => {
+    const prev = process.env.PLAYBOOK_EVIDENCE_DIR;
+    process.env.PLAYBOOK_EVIDENCE_DIR = dir;
+    return () => {
+      if (prev === undefined) delete process.env.PLAYBOOK_EVIDENCE_DIR;
+      else process.env.PLAYBOOK_EVIDENCE_DIR = prev;
+    };
+  };
+
   it.effect("runs /playbook/run in-process and gates the challenge and review-thread routes", () =>
     Effect.gen(function* () {
       const repoDir = NodePath.join(mkTempDir("t3-pb-run-"), "sample-repo");
@@ -1743,10 +1752,10 @@ describe("DevtoolsHttp routes", () => {
         NodePath.join(repoDir, "playbook.json"),
         JSON.stringify({
           contracts: {
-            size: { command: `echo '{"src/a.ts": 2}'` },
-            fleet: { file: "fleet.json", reads: "echo '{}'" },
-            tools: { steps: [] },
-            generations: { command: null },
+            size: { evidence: ".playbook/evidence/size.json" },
+            fleet: { file: "fleet.json", evidence: ".playbook/evidence/fleet.json" },
+            tools: { evidence: ".playbook/evidence/tools.json" },
+            generations: { none: "no generated files in fixture" },
             optimization: { none: "nothing to budget: no route, job or action" },
           },
         }),
@@ -1772,6 +1781,22 @@ describe("DevtoolsHttp routes", () => {
         });
         expect(res.status).toBe(0);
       }
+      const tree = NodeChildProcess.spawnSync("git", ["-C", repoDir, "rev-parse", "HEAD^{tree}"], {
+        encoding: "utf8",
+      }).stdout.trim();
+      const evidenceDir = mkTempDir("t3-pb-evidence-");
+      NodeFS.writeFileSync(
+        NodePath.join(evidenceDir, "size.json"),
+        JSON.stringify({
+          schema: "playbook-evidence/v1",
+          section: "size",
+          status: "pass",
+          tree,
+          checks: [{ name: "size-check", status: "pass", durationMs: 12 }],
+        }),
+      );
+      const restoreEvidenceDir = setPlaybookEvidenceDir(evidenceDir);
+      yield* Effect.addFinalizer(() => Effect.sync(restoreEvidenceDir));
       const broker = new GuardGrantBroker({
         exceptionsPaths: [NodePath.join(repoDir, "none.json")],
       });
@@ -1868,23 +1893,22 @@ describe("DevtoolsHttp routes", () => {
         NodePath.join(repoDir, "playbook.json"),
         JSON.stringify({
           contracts: {
-            size: { baseline: "size-baseline.json", command: "playbook size" },
+            size: {
+              evidence: ".playbook/evidence/size.json",
+              exceptions: [
+                { subject: "a.ts", reason: "Cohesive parser state machine", issue: "#99" },
+                { subject: "b.ts", reason: "Cohesive wire protocol codec", issue: "#99" },
+              ],
+            },
             tools: {
-              steps: [{ name: "lint" }, { name: "test" }],
+              evidence: ".playbook/evidence/tools.json",
             },
           },
         }),
       );
       NodeFS.writeFileSync(
-        NodePath.join(repoDir, "size-baseline.json"),
-        JSON.stringify([
-          { path: "a.ts", expires: "2026-12-31" },
-          { path: "b.ts", expires: "2026-11-25" },
-        ]),
-      );
-      NodeFS.writeFileSync(
         NodePath.join(repoDir, "playbook", "PLAYBOOK.md"),
-        "## 0. Scope\n\n## 3. File Size\n\n## 14. Tool Gates\n",
+        "## 0. Terms\n\n## 3. File size ratchet\n\n## 13. Declared checks & Dead code\n",
       );
       const excPath = NodePath.join(dir, "exceptions.json");
       NodeFS.writeFileSync(
@@ -1933,8 +1957,8 @@ describe("DevtoolsHttp routes", () => {
         hasPlaybookJson: boolean;
         contracts: Array<{
           name: string;
-          baselineCount: number | null;
-          nearestExpiry: string | null;
+          evidencePath: string | null;
+          exceptionCount: number;
           status: string;
         }>;
         rules: Array<{ section: number; status: string }>;
@@ -1943,8 +1967,8 @@ describe("DevtoolsHttp routes", () => {
       expect(payload.hasPlaybookJson).toBe(true);
       const sizeContract = payload.contracts.find((c) => c.name === "size");
       expect(sizeContract).toMatchObject({
-        baselineCount: 2,
-        nearestExpiry: "2026-11-25",
+        evidencePath: ".playbook/evidence/size.json",
+        exceptionCount: 2,
         status: "waived",
       });
       const toolsContract = payload.contracts.find((c) => c.name === "tools");
@@ -1952,7 +1976,7 @@ describe("DevtoolsHttp routes", () => {
       expect(payload.rules.map((r) => [r.section, r.status])).toEqual([
         [0, "enforced"],
         [3, "waived"],
-        [14, "enforced"],
+        [13, "enforced"],
       ]);
 
       const excRes = yield* runHandler(handler, {

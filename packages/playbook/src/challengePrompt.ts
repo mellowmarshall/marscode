@@ -1,9 +1,8 @@
-// @effect-diagnostics nodeBuiltinImport:off - Locates PLAYBOOK.md and CHALLENGE.md on disk.
+// @effect-diagnostics nodeBuiltinImport:off - Locates PLAYBOOK.md on disk.
 /**
- * The challenge prompt: PLAYBOOK.md's full text (§§0-15, verified whole and in
- * order, owner waivers noted per section or rule) substituted into the
- * CHALLENGE.md template. No prompt instructions live in the engine's code
- * beyond the shipped default template.
+ * The challenge prompt: PLAYBOOK.md's full text (§0–§15, verified whole and in
+ * order, owner waivers noted per section or rule) embedded in the strict
+ * playbook-compliance framing template. No separate CHALLENGE.md file exists.
  */
 import * as Schema from "effect/Schema";
 import * as NodeFS from "node:fs";
@@ -12,10 +11,15 @@ import * as NodePath from "node:path";
 
 import { sectionBypassReason, sectionRuleReasons, type Bypasses } from "./bypass.ts";
 import { DEFAULT_CHALLENGE_TEMPLATE } from "./challengeTemplate.ts";
+import { readWorktreeFile, showFile } from "./git.ts";
+
+declare const __BUNDLED_PLAYBOOK_MD__: string | undefined;
+
+const BUNDLED_PLAYBOOK_MD = NodePath.resolve(import.meta.dirname, "..", "PLAYBOOK.md");
 
 const PLAYBOOK_SECTIONS: ReadonlyArray<readonly [number, string]> = [
   [0, "Terms"],
-  [1, "What counts as a contract"],
+  [1, "Contracts, Growth & Scoped Exceptions"],
   [2, "Ship queue"],
   [3, "File size ratchet"],
   [4, "Declarations and generations"],
@@ -26,13 +30,14 @@ const PLAYBOOK_SECTIONS: ReadonlyArray<readonly [number, string]> = [
   [9, "User actions catalog"],
   [10, "Design rules"],
   [11, "Optimization budgets"],
-  [12, "Host guards"],
-  [13, "System maps"],
-  [14, "Declared checks"],
-  [15, "CI standards and execution tiers"],
+  [12, "System maps"],
+  [13, "Declared checks & Dead code"],
+  [14, "CI standards and execution tiers"],
+  [15, "Product docs"],
 ];
-const REVIEWER_BULLET = "- **The reviewer**";
-const RULE_LABEL_RE = /^ *- \*\*(.+?)[:.]?\*\*/gm;
+const REVIEWER_BULLET = "- **2.2 The reviewer";
+// Rule label: bold lead with optional leading N.M item number, without closing colon or period.
+const RULE_LABEL_RE = /^ *- \*\*(?:\d+\.\d+\s+)?(.+?)[:.]?\*\*/gm;
 
 const PLACEHOLDERS = [
   "playbook",
@@ -58,24 +63,49 @@ export class PromptSourceError extends Schema.TaggedError<PromptSourceError>()(
   }
 }
 
-/** The first readable file among the repo's playbook/<NAME>, then the host install. */
-export function findPlaybookFile(
+function readRegularFile(path: string): string | null {
+  try {
+    if (!NodeFS.lstatSync(path).isFile()) return null;
+    return NodeFS.readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read PLAYBOOK.md safely: explicit path, repo playbook/ or packages/playbook/
+ * (from baseRef commit when given so an unreviewed branch cannot weaken standards,
+ * or symlink-safe worktree read for UI summaries), embedded bundle text, then host install.
+ */
+export function readPlaybookStandards(
   root: string,
-  name: "PLAYBOOK.md" | "CHALLENGE.md",
-  explicit?: string | undefined,
-): string | null {
-  const candidates = explicit
-    ? [explicit]
-    : [
-        NodePath.join(root, "playbook", name),
-        NodePath.join(NodeOS.homedir(), ".local", "lib", "playbook", name),
-      ];
-  for (const candidate of candidates) {
-    try {
-      if (NodeFS.statSync(candidate).isFile()) return candidate;
-    } catch {
-      continue;
+  options: { readonly explicit?: string | undefined; readonly baseRef?: string | undefined } = {},
+): { readonly source: string; readonly text: string } | null {
+  if (options.explicit) {
+    const text = readRegularFile(options.explicit);
+    return text !== null ? { source: options.explicit, text } : null;
+  }
+  const repoPaths = ["playbook/PLAYBOOK.md", "packages/playbook/PLAYBOOK.md"] as const;
+  if (options.baseRef) {
+    for (const rel of repoPaths) {
+      const text = showFile(root, options.baseRef, rel);
+      if (text !== null) return { source: `${options.baseRef.slice(0, 12)}:${rel}`, text };
     }
+  } else {
+    for (const rel of repoPaths) {
+      const text = readWorktreeFile(root, rel);
+      if (text !== null) return { source: NodePath.join(root, rel), text };
+    }
+  }
+  if (typeof __BUNDLED_PLAYBOOK_MD__ === "string" && __BUNDLED_PLAYBOOK_MD__.length > 0) {
+    return { source: "bundled:PLAYBOOK.md", text: __BUNDLED_PLAYBOOK_MD__ };
+  }
+  for (const fallback of [
+    BUNDLED_PLAYBOOK_MD,
+    NodePath.join(NodeOS.homedir(), ".local", "lib", "playbook", "PLAYBOOK.md"),
+  ]) {
+    const text = readRegularFile(fallback);
+    if (text !== null) return { source: fallback, text };
   }
   return null;
 }
@@ -139,7 +169,7 @@ export function playbookStandards(text: string, bypasses: Bypasses): string {
 export function templateProblems(template: string): ReadonlyArray<string> {
   const t = template.replaceAll("{{", "{").replaceAll("}}", "}");
   return PLACEHOLDERS.filter((k) => !t.includes(`{${k}}`)).map(
-    (k) => `CHALLENGE.md has no placeholder {${k}}`,
+    (k) => `challenge prompt template has no placeholder {${k}}`,
   );
 }
 
@@ -149,10 +179,11 @@ export function renderChallengePrompt(template: string, values: PromptValues): s
   if (problems.length > 0) throw new PromptSourceError({ detail: problems.join("; ") });
   const t = template.replaceAll("{{", "{").replaceAll("}}", "}");
   const re = new RegExp(`\\{(${PLACEHOLDERS.join("|")})\\}`, "g");
-  return t.replace(re, (_, key: (typeof PLACEHOLDERS)[number]) => values[key]);
+  return t.replace(re, (_match, key: keyof PromptValues) => values[key]);
 }
 
-export function readChallengeTemplate(path: string | null): string {
-  if (path === null) return DEFAULT_CHALLENGE_TEMPLATE;
+/** Built-in framing template (or explicit override path for tests). */
+export function readChallengeTemplate(path?: string | null): string {
+  if (!path) return DEFAULT_CHALLENGE_TEMPLATE;
   return NodeFS.readFileSync(path, "utf8");
 }

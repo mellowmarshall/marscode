@@ -18,9 +18,9 @@ import {
   type PlaybookChallengeReply,
 } from "./challengeReply.ts";
 import {
-  findPlaybookFile,
   playbookStandards,
   readChallengeTemplate,
+  readPlaybookStandards,
   renderChallengePrompt,
 } from "./challengePrompt.ts";
 import {
@@ -246,12 +246,15 @@ export async function runChallenge(options: ChallengeOptions): Promise<Challenge
     };
   }
   const sqlPaths = sqlChangedPaths(root, base, tip, changed);
-  const standardsFile = findPlaybookFile(root, "PLAYBOOK.md", options.standardsPath);
-  if (!standardsFile) return noVerdict("no PLAYBOOK.md to review against", advisory, rises);
+  const standardsSource = readPlaybookStandards(root, {
+    explicit: options.standardsPath,
+    baseRef: base,
+  });
+  if (!standardsSource) return noVerdict("no PLAYBOOK.md to review against", advisory, rises);
   let prompt: string;
   try {
-    const standards = playbookStandards(NodeFS.readFileSync(standardsFile, "utf8"), bypasses);
-    const templateFile = options.templatePath ?? findPlaybookFile(root, "CHALLENGE.md");
+    const standards = playbookStandards(standardsSource.text, bypasses);
+    const templateFile = options.templatePath ?? null;
     const ciOutput = (options.ciOutput ?? "").replace(/\x1b\[[0-9;]*m/g, "").trim();
     prompt = renderChallengePrompt(readChallengeTemplate(templateFile), {
       playbook: standards,

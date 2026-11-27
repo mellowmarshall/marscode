@@ -1,98 +1,126 @@
 /**
- * The declaration ratchet: against the base's playbook.json a branch may tighten or adopt,
- * never loosen; the repo's own commands (REPORTED_SETTINGS) are reported, never refused.
+ * The declaration ratchet (evidence-only): against the base's playbook.json a branch may
+ * tighten, adopt, or remove scoped exceptions, never silently drop a contract, widen CI
+ * ceilings, or add unapproved scoped exceptions. Evidence path changes are reported, not refused.
  */
 import { contractsOf, optedOut, type DeclarationData } from "./declaration.ts";
 import { isRecord } from "./strictJson.ts";
 
-const LIST_SETTINGS = new Set([
-  "interactive",
-  "style_properties",
-  "client",
-  "code",
-  "truncate",
-  "scripts",
-  "slot_calls",
-]);
-
-const SET_TIGHTENS = new Set([
-  "design.tokens",
-  "design.ui",
-  "design.slots",
-  "generations.command",
-  "migrations.dir",
-  "migrations.list",
-  "actions.floors",
-  "migrations.protection",
-]);
-
-const REPLAY_FREE = new Set(["engine", "image", "database", "command"]);
-
-const REPORTED_SETTINGS: ReadonlySet<string> = new Set([
-  "tools.steps",
-  "size.command",
-  "migrations.lint",
-  "migrations.render",
-  "actions.evidence",
-  "actions.chokepoint",
-  "design.touch_calls",
-  "design.command",
-  "design.chokepoint",
-  "design.content_values",
-  "fleet.reads",
-]);
-
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const show = (v: unknown) => (v === undefined ? "None" : JSON.stringify(v));
 const asRecord = (v: unknown): Readonly<Record<string, unknown>> => (isRecord(v) ? v : {});
-const asList = (v: unknown): ReadonlyArray<string> =>
-  Array.isArray(v) ? v.map((x) => (typeof x === "string" ? x : JSON.stringify(x))) : [];
 
-function inside(path: string, folder: string): boolean {
-  const p = path.replace(/\/+$/, "");
-  const f = folder.replace(/\/+$/, "");
-  return p === f || p.startsWith(`${f}/`);
-}
-
-/** Whether the allowlist file READ gives holds entries (a first allowlist must start empty). */
+/** Read a file relative to the repo root (used for allowlist checks). */
 export type ReadFile = (rel: string) => string | null;
 
-function allowlistEntryCount(text: string | null): number {
-  if (!text) return 0;
-  return text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith("#")).length;
+function allowlistEntries(text: string | null): ReadonlySet<string> {
+  if (!text) return new Set();
+  return new Set(
+    text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("#")),
+  );
+}
+
+function exceptionMap(raw: unknown): ReadonlyMap<string, unknown> {
+  const out = new Map<string, unknown>();
+  if (!Array.isArray(raw)) return out;
+  for (const item of raw) {
+    if (isRecord(item) && typeof item.subject === "string") {
+      out.set(item.subject.trim(), item);
+    }
+  }
+  return out;
+}
+
+function checkScopedExceptions(
+  where: string,
+  before: unknown,
+  after: unknown,
+  problems: string[],
+): void {
+  const oldMap = exceptionMap(before);
+  const newMap = exceptionMap(after);
+  for (const [subject, entry] of [...newMap].toSorted(([a], [b]) => a.localeCompare(b))) {
+    if (!oldMap.has(subject)) {
+      problems.push(`${where} adds scoped exception '${subject}' (requires owner override, §1.3)`);
+    } else if (!same(oldMap.get(subject), entry)) {
+      problems.push(
+        `${where} modifies scoped exception '${subject}' (requires owner override, §1.3)`,
+      );
+    }
+  }
 }
 
 function settingProblems(
   name: string,
   old: Readonly<Record<string, unknown>>,
   next: Readonly<Record<string, unknown>>,
-  read: ReadFile,
+  read: ReadFile | undefined,
+  readBase: ReadFile | undefined,
 ): string[] {
   const problems: string[] = [];
   const keys = [...new Set([...Object.keys(old), ...Object.keys(next)])].toSorted();
   for (const key of keys) {
     const before = old[key];
     const after = next[key];
+    if (name === "size" && key === "allowlist") {
+      if (typeof after === "string") {
+        if (before === undefined) {
+          if (read) {
+            const headText = read(after);
+            if (headText === null) {
+              problems.push(
+                `size.allowlist added: '${after}' is missing, unreadable, or a symlink (§3.2)`,
+              );
+            } else {
+              const count = allowlistEntries(headText).size;
+              if (count > 0) {
+                problems.push(`size.allowlist added: ${after} must start empty (${count})`);
+              }
+            }
+          }
+        } else if (typeof before === "string") {
+          if (read) {
+            const headText = read(after);
+            if (headText === null) {
+              problems.push(`size.allowlist file '${after}' is missing or unreadable (§3.2)`);
+            } else {
+              const baseSet = allowlistEntries(readBase ? readBase(before) : null);
+              const added = [...allowlistEntries(headText)]
+                .filter((entry) => !baseSet.has(entry))
+                .toSorted();
+              if (added.length > 0) {
+                problems.push(
+                  `size.allowlist added ${added.length} entry(ies): ${added.slice(0, 5).join(", ")} (§3.2)`,
+                );
+              }
+            }
+          }
+          if (before !== after) {
+            problems.push(`size.allowlist changed: ${show(before)} -> ${show(after)}`);
+          }
+        }
+      } else if (before !== undefined && after !== undefined && !same(before, after)) {
+        problems.push(`size.allowlist changed: ${show(before)} -> ${show(after)}`);
+      }
+      continue;
+    }
     if (same(before, after)) continue;
     const where = `${name}.${key}`;
-    if (REPORTED_SETTINGS.has(where)) continue;
-    if (name === "actions" && ["source", "ledger", "walk_baseline"].includes(key)) continue;
-    if (key === "baseline" && before === undefined) continue;
-    if (name === "actions" && key === "held_back" && before === undefined) continue;
-    if (name === "design" && (key === "tokens" || key === "ui") && typeof before === "string") {
-      if (typeof after === "string" && inside(after, before)) continue;
-      const why = typeof after === "string" && inside(before, after) ? "it widens" : "a move";
-      problems.push(`${where} widened or moved: ${before} -> ${String(after)} (${why})`);
-    } else if (key === "baseline") {
-      if (after === undefined) problems.push(`${where} removed: ${show(before)} -> None`);
-    } else if (LIST_SETTINGS.has(key)) {
-      const kept = new Set(asList(after));
-      const dropped = asList(before).filter((x) => !kept.has(x));
-      if (dropped.length > 0) problems.push(`${where} dropped: ${dropped.toSorted().join(", ")}`);
-    } else if (name === "intent" && key === "contracts") {
+    if (key === "evidence" || key === "choke" || key === "engine" || key === "migrator") continue;
+    if (key === "exceptions") {
+      checkScopedExceptions(where, before, after, problems);
+      continue;
+    }
+    if (name === "size" && key === "maxLines") {
+      const b = typeof before === "number" ? before : 500;
+      const a = typeof after === "number" ? after : 500;
+      if (a > b) problems.push(`${where} raised: ${b} -> ${a}`);
+      continue;
+    }
+    if (name === "intent" && key === "contracts") {
       const b = asRecord(before);
       const a = asRecord(after);
       for (const item of [...new Set([...Object.keys(b), ...Object.keys(a)])].toSorted()) {
@@ -101,56 +129,67 @@ function settingProblems(
           problems.push(`intent.contracts.${item} ${verb}: ${show(b[item])} -> ${show(a[item])}`);
         }
       }
-    } else if (
-      (before === undefined || (before === false && after === true)) &&
-      SET_TIGHTENS.has(where)
-    ) {
       continue;
-    } else if (name === "actions" && key === "floors") {
-      const b = asRecord(before);
-      const a = asRecord(after);
-      for (const [pattern, floors] of Object.entries(b)) {
-        if (!(pattern in a)) {
-          problems.push(`${where}.${pattern} removed`);
-          continue;
-        }
-        for (const [entity, count] of Object.entries(asRecord(floors))) {
-          const now = asRecord(a[pattern])[entity];
-          if (now === undefined) problems.push(`${where}.${pattern}.${entity} removed`);
-          else if (typeof now === "number" && typeof count === "number" && now < count) {
-            problems.push(`${where}.${pattern}.${entity} lowered: ${count} -> ${now}`);
-          }
-        }
-      }
-    } else if (name === "migrations" && key === "replay" && isRecord(after)) {
-      const was = Object.fromEntries(
-        Object.entries(asRecord(before)).filter(([k]) => k !== "command"),
-      );
-      const now = Object.fromEntries(Object.entries(after).filter(([k]) => k !== "command"));
-      const freeFirst =
-        Object.keys(was).length === 0 && Object.keys(now).every((k) => REPLAY_FREE.has(k));
-      if (!same(was, now) && !freeFirst) {
-        problems.push(`${where} changed: ${show(before)} -> ${show(after)}`);
-      }
-    } else if (name === "size" && key === "exempt") {
-      const b = asRecord(before);
-      const a = asRecord(after);
-      const added = Object.keys(a)
-        .filter((k) => !(k in b))
-        .toSorted();
-      const changed = Object.keys(a)
-        .filter((k) => k in b && !same(a[k], b[k]))
-        .toSorted();
-      if (added.length > 0) {
-        problems.push(`${where} adds exempt place(s): ${added.join(", ")} (the owner's call)`);
-      }
-      if (changed.length > 0)
-        problems.push(`${where} changes the reason for: ${changed.join(", ")}`);
-    } else if (before === undefined && name === "size" && key === "allowlist") {
-      const count = typeof after === "string" ? allowlistEntryCount(read(after)) : 0;
-      if (count > 0) problems.push(`${where} added: ${String(after)} must start empty (${count})`);
+    }
+    if (before === undefined && ["file", "dir", "snapshot", "user", "admin"].includes(key)) {
+      continue;
+    }
+    problems.push(`${where} changed: ${show(before)} -> ${show(after)}`);
+  }
+  return problems;
+}
+
+function ciProblems(
+  oldCi: Readonly<Record<string, unknown>>,
+  nextCi: Readonly<Record<string, unknown>>,
+): string[] {
+  const problems: string[] = [];
+  if (optedOut(oldCi)) return problems;
+  if (optedOut(nextCi)) {
+    problems.push("ci opted out: the base declares CI standards (§14)");
+    return problems;
+  }
+  checkScopedExceptions("ci.exceptions", oldCi.exceptions, nextCi.exceptions, problems);
+  if (
+    typeof oldCi.parallel === "number" &&
+    typeof nextCi.parallel === "number" &&
+    nextCi.parallel < oldCi.parallel
+  ) {
+    problems.push(`ci.parallel lowered: ${oldCi.parallel} -> ${nextCi.parallel} (§14.2)`);
+  }
+  for (const cap of ["granularThresholdMs", "maxTier1Ms", "maxTier2Ms", "maxTier3Ms"] as const) {
+    const b = oldCi[cap];
+    const a = nextCi[cap];
+    if (typeof b === "number" && (a === undefined || (typeof a === "number" && a > b))) {
+      problems.push(`ci.${cap} loosened: ${b} -> ${show(a)} (§14.2)`);
+    }
+  }
+  if (Array.isArray(oldCi.always)) {
+    if (!Array.isArray(nextCi.always)) {
+      problems.push("ci.always removed (§14.2)");
     } else {
-      problems.push(`${where} changed: ${show(before)} -> ${show(after)}`);
+      const nextSet = new Set(nextCi.always.map(String));
+      const removed = oldCi.always.map(String).filter((g) => !nextSet.has(g));
+      if (removed.length > 0) {
+        problems.push(`ci.always removed mandatory gate(s): ${removed.join(", ")} (§14.2)`);
+      }
+    }
+  }
+  if (
+    (oldCi.select !== undefined || nextCi.select !== undefined) &&
+    !same(oldCi.select, nextCi.select)
+  ) {
+    problems.push(`ci.select changed: ${show(oldCi.select)} -> ${show(nextCi.select)} (§14.2)`);
+  }
+  if (Array.isArray(oldCi.full)) {
+    if (!Array.isArray(nextCi.full)) {
+      problems.push("ci.full removed (§14.2)");
+    } else {
+      const nextSet = new Set(nextCi.full.map(String));
+      const removed = oldCi.full.map(String).filter((g) => !nextSet.has(g));
+      if (removed.length > 0) {
+        problems.push(`ci.full removed trigger(s): ${removed.join(", ")} (§14.2)`);
+      }
     }
   }
   return problems;
@@ -160,7 +199,8 @@ function settingProblems(
 export function loosenedDeclaration(
   head: DeclarationData,
   base: DeclarationData,
-  read: ReadFile = () => null,
+  read?: ReadFile,
+  readBase?: ReadFile,
 ): ReadonlyArray<string> {
   const headContracts = contractsOf(head);
   const problems: string[] = [];
@@ -175,12 +215,19 @@ export function loosenedDeclaration(
       problems.push(`contract ${name} opted out: the base declares it`);
       continue;
     }
-    problems.push(...settingProblems(name, asRecord(old), asRecord(next), read));
+    problems.push(...settingProblems(name, asRecord(old), asRecord(next), read, readBase));
+  }
+  if (isRecord(base.ci)) {
+    if (!isRecord(head.ci)) {
+      problems.push("ci block removed");
+    } else {
+      problems.push(...ciProblems(base.ci, head.ci));
+    }
   }
   return problems;
 }
 
-/** The repo's own commands that changed against the base: reported, never refused. */
+/** Evidence path changes against the base: reported, never refused. */
 export function reportedCommandChanges(
   head: DeclarationData,
   base: DeclarationData,
@@ -188,17 +235,15 @@ export function reportedCommandChanges(
   const headContracts = contractsOf(head);
   const baseContracts = contractsOf(base);
   const out: string[] = [];
-  for (const where of [...REPORTED_SETTINGS, "migrations.replay"].toSorted()) {
-    const [name, key] = where.split(".") as [string, string];
-    let before = asRecord(baseContracts[name])[key];
-    let after = asRecord(headContracts[name])[key];
-    let label = where;
-    if (key === "replay") {
-      before = asRecord(before).command;
-      after = asRecord(after).command;
-      label = "migrations.replay.command";
-    }
-    if (!same(before, after)) out.push(`${label}: ${show(before)} -> ${show(after)}`);
+  for (const name of [
+    ...new Set([...Object.keys(baseContracts), ...Object.keys(headContracts)]),
+  ].toSorted()) {
+    const before = asRecord(baseContracts[name]).evidence;
+    const after = asRecord(headContracts[name]).evidence;
+    if (!same(before, after)) out.push(`${name}.evidence: ${show(before)} -> ${show(after)}`);
   }
+  const ciBefore = asRecord(base.ci).evidence;
+  const ciAfter = asRecord(head.ci).evidence;
+  if (!same(ciBefore, ciAfter)) out.push(`ci.evidence: ${show(ciBefore)} -> ${show(ciAfter)}`);
   return out;
 }

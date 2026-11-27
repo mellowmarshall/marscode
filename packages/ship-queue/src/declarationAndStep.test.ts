@@ -106,6 +106,31 @@ describe("declaration parsing, validation, and base step-tree extraction", () =>
     expect(bad.ok).toBe(false);
     expect(bad.errors.some((e) => e.includes("UNALLOWED_SECRET"))).toBe(true);
     expect(bad.errors.some((e) => e.includes("/etc/shadow"))).toBe(true);
+
+    // Playbook §14 CI standards keys coexist with ship-queue routing keys without discarding ci.
+    const mixed = parseShipDeclaration(
+      "ship_repo=demo\nship_ci=scripts/ci.sh\n",
+      JSON.stringify({
+        contracts: { size: { evidence: ".playbook/evidence/size.json" } },
+        ci: {
+          tools: ["node"],
+          settings: { web: ["pnpm"] },
+          doppler: ["demo/ci"],
+          arch: ["x86_64"],
+          evidence: ".playbook/evidence/ci.json",
+          parallel: 4,
+          granularThresholdMs: 30_000,
+          maxTier1Ms: 60_000,
+          always: ["lint"],
+          exceptions: [],
+        },
+      }),
+    );
+    expect(mixed.warnings).toEqual([]);
+    expect(mixed.ciTools).toEqual(["node"]);
+    expect(mixed.ciSettings).toEqual(["web pnpm"]);
+    expect(mixed.ciDoppler).toEqual(["demo/ci"]);
+    expect(mixed.ciArch).toEqual(["x86_64"]);
   });
 
   it("extracts pinned step scripts strictly from baseSha, refusing PR-only scripts", async () => {
@@ -194,6 +219,11 @@ describe("local and remote step runner", () => {
     });
     expect(envWithheld.FLY_API_TOKEN).toBeUndefined();
     expect(envWithheld.FLY_ACCESS_TOKEN).toBeUndefined();
+    expect(envWithheld.PLAYBOOK_EVIDENCE_DIR).toBe(
+      NodePath.join(queueRoot, "jobs", "job-9", "work", "playbook-evidence"),
+    );
+    expect(envWithheld.PLAYBOOK_EVIDENCE_JOB).toBe("job-9");
+    expect(NodeFS.existsSync(envWithheld.PLAYBOOK_EVIDENCE_DIR!)).toBe(true);
 
     // Rejects scripts missing from stepTree.
     const missing = await runLocalStep({
@@ -240,6 +270,8 @@ describe("local and remote step runner", () => {
     expect(res.exitCode).toBe(0);
     expect(capturedAlias).toBe("ci-host-1.example");
     expect(capturedScript).not.toContain("super-secret-value");
+    expect(capturedScript).toContain('PLAYBOOK_EVIDENCE_DIR="$sq_g/ship-queue-playbook-evidence"');
+    expect(capturedScript).toContain("PLAYBOOK_EVIDENCE_JOB='job-42'");
     expect(capturedScript).toBe(
       buildRemoteStepScript({
         remoteWorktree: "/home/ci/wt",

@@ -4,14 +4,14 @@ import * as NodePath from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { normalizeExceptions } from "./bypass.ts";
 import { loadDeclaration, parseDeclarationText, validateDeclaration } from "./declaration.ts";
 import { portableRegexProblem } from "./declarationSchema.ts";
 import { readPlaybookDeclaration } from "./declarationSummary.ts";
-import { normalizeExceptions } from "./bypass.ts";
 import { parseStrictJson } from "./strictJson.ts";
 import {
   cleanupTempDirs,
-  declarationWithSize,
+  evidenceDeclaration,
   fixturePlaybookMd,
   makeFixtureRepo,
 } from "./testing/fixtureRepo.ts";
@@ -33,25 +33,47 @@ describe("strict JSON", () => {
 });
 
 describe("playbook.json parsing", () => {
-  it("accepts the minimal declaration and names every schema problem by path", () => {
-    expect(validateDeclaration(declarationWithSize({}))).toEqual([]);
+  it("accepts the evidence-only declaration and names every schema problem by path", () => {
+    expect(validateDeclaration(evidenceDeclaration())).toEqual([]);
+    expect(
+      validateDeclaration(
+        evidenceDeclaration(
+          {},
+          {
+            tools: ["node@22"],
+            settings: { web: ["pnpm"] },
+            doppler: ["demo/ci"],
+            arch: ["x86_64"],
+            evidence: ["artifacts/logs"],
+            parallel: 4,
+            granularThresholdMs: 30_000,
+            maxTier1Ms: 60_000,
+          },
+        ),
+      ),
+    ).toEqual([]);
     const errors = validateDeclaration({
-      contracts: { size: { command: "x", bogus: true }, tools: { steps: [{ name: "Bad Name" }] } },
+      contracts: {
+        size: { bogus: true },
+        tools: { exceptions: [{ subject: "a.ts", reason: "short", issue: "bad" }] },
+      },
     });
     expect(errors.some((e) => e.startsWith("contracts.size: unknown key 'bogus'"))).toBe(true);
-    expect(errors.some((e) => e.startsWith("contracts.tools.steps[0]: missing required key"))).toBe(
-      true,
-    );
+    expect(errors.some((e) => e.includes("contracts.tools.exceptions[0].issue"))).toBe(true);
   });
 
-  it("refuses retired keys and settings in the branch but drops them from a base copy", () => {
+  it("refuses retired keys, baselines, and self-checking commands in head but drops them from base", () => {
     const text = JSON.stringify({
       version: 6,
-      contracts: { ...declarationWithSize({}).contracts, size: { command: "x", limit: 400 } },
+      contracts: {
+        ...evidenceDeclaration().contracts,
+        size: { command: "x", baseline: "config/size-baseline.json", limit: 400 },
+      },
     });
     const head = parseDeclarationText(text);
     expect(head.errors.some((e) => e.startsWith("version: the version pin is removed"))).toBe(true);
-    expect(head.errors.some((e) => e.startsWith("contracts.size.limit:"))).toBe(true);
+    expect(head.errors.some((e) => e.includes("baselines are removed"))).toBe(true);
+    expect(head.errors.some((e) => e.startsWith("contracts.size.command:"))).toBe(true);
     const base = parseDeclarationText(text, { base: true });
     expect(base.errors).toEqual([]);
     expect(base.data?.version).toBeUndefined();
@@ -67,11 +89,11 @@ describe("playbook.json parsing", () => {
   it("loads the real worktree's file and refuses a symlinked declaration", () => {
     const repo = makeFixtureRepo();
     expect(loadDeclaration(repo.root).errors).toEqual(["playbook.json is missing"]);
-    repo.writeJson("real.json", declarationWithSize({}));
+    repo.writeJson("real.json", evidenceDeclaration());
     NodeFS.symlinkSync("real.json", NodePath.join(repo.root, "playbook.json"));
     expect(loadDeclaration(repo.root).errors).toEqual(["playbook.json is not a regular file"]);
     NodeFS.unlinkSync(NodePath.join(repo.root, "playbook.json"));
-    repo.writeJson("playbook.json", declarationWithSize({}));
+    repo.writeJson("playbook.json", evidenceDeclaration());
     const decl = loadDeclaration(repo.root);
     expect(decl.errors).toEqual([]);
     expect(Object.keys((decl.data?.contracts ?? {}) as object)).toContain("size");
@@ -86,24 +108,20 @@ describe("playbook.json parsing", () => {
 });
 
 describe("declaration view", () => {
-  it("summarizes contracts, Baselines and waived sections through the single loader", () => {
+  it("summarizes contracts, evidence paths, scoped exception counts, and waived sections", () => {
     const repo = makeFixtureRepo();
     repo.writeJson(
       "playbook.json",
-      declarationWithSize({}, { intent: { contracts: { surface: "config/surface.json" } } }),
+      evidenceDeclaration({
+        size: {
+          evidence: ".playbook/evidence/size.json",
+          exceptions: [
+            { subject: "a.ts", reason: "Cohesive parser state machine", issue: "#7" },
+            { subject: "b.ts", reason: "Cohesive wire protocol codec", issue: "#7" },
+          ],
+        },
+      }),
     );
-    repo.writeJson("playbook.json", {
-      contracts: {
-        ...declarationWithSize({}).contracts,
-        size: { command: "echo '{}'", baseline: "config/baselines/size.json" },
-      },
-    });
-    repo.writeJson("config/baselines/size.json", {
-      entries: [
-        { rule: "size", file: "a.ts", lines: 600, issue: "#7", expires: "2027-01-31" },
-        { rule: "size", file: "b.ts", lines: 700, issue: "#7", expires: "2026-12-31" },
-      ],
-    });
     repo.write("playbook/PLAYBOOK.md", fixturePlaybookMd());
     const waivers = normalizeExceptions({
       repos: { "sample-repo": { playbook: { tools: "until acme-fixture#12 lands 2026-12-01" } } },
@@ -113,16 +131,16 @@ describe("declaration view", () => {
     expect(view.declarationErrors).toEqual([]);
     const size = view.contracts.find((c) => c.name === "size");
     expect(size).toMatchObject({
-      baselineCount: 2,
-      nearestExpiry: "2026-12-31",
+      evidencePath: ".playbook/evidence/size.json",
+      exceptionCount: 2,
       status: "enforced",
     });
     expect(view.contracts.find((c) => c.name === "tools")?.status).toBe("waived");
     expect(view.rules.find((r) => r.section === 3)).toMatchObject({
       status: "enforced",
-      detail: "baseline 2",
+      detail: "2 exception(s)",
     });
-    expect(view.rules.find((r) => r.section === 14)).toMatchObject({ status: "waived" });
+    expect(view.rules.find((r) => r.section === 13)).toMatchObject({ status: "waived" });
     expect(view.rules.find((r) => r.section === 7)?.status).toBe("not-declared");
   });
 });

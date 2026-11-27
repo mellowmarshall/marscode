@@ -13,7 +13,7 @@ export const EXCEPTIONS_SOURCE = "host-guards/exceptions.json";
 
 const SECTION_NAMES: Readonly<Record<number, ReadonlyArray<string>>> = {
   0: ["terms"],
-  1: ["baseline", "ratchet", "contracts"],
+  1: ["ratchet", "contracts"],
   2: ["challenge"],
   3: ["size"],
   4: ["generations"],
@@ -24,16 +24,15 @@ const SECTION_NAMES: Readonly<Record<number, ReadonlyArray<string>>> = {
   9: ["actions"],
   10: ["design"],
   11: ["optimization"],
-  12: ["host-guards"],
-  13: ["maps"],
-  14: ["tools"],
-  15: ["ci"],
+  12: ["maps"],
+  13: ["tools"],
+  14: ["ci"],
+  15: ["docs"],
 };
 
 const ALIASES: Readonly<Record<string, string>> = {
   "*": "*",
   all: "*",
-  baselines: "baseline",
   "declaration ratchet": "ratchet",
   declaration: "ratchet",
   "ship-queue": "challenge",
@@ -155,12 +154,18 @@ export function matchesWaiverRepo(waiverRepo: string, repoName: string): boolean
   return lower === target || lower.endsWith(`/${target}`);
 }
 
+/** Sections 12..15 were renumbered in playbook v8; bare numeric keys are refused to prevent silent misdirection. */
+const RENUMBERED_SECTIONS = new Set(["12", "13", "14", "15"]);
+
 function normalized(bypasses: Bypasses): ReadonlyMap<string, string> {
-  return new Map(
-    Object.entries(bypasses)
-      .filter(([, v]) => v)
-      .map(([k, v]) => [normKey(k), v] as const),
-  );
+  const out = new Map<string, string>();
+  for (const [k, v] of Object.entries(bypasses)) {
+    if (!v) continue;
+    const nk = normKey(k);
+    if (RENUMBERED_SECTIONS.has(nk)) continue;
+    out.set(nk, v);
+  }
+  return out;
 }
 
 /** The reason if TARGET (a contract, check, or section number) is waived, else null. */
@@ -170,14 +175,6 @@ export function bypassReason(bypasses: Bypasses, target: string): string | null 
   if (bp.has("*")) return bp.get("*")!;
   const key = normKey(target);
   if (bp.has(key)) return bp.get(key)!;
-  if (key.startsWith("baseline ")) {
-    const sub = normKey(key.slice("baseline ".length));
-    for (const candidate of [`baseline.${sub}`, "baseline", sub, "1"]) {
-      if (bp.has(candidate)) return bp.get(candidate)!;
-    }
-    const num = NAME_TO_NUM.get(sub);
-    if (num !== undefined && bp.has(String(num))) return bp.get(String(num))!;
-  }
   const num = NAME_TO_NUM.get(key);
   if (num !== undefined && bp.has(String(num))) return bp.get(String(num))!;
   if (/^\d+$/.test(key)) {
@@ -212,6 +209,7 @@ function ruleKeys(
     if (!why || !raw.includes("/")) continue;
     const idx = raw.indexOf("/");
     const section = normKey(raw.slice(0, idx));
+    if (RENUMBERED_SECTIONS.has(section)) continue;
     out.push({
       section: /^\d+$/.test(section) ? Number(section) : (NAME_TO_NUM.get(section) ?? null),
       rule: words(raw.slice(idx + 1)),

@@ -8,11 +8,12 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { runPlaybookCli } from "./cli.ts";
 import {
   cleanupTempDirs,
-  declarationWithSize,
+  evidenceDeclaration,
   fixturePlaybookMd,
   makeFixtureRepo,
   makeTempDir,
   NO_BROKER_ENV,
+  writeEvidence,
 } from "./testing/fixtureRepo.ts";
 
 afterEach(cleanupTempDirs);
@@ -31,7 +32,7 @@ async function cli(cwd: string, argv: ReadonlyArray<string>, env: NodeJS.Process
 
 function branchRepo() {
   const repo = makeFixtureRepo();
-  repo.writeJson("playbook.json", declarationWithSize({ "src/a.ts": 3 }));
+  repo.writeJson("playbook.json", evidenceDeclaration());
   repo.writeJson("fleet.json", starterShape("sample-repo"));
   repo.write("playbook/PLAYBOOK.md", fixturePlaybookMd());
   repo.write("src/a.ts", "export const a = 1;\n");
@@ -39,27 +40,31 @@ function branchRepo() {
   repo.branch("feat/cli");
   repo.write("src/b.ts", "export const b = 2;\n");
   repo.commit("add b");
+  writeEvidence(repo, "size");
+  writeEvidence(repo, "fleet");
+  writeEvidence(repo, "tools");
   return { repo, base, state: makeTempDir("pb-cli-state-") };
 }
 
 describe("playbook CLI", () => {
   it("prints its version and usage, and refuses an unknown command", async () => {
     const dir = makeTempDir("pb-cli-");
-    expect(await cli(dir, ["version"])).toMatchObject({ code: 0, out: "playbook 7" });
+    expect(await cli(dir, ["version"])).toMatchObject({ code: 0, out: "playbook 8" });
     expect((await cli(dir, [])).code).toBe(2);
     expect((await cli(dir, ["bogus"])).err).toMatch(/unknown command bogus/);
   });
 
-  it("init writes the minimal declaration once", async () => {
+  it("init writes the minimal evidence-only declaration once", async () => {
     const repo = makeFixtureRepo();
     const dry = await cli(repo.root, ["init", "--dry-run"]);
-    expect(JSON.parse(dry.out)).toHaveProperty("contracts.size.command");
+    expect(JSON.parse(dry.out)).toHaveProperty("contracts.size.evidence");
+    expect(JSON.parse(dry.out)).toHaveProperty("ci.granularThresholdMs", 30000);
     expect(NodeFS.existsSync(NodePath.join(repo.root, "playbook.json"))).toBe(false);
     expect((await cli(repo.root, ["init"])).code).toBe(0);
     expect((await cli(repo.root, ["init"])).err).toMatch(/already exists/);
   });
 
-  it("check runs the gates against the queue's base and prints JSON", async () => {
+  it("check validates repo evidence against the queue's base and prints JSON", async () => {
     const { repo, base } = branchRepo();
     const res = await cli(repo.root, ["check", "size", "--json"], { SHIP_QUEUE_BASE_SHA: base });
     expect(res.code).toBe(0);
@@ -120,7 +125,7 @@ describe("playbook CLI", () => {
     expect(noModel.out).toContain("no reviewer model is configured");
   });
 
-  it("amend validates the standards and emits the owner's override descriptor", async () => {
+  it("amend validates PLAYBOOK.md and emits the owner's override descriptor", async () => {
     const { repo, base } = branchRepo();
     repo.write("playbook/PLAYBOOK.md", `${fixturePlaybookMd()}\nAn amended rule.\n`);
     const collected = await cli(repo.root, [
@@ -149,7 +154,7 @@ describe("playbook CLI", () => {
     repo.write("playbook/PLAYBOOK.md", "## 0. Terms\n");
     const broken = await cli(repo.root, ["amend", "playbook/PLAYBOOK.md", "--base", base]);
     expect(broken.err).toContain(
-      "FAIL amend: PLAYBOOK.md has no section §1 What counts as a contract",
+      "FAIL amend: PLAYBOOK.md has no section §1 Contracts, Growth & Scoped Exceptions",
     );
     expect((await cli(repo.root, ["amend", "README.md", "--base", base])).err).toMatch(
       /can be amended/,

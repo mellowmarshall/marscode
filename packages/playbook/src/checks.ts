@@ -1,50 +1,30 @@
-// @effect-diagnostics nodeBuiltinImport:off - Reads the PR body file and the real worktree for `playbook check`.
+// @effect-diagnostics nodeBuiltinImport:off - Reads the PR body file and validates playbook.json + repo-emitted evidence receipts.
 /**
- * `playbook check`: the declaration, its ratchets, every Baseline and each declared gate, read
- * from the real worktree against the gate base. Owner overrides are asked through OVERRIDE.
+ * `playbook check`: evidence-only declaration, ratchet, contract-intent, and
+ * `playbook-evidence/v1` receipt validator. Never executes repo checks itself.
  */
 import * as NodeFS from "node:fs";
 
-import {
-  baselineGrowth,
-  expiredEntries,
-  parseBaseline,
-  tooFarEntries,
-  type BaselineEntry,
-} from "./baseline.ts";
 import { bypassReason, exceptionChanges, EXCEPTIONS_SOURCE, type Bypasses } from "./bypass.ts";
 import {
   CONTRACT_NAMES,
   contractsOf,
   contractSettings,
+  evidenceDirOf,
   loadDeclaration,
   optedOut,
   parseDeclarationText,
-  type DeclarationData,
 } from "./declaration.ts";
-import { actionsGate } from "./gates/actionsGate.ts";
-import { ciGate } from "./gates/ciGate.ts";
-import { designGate } from "./gates/designGate.ts";
-import { dictionaryGate } from "./gates/dictionaryGate.ts";
-import { docsGate } from "./gates/docsGate.ts";
-import { fleetGate } from "./gates/fleetGate.ts";
-import { generationsGate } from "./gates/generationsGate.ts";
-import { migrationsGate } from "./gates/migrationsGate.ts";
-import { optimizationGate } from "./gates/optimizationGate.ts";
-import { pyDepsGate } from "./gates/pyDepsGate.ts";
-import { toolsGate } from "./gates/toolsGate.ts";
-import { gateBase, listedFiles, readWorktreeFile, showFile, type GateBase } from "./git.ts";
+import { validateSectionEvidence } from "./evidence.ts";
+import { gateBase, readWorktreeFile, showFile, type GateBase } from "./git.ts";
 import { intentGate } from "./intent.ts";
 import { loosenedDeclaration, reportedCommandChanges } from "./ratchet.ts";
 import { exitCodeFor, failed, passed, unproven, type CheckResult } from "./result.ts";
-import { sizeGate } from "./sizeGate.ts";
 import { isRecord } from "./strictJson.ts";
 
-/** Non-schema auxiliary deterministic gates runnable via `playbook check <name>`. */
-const AUXILIARY_GATES = ["ci", "docs", "py-deps"] as const;
-export const ALL_GATE_NAMES: ReadonlyArray<string> = [...CONTRACT_NAMES, ...AUXILIARY_GATES];
+export const ALL_GATE_NAMES: ReadonlyArray<string> = [...CONTRACT_NAMES, "ci"];
 
-/** Asks the owner (the T3 guard broker) to let REASON through; true when granted. */
+/** Asks the owner (the guard broker) to let REASON through; true when granted. */
 export type OverrideAsk = (reason: string) => Promise<boolean>;
 
 export interface CheckOptions {
@@ -58,7 +38,7 @@ export interface CheckOptions {
   readonly base?: GateBase | undefined;
   readonly override?: OverrideAsk | undefined;
   readonly env?: NodeJS.ProcessEnv | undefined;
-  /** Aborting stops the run: the step running is killed and no later gate starts. */
+  /** Aborting stops the run cleanly. */
   readonly signal?: AbortSignal | undefined;
 }
 
@@ -106,66 +86,9 @@ function parseJsonOrEmpty(text: string | null): unknown {
   }
 }
 
-async function baselineResults(
-  root: string,
-  name: string,
-  head: DeclarationData,
-  baseData: DeclarationData | null,
-  baseSha: string | null,
-  today: string,
-  ask: OverrideAsk,
-): Promise<{ readonly results: CheckResult[]; readonly entries: ReadonlyArray<BaselineEntry> }> {
-  const path = contractSettings(head, name).baseline;
-  if (typeof path !== "string") return { results: [], entries: [] };
-  const check = `baseline ${name}`;
-  const text = readWorktreeFile(root, path);
-  if (text === null)
-    return { results: [failed(check, `${path}: declared but missing`)], entries: [] };
-  const current = parseBaseline(text, path);
-  if (current.errors.length > 0) {
-    return {
-      results: [failed(check, current.errors[0]!, { errors: current.errors })],
-      entries: [],
-    };
-  }
-  const results: CheckResult[] = [];
-  const expired = expiredEntries(current.entries, today);
-  const far = tooFarEntries(current.entries, today);
-  if (expired.length > 0 || far.length > 0) {
-    results.push(
-      failed(check, `${expired.length} expired, ${far.length} past the 180-day limit`, {
-        errors: [
-          ...expired.map((e) => `expired: ${e.file} [${e.rule}] ${e.expires}`),
-          ...far.map((e) => `too far: ${e.file} [${e.rule}] ${e.expires}`),
-        ],
-        files: [path],
-      }),
-    );
-  }
-  const adopting = baseData === null || !(name in contractsOf(baseData));
-  const basePath = contractSettings(baseData, name).baseline;
-  const baseText =
-    baseSha && typeof basePath === "string" ? showFile(root, baseSha, basePath) : null;
-  const base = baseText ? parseBaseline(baseText, `${basePath as string}@base`).entries : [];
-  const growth = baselineGrowth(current.entries, base, { adopting: adopting || base.length === 0 });
-  results.push(
-    await held(check, growth, `${current.entries.length} entr(ies), shrink-only`, ask, "shrink it"),
-  );
-  return { results, entries: current.entries };
-}
-
-function hasPythonManifests(root: string): boolean {
-  const files = listedFiles(root) ?? [];
-  return files.some((f) =>
-    /(?:^|\/)(?:pyproject\.toml|Pipfile|uv\.lock|poetry\.lock|Pipfile\.lock|requirements(?:[-_a-z0-9]*)?\.txt)$/i.test(
-      f,
-    ),
-  );
-}
-
-/** Run the declared contracts' gates on the real worktree. */
+/** Validate `playbook.json`, its ratchet, and every declared section's `playbook-evidence/v1` receipt. */
 export async function runCheck(options: CheckOptions): Promise<CheckReport> {
-  const { root, repo, today, bypasses } = options;
+  const { root, repo, bypasses } = options;
   const ask = options.override ?? noOverride;
   const decl = loadDeclaration(root);
   if (decl.data === null || decl.errors.length > 0) {
@@ -173,6 +96,7 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
     return { repo, base: null, results, reported: [], exitCode: exitCodeFor(results) };
   }
   const head = decl.data;
+  const evidenceDir = evidenceDirOf(head);
   const base = options.base ?? gateBase(root, options.env);
   const results: CheckResult[] = [passed("declaration", "playbook.json is valid")];
   const baseText = base.sha ? showFile(root, base.sha, "playbook.json") : null;
@@ -183,7 +107,12 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
   } else if (bypassReason(bypasses, "ratchet")) {
     results.push(passed("ratchet", `bypassed by owner (${bypassReason(bypasses, "ratchet")})`));
   } else if (baseData) {
-    const problems = loosenedDeclaration(head, baseData, (rel) => readWorktreeFile(root, rel));
+    const problems = loosenedDeclaration(
+      head,
+      baseData,
+      (rel) => readWorktreeFile(root, rel),
+      (rel) => showFile(root, base.sha!, rel),
+    );
     reported = reportedCommandChanges(head, baseData);
     results.push(
       await held("ratchet", problems, "playbook.json only tightens", ask, "restore the setting"),
@@ -197,159 +126,89 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
     );
     results.push(await held("exceptions", changes, "no exception added", ask, "remove the entry"));
   }
+
   const wanted = options.contracts && options.contracts.length > 0 ? options.contracts : null;
   const body = readBody(options);
+
   for (const name of CONTRACT_NAMES) {
     if (wanted && !wanted.includes(name)) continue;
     if (options.signal?.aborted) {
-      results.push(unproven(name, "the run was cancelled before this gate started"));
+      results.push(unproven(name, "the run was cancelled before this check started"));
       continue;
     }
-    const body0 = contractsOf(head)[name];
-    if (body0 === undefined) continue;
     const why = bypassReason(bypasses, name);
     if (why) {
       results.push(passed(name, `bypassed by owner (${why})`));
       continue;
     }
-    if (optedOut(body0) && name !== "optimization") {
-      results.push(passed(name, `not applicable: ${String((body0 as { none: unknown }).none)}`));
+    const raw = contractsOf(head)[name];
+    if (raw === undefined) {
+      results.push(
+        unproven(
+          name,
+          'contract is neither declared nor opted out with {"none": "<reason>"} (§1.2)',
+          {
+            fix: `declare contracts.${name} or opt out with {"none": "<reason>"} in playbook.json`,
+          },
+        ),
+      );
+      continue;
+    }
+    if (optedOut(raw)) {
+      results.push(passed(name, `not applicable: ${String((raw as { none: unknown }).none)}`));
       continue;
     }
     const settings = contractSettings(head, name);
-    const bl = await baselineResults(root, name, head, baseData, base.sha, today, ask);
-    results.push(...bl.results);
-    switch (name) {
-      case "size":
-        results.push(
-          await sizeGate({
-            root,
-            settings,
-            entries: bl.entries,
-            base: base.sha,
-            signal: options.signal,
-          }),
-        );
-        break;
-      case "intent":
+    if (name === "intent") {
+      if (isRecord(settings.contracts)) {
         results.push(...intentGate(root, settings, base.sha, body, options.env));
-        break;
-      case "tools":
+      } else {
         results.push(
-          ...(await toolsGate({ root, settings, base: base.sha, signal: options.signal })),
+          validateSectionEvidence({ root, section: name, settings, evidenceDir, env: options.env }),
         );
-        break;
-      case "fleet":
-        results.push(
-          ...(await fleetGate({
-            root,
-            settings,
-            entries: bl.entries,
-            base: base.sha,
-            ask,
-            signal: options.signal,
-          })),
-        );
-        break;
-      case "generations":
-        results.push(
-          ...(await generationsGate({
-            root,
-            settings,
-            declaration: head,
-            base: base.sha,
-            ask,
-            signal: options.signal,
-          })),
-        );
-        break;
-      case "dictionary":
-        results.push(
-          ...(await dictionaryGate({
-            root,
-            settings,
-            declaration: head,
-            entries: bl.entries,
-            base: base.sha,
-            ask,
-          })),
-        );
-        break;
-      case "migrations":
-        results.push(
-          ...(await migrationsGate({
-            root,
-            settings,
-            declaration: head,
-            base: base.sha,
-            ask,
-            signal: options.signal,
-          })),
-        );
-        break;
-      case "design":
-        results.push(
-          ...(await designGate({
-            root,
-            settings,
-            declaration: head,
-            entries: bl.entries,
-            base: base.sha,
-            signal: options.signal,
-          })),
-        );
-        break;
-      case "actions":
-        results.push(
-          ...(await actionsGate({
-            root,
-            settings,
-            declaration: head,
-            entries: bl.entries,
-            bypasses,
-            base: base.sha,
-            baseData,
-            ask,
-            signal: options.signal,
-          })),
-        );
-        break;
-      case "optimization":
-        results.push(
-          ...(await optimizationGate({
-            root,
-            settings,
-            declaration: head,
-            entries: bl.entries,
-            bypasses,
-            base: base.sha,
-            baseData,
-            ask,
-          })),
-        );
-        break;
+      }
+      continue;
     }
+    results.push(
+      validateSectionEvidence({ root, section: name, settings, evidenceDir, env: options.env }),
+    );
   }
 
-  // Auxiliary deterministic gates: run when explicitly selected, or automatically when applicable.
-  for (const aux of AUXILIARY_GATES) {
-    const explicit = wanted !== null && wanted.includes(aux);
-    const auto =
-      wanted === null &&
-      ((aux === "ci" && isRecord(head.ci)) || (aux === "py-deps" && hasPythonManifests(root)));
-    if (!explicit && !auto) continue;
+  const runCi = wanted === null || wanted.includes("ci");
+  if (runCi) {
     if (options.signal?.aborted) {
-      results.push(unproven(aux, "the run was cancelled before this gate started"));
-      continue;
+      results.push(unproven("ci", "the run was cancelled before this check started"));
+    } else {
+      const why = bypassReason(bypasses, "ci");
+      if (why) {
+        results.push(passed("ci", `bypassed by owner (${why})`));
+      } else if (head.ci === undefined) {
+        results.push(
+          unproven(
+            "ci",
+            'ci block is neither declared nor opted out with {"none": "<reason>"} (§1.2, §14)',
+            {
+              fix: 'declare ci or opt out with {"none": "<reason>"} in playbook.json',
+            },
+          ),
+        );
+      } else if (optedOut(head.ci)) {
+        results.push(
+          passed("ci", `not applicable: ${String((head.ci as { none: unknown }).none)}`),
+        );
+      } else {
+        const ciSettings = isRecord(head.ci) ? head.ci : {};
+        results.push(
+          validateSectionEvidence({
+            root,
+            section: "ci",
+            settings: ciSettings,
+            evidenceDir,
+            env: options.env,
+          }),
+        );
+      }
     }
-    const why = bypassReason(bypasses, aux);
-    if (why) {
-      results.push(passed(aux, `bypassed by owner (${why})`));
-      continue;
-    }
-    if (aux === "ci") results.push(ciGate({ root }));
-    else if (aux === "docs") results.push(docsGate({ root }));
-    else results.push(pyDepsGate({ root, declaration: head }));
   }
 
   return { repo, base: base.sha, results, reported, exitCode: exitCodeFor(results) };

@@ -7,10 +7,9 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { judgeChallengeReply, NO_RISES, type PlaybookChallengeReply } from "./challengeReply.ts";
 import { runChallenge, type ChallengeModel } from "./challenger.ts";
 import { changedFiles, diffText, readWorktreeFile, resolveCommit, showFile } from "./git.ts";
-import { runStep } from "./steps.ts";
 import {
   cleanupTempDirs,
-  declarationWithSize,
+  evidenceDeclaration,
   FIXED_NOW,
   fixturePlaybookMd,
   makeFixtureRepo,
@@ -35,7 +34,7 @@ const REPLY: PlaybookChallengeReply = {
 
 function branch() {
   const repo = makeFixtureRepo();
-  repo.writeJson("playbook.json", declarationWithSize({}));
+  repo.writeJson("playbook.json", evidenceDeclaration());
   repo.write("playbook/PLAYBOOK.md", fixturePlaybookMd());
   repo.write("src/a.ts", "export const a = 1;\n");
   const base = repo.commit("base");
@@ -172,29 +171,15 @@ describe("defect severities fail closed", () => {
   const judge = (severity: string) =>
     judgeChallengeReply({ ...REPLY, defects: [{ severity, file: "a.ts", what: "x" }] }, NO_RISES);
 
-  it("treats critical, mixed-case and unknown severities as severe", () => {
+  it("treats breaking, critical, high, mixed-case and unknown severities as severe", () => {
     for (const severity of ["critical", "High", "BREAKING", "severe", ""]) {
       expect(judge(severity).passed, severity).toBe(false);
     }
     expect(judge("").defects[0]?.severity).toBe("unknown");
   });
 
-  it("lists a medium defect without blocking and drops low ones", () => {
-    expect(judge("MEDIUM")).toMatchObject({ passed: true, defects: [{ severity: "medium" }] });
+  it("drops medium and low defects without blocking (§2.2)", () => {
+    expect(judge("MEDIUM")).toMatchObject({ passed: true, defects: [] });
     expect(judge(" Low ")).toMatchObject({ passed: true, defects: [] });
-  });
-});
-
-describe("repo commands are cancellable", () => {
-  it("kills a running step when its signal aborts", async () => {
-    const dir = makeTempDir("pb-step-");
-    const controller = new AbortController();
-    const running = runStep(dir, "sleep 30; echo late", {}, undefined, controller.signal);
-    controller.abort();
-    const run = await running;
-    expect(run).toMatchObject({ code: null, why: "cancelled" });
-    expect(run.stdout).toBe("");
-    const before = await runStep(dir, "echo never", {}, undefined, controller.signal);
-    expect(before.why).toBe("cancelled before it started");
   });
 });

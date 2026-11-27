@@ -1,16 +1,15 @@
-// @effect-diagnostics nodeBuiltinImport:off - Read-only inspection of playbook.json, Baselines and PLAYBOOK.md for the declaration view.
+// @effect-diagnostics nodeBuiltinImport:off - Read-only inspection of playbook.json and PLAYBOOK.md for the declaration view.
 /**
  * The declaration view (DevTools' Playbook panel): each declared contract with
- * its gate, Baseline size and nearest expiry, and each PLAYBOOK.md section's
- * status (enforced, waived by the owner, or not declared). It reads
- * playbook.json through the engine's single loader.
+ * its evidence path, scoped exception count, and each PLAYBOOK.md section's
+ * status (enforced, waived by the owner, or not declared).
  */
 import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { matchesWaiverRepo, type NormalizedWaiver } from "./bypass.ts";
-import { contractsOf, loadDeclaration } from "./declaration.ts";
+import { readPlaybookStandards } from "./challengePrompt.ts";
+import { contractsOf, evidenceDirOf, loadDeclaration, optedOut } from "./declaration.ts";
 import { parseConf } from "./git.ts";
 import { isRecord } from "./strictJson.ts";
 
@@ -19,9 +18,8 @@ const MAX_READ_BYTES = 512 * 1024;
 export interface DeclaredContractSummary {
   readonly name: string;
   readonly gate: string;
-  readonly baselinePath: string | null;
-  readonly baselineCount: number | null;
-  readonly nearestExpiry: string | null;
+  readonly evidencePath: string | null;
+  readonly exceptionCount: number;
   readonly status: "enforced" | "waived";
   readonly waivedReason: string | null;
 }
@@ -50,13 +48,16 @@ const SECTION_CONTRACT_MAP: Readonly<Record<number, ReadonlyArray<string>>> = {
   5: ["intent"],
   6: ["fleet"],
   7: ["dictionary"],
-  8: ["migrations", "dictionary"],
+  8: ["migrations"],
   9: ["actions"],
   10: ["design"],
   11: ["optimization"],
-  14: ["tools"],
+  12: ["maps"],
+  13: ["tools"],
+  14: ["ci"],
+  15: ["docs"],
 };
-const ALWAYS_ENFORCED_SECTIONS = new Set([0, 1, 2, 12, 13, 15]);
+const ALWAYS_ENFORCED_SECTIONS = new Set([0, 1, 2]);
 
 function safeReadUtf8(filePath: string): string | null {
   try {
@@ -68,80 +69,39 @@ function safeReadUtf8(filePath: string): string | null {
   }
 }
 
-function safeResolveInsideRepo(repoReal: string, relPath: string): string | null {
-  if (!relPath || relPath.startsWith("/") || relPath.includes("\0")) return null;
-  try {
-    const real = NodeFS.realpathSync(NodePath.resolve(repoReal, relPath));
-    return real === repoReal || real.startsWith(repoReal + NodePath.sep) ? real : null;
-  } catch {
-    return null;
-  }
-}
-
-function summarizeGate(name: string, spec: Readonly<Record<string, unknown>>): string {
-  if (name === "tools" && Array.isArray(spec.steps)) {
-    const names = spec.steps.flatMap((s) =>
-      isRecord(s) && typeof s.name === "string" ? [s.name] : [],
-    );
-    const extra = names.length > 4 ? ` +${names.length - 4}` : "";
-    return `${names.length} steps (${names.slice(0, 4).join(", ")}${extra})`;
-  }
+function summarizeGate(
+  name: string,
+  spec: Readonly<Record<string, unknown>>,
+  evidencePath: string | null,
+): string {
+  if (optedOut(spec)) return `none (${String(spec.none)})`;
   if (name === "intent" && isRecord(spec.contracts)) {
     const keys = Object.keys(spec.contracts);
     return `${keys.length} contracts (${keys.join(", ")})`;
   }
-  for (const key of ["command", "file", "receipts"] as const) {
+  if (typeof spec.engine === "string" && spec.engine.trim()) {
+    return `${spec.engine.trim()} (${evidencePath ?? "evidence"})`;
+  }
+  if (typeof spec.choke === "string" && spec.choke.trim()) {
+    return spec.choke.trim();
+  }
+  for (const key of ["evidence", "file", "dir"] as const) {
     const value = spec[key];
     if (typeof value === "string" && value.trim()) return value.trim();
   }
-  return "declared";
-}
-
-function inspectBaseline(repoReal: string, relPath: string | null) {
-  const empty = { count: null, nearestExpiry: null };
-  const resolved = relPath ? safeResolveInsideRepo(repoReal, relPath) : null;
-  const text = resolved ? safeReadUtf8(resolved) : null;
-  if (!text) return empty;
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    const items: ReadonlyArray<unknown> = Array.isArray(parsed)
-      ? parsed
-      : isRecord(parsed) && Array.isArray(parsed.entries)
-        ? parsed.entries
-        : isRecord(parsed)
-          ? Object.values(parsed).filter(isRecord)
-          : [];
-    let nearest: string | null = null;
-    for (const item of items) {
-      const exp = isRecord(item) ? item.expires : undefined;
-      if (
-        typeof exp === "string" &&
-        /^\d{4}-\d{2}-\d{2}/.test(exp) &&
-        (nearest === null || exp < nearest)
-      ) {
-        nearest = exp.slice(0, 10);
-      }
-    }
-    return { count: items.length, nearestExpiry: nearest };
-  } catch {
-    return empty;
-  }
+  return evidencePath ?? "declared";
 }
 
 function readPlaybookMdSections(repoReal: string) {
-  for (const cand of [
-    NodePath.join(repoReal, "playbook", "PLAYBOOK.md"),
-    NodePath.join(NodeOS.homedir(), ".local", "lib", "playbook", "PLAYBOOK.md"),
-  ]) {
-    const text = safeReadUtf8(cand);
-    if (!text) continue;
-    const headings = text.split("\n").flatMap((line) => {
-      const m = /^##\s+(?:§)?(\d+)\.\s+(.+)$/.exec(line.trim());
-      return m?.[1] && m[2] ? [{ section: Number(m[1]), title: m[2].trim() }] : [];
-    });
-    if (headings.length > 0) return { path: cand, headings };
+  const found = readPlaybookStandards(repoReal);
+  if (!found) {
+    return { path: null, headings: [] as ReadonlyArray<{ section: number; title: string }> };
   }
-  return { path: null, headings: [] as ReadonlyArray<{ section: number; title: string }> };
+  const headings = found.text.split("\n").flatMap((line) => {
+    const m = /^##\s+(?:§)?(\d+)\.\s+(.+)$/.exec(line.trim());
+    return m?.[1] && m[2] ? [{ section: Number(m[1]), title: m[2].trim() }] : [];
+  });
+  return { path: headings.length > 0 ? found.source : null, headings };
 }
 
 function inferRepoSlug(repoReal: string): string {
@@ -164,22 +124,31 @@ export function readPlaybookDeclaration(
   const guardsExempt = repoWaivers.find((w) => w.scope === "guards") ?? null;
   const playbookWaivers = repoWaivers.filter((w) => w.scope === "playbook");
   const decl = loadDeclaration(repoReal);
+  const evidenceDir = evidenceDirOf(decl.data);
   const rawContracts = contractsOf(decl.data);
-  const contracts: DeclaredContractSummary[] = Object.entries(rawContracts).map(([name, raw]) => {
+  const entries: Array<[string, unknown]> = Object.entries(rawContracts);
+  if (isRecord(decl.data?.ci)) entries.push(["ci", decl.data.ci]);
+
+  const contracts: DeclaredContractSummary[] = entries.map(([name, raw]) => {
     const spec = isRecord(raw) ? raw : {};
-    const baselinePath = typeof spec.baseline === "string" ? spec.baseline : null;
-    const baseline = inspectBaseline(repoReal, baselinePath);
+    const evidencePath = optedOut(spec)
+      ? null
+      : typeof spec.evidence === "string"
+        ? spec.evidence
+        : NodePath.posix.join(evidenceDir, `${name}.json`);
+    const exceptionCount = Array.isArray(spec.exceptions) ? spec.exceptions.length : 0;
     const waiver = playbookWaivers.find((w) => w.key.toLowerCase() === name.toLowerCase());
     return {
       name,
-      gate: summarizeGate(name, spec),
-      baselinePath,
-      baselineCount: baseline.count,
-      nearestExpiry: baseline.nearestExpiry,
+      gate: summarizeGate(name, spec, evidencePath),
+      evidencePath,
+      exceptionCount,
       status: waiver ? "waived" : "enforced",
       waivedReason: waiver?.reason ?? null,
     };
   });
+
+  const declaredKeys = new Set(entries.filter(([, v]) => !optedOut(v)).map(([k]) => k));
   const md = readPlaybookMdSections(repoReal);
   const rules: PlaybookRuleSection[] = md.headings.map(({ section, title }) => {
     const mapped = SECTION_CONTRACT_MAP[section] ?? [];
@@ -201,10 +170,15 @@ export function readPlaybookDeclaration(
     }
     if (ALWAYS_ENFORCED_SECTIONS.has(section))
       return { section, title, status: "enforced", detail: null };
-    const hit = mapped.find((c) => c in rawContracts);
+    const hit = mapped.find((c) => declaredKeys.has(c));
     if (!hit) return { section, title, status: "not-declared", detail: null };
-    const count = contracts.find((c) => c.name === hit)?.baselineCount ?? 0;
-    return { section, title, status: "enforced", detail: count > 0 ? `baseline ${count}` : null };
+    const excCount = contracts.find((c) => c.name === hit)?.exceptionCount ?? 0;
+    return {
+      section,
+      title,
+      status: "enforced",
+      detail: excCount > 0 ? `${excCount} exception(s)` : null,
+    };
   });
   return {
     repoDir: repoReal,

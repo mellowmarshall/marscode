@@ -10,10 +10,6 @@
       "types": "./src/amend.ts",
       "import": "./src/amend.ts"
     },
-    "./baseline": {
-      "types": "./src/baseline.ts",
-      "import": "./src/baseline.ts"
-    },
     "./bypass": {
       "types": "./src/bypass.ts",
       "import": "./src/bypass.ts"
@@ -45,6 +41,10 @@
     "./declarationSummary": {
       "types": "./src/declarationSummary.ts",
       "import": "./src/declarationSummary.ts"
+    },
+    "./evidence": {
+      "types": "./src/evidence.ts",
+      "import": "./src/evidence.ts"
     },
     "./git": {
       "types": "./src/git.ts",

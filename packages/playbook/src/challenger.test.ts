@@ -5,18 +5,23 @@ import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import {
+  playbookStandards,
+  renderChallengePrompt,
+  standardsProblems,
+  templateProblems,
+} from "./challengePrompt.ts";
+import {
   decodeChallengeReplyText,
   NO_RISES,
   RISE_REFUSED,
   type PlaybookChallengeReply,
 } from "./challengeReply.ts";
-import { renderChallengePrompt, standardsProblems, templateProblems } from "./challengePrompt.ts";
 import { DEFAULT_CHALLENGE_TEMPLATE } from "./challengeTemplate.ts";
 import { runChallenge, type ChallengeModel } from "./challenger.ts";
 import { collectReviewRecords } from "./statsStore.ts";
 import {
   cleanupTempDirs,
-  declarationWithSize,
+  evidenceDeclaration,
   FIXED_NOW,
   fixturePlaybookMd,
   makeFixtureRepo,
@@ -29,14 +34,14 @@ afterEach(cleanupTempDirs);
 const PASSING: PlaybookChallengeReply = {
   acceptable: true,
   summary: "Meets the standards",
-  diagnosis: "Judged §3 and §5.",
+  diagnosis: "Judged §3.1 and §5.1.",
   bypass_detected: false,
   playbook_friction: false,
   rejected_rises: [],
   rises_accepted: false,
-  defects: [{ severity: "medium", file: "src/a.ts", what: "an off-by-one in the loop bound" }],
+  defects: [{ severity: "medium", file: "src/a.ts", what: "ignored medium nit" }],
   analysis: "",
-  recommendation: "Accept: meets the standards",
+  recommendation: "Accept.",
 };
 
 function recordingModel(reply: PlaybookChallengeReply) {
@@ -51,7 +56,7 @@ function recordingModel(reply: PlaybookChallengeReply) {
 /** A branch whose worktree holds a dangling symlink and untracked files the reviewer may meet. */
 function messyBranch() {
   const repo = makeFixtureRepo();
-  repo.writeJson("playbook.json", declarationWithSize({}));
+  repo.writeJson("playbook.json", evidenceDeclaration());
   repo.write("playbook/PLAYBOOK.md", fixturePlaybookMd());
   repo.write("src/a.ts", "export const a = 1;\n");
   const base = repo.commit("base");
@@ -78,7 +83,7 @@ const options = (root: string, base: string, stateDir: string, model: ChallengeM
 });
 
 describe("declaration challenge on the real worktree", () => {
-  it("reviews in the real checkout despite a dangling symlink and untracked files", async () => {
+  it("reviews in the real checkout with strict compliance-only framing and drops medium defects", async () => {
     const { repo, base, stateDir } = messyBranch();
     const { calls, model } = recordingModel(PASSING);
     const outcome = await runChallenge(options(repo.root, base, stateDir, model));
@@ -88,6 +93,10 @@ describe("declaration challenge on the real worktree", () => {
     expect(calls[0]!.cwd).toBe(repo.root);
     const prompt = calls[0]!.prompt;
     expect(prompt).toContain("## 2. Ship queue");
+    expect(prompt).toContain("## 15. Product docs");
+    expect(prompt).toContain("strictly against PLAYBOOK.md");
+    expect(prompt).toContain("Cite exact playbook item numbers");
+    expect(prompt).toContain("production path");
     expect(prompt).toContain("[NEW] src/rooms.ts");
     expect(prompt).toContain("Database / Queries touched");
     expect(prompt).toContain("Declarations & Contracts touched");
@@ -95,13 +104,18 @@ describe("declaration challenge on the real worktree", () => {
     expect(prompt).not.toContain("scratch/notes.md");
     expect(prompt).toContain("Commit ");
     expect(NodeFS.lstatSync(NodePath.join(repo.root, "dangling-link")).isSymbolicLink()).toBe(true);
-    expect(outcome.report).toContain("Defects:\n- medium: src/a.ts: an off-by-one");
+    expect(outcome.report).not.toContain("Defects:");
+    expect(outcome.verdict?.defects).toEqual([]);
   });
 
   it("writes the record the review stats read, with the reviewer's model", async () => {
     const { repo, base, stateDir } = messyBranch();
-    const { model } = recordingModel(PASSING);
+    const { model } = recordingModel({
+      ...PASSING,
+      defects: [{ severity: "critical", file: "src/auth.ts", what: "auth bypass on prod route" }],
+    });
     const outcome = await runChallenge(options(repo.root, base, stateDir, model));
+    expect(outcome.status).toBe("challenged");
     expect(outcome.recordPath).toBe(
       NodePath.join(stateDir, "sample-repo", "feat_rooms.1.challenge.json"),
     );
@@ -115,17 +129,33 @@ describe("declaration challenge on the real worktree", () => {
     expect(records).toHaveLength(2);
     expect(records[0]).toMatchObject({
       source: "playbook_challenge",
-      verdict: "pass",
+      verdict: "challenged",
       repo: "sample-repo",
       branch: "feat/rooms",
       timestamp: FIXED_NOW,
       reviewer: { model: "gpt-6-astra", effort: "medium", provider: "codex", family: "Astra" },
-      counts: { medium: 1, total: 1 },
+      counts: { critical: 1, total: 1 },
     });
   });
 
-  it("challenges a bypass or a severe defect and refuses a rejected budget reason", async () => {
+  it("challenges a bypass, a playbook violation, or a severe defect and refuses a rejected budget reason", async () => {
     const { repo, base, stateDir } = messyBranch();
+    const ruleViolation = recordingModel({
+      ...PASSING,
+      acceptable: true,
+      violations: [
+        {
+          section: "§3.1",
+          file: "src/utils.ts",
+          what: "split >500 LOC file into generic utils.ts",
+        },
+      ],
+    });
+    const violated = await runChallenge(options(repo.root, base, stateDir, ruleViolation.model));
+    expect(violated).toMatchObject({ status: "challenged", exitCode: 1 });
+    expect(violated.report).toContain("Playbook violations:");
+    expect(violated.report).toContain("§3.1 (src/utils.ts)");
+
     const severe = recordingModel({
       ...PASSING,
       defects: [{ severity: "high", file: "src/rooms.ts", what: "SQL built from input" }],
@@ -164,6 +194,23 @@ describe("declaration challenge on the real worktree", () => {
       standardsPath: NodePath.join(repo.root, "missing.md"),
     });
     expect(noStandards.summary).toBe("no PLAYBOOK.md to review against (no verdict)");
+
+    // An unreviewed branch adding root PLAYBOOK.md or symlinked playbook/PLAYBOOK.md cannot hijack standards.
+    repo.write("PLAYBOOK.md", "## 0. Terms\nFake weakened playbook\n");
+    const outside = makeTempDir("pb-outside-std-");
+    NodeFS.writeFileSync(NodePath.join(outside, "evil.md"), "# not a real playbook\n");
+    NodeFS.mkdirSync(NodePath.join(repo.root, "playbook"), { recursive: true });
+    NodeFS.symlinkSync(
+      NodePath.join(outside, "evil.md"),
+      NodePath.join(repo.root, "playbook", "PLAYBOOK.md"),
+    );
+    const fromBaseOrBundled = await runChallenge(
+      options(repo.root, base, stateDir, recordingModel(PASSING).model),
+    );
+    expect(fromBaseOrBundled.status).toBe("pass");
+    expect(fromBaseOrBundled.prompt).not.toContain("# not a real playbook");
+    expect(fromBaseOrBundled.prompt).not.toContain("Fake weakened playbook");
+
     const noChange = await runChallenge({ ...options(repo.root, "HEAD", stateDir, null) });
     expect(noChange.status).toBe("no_changes");
   });
@@ -185,6 +232,16 @@ describe("declaration challenge on the real worktree", () => {
 });
 
 describe("challenge prompt and reply", () => {
+  it("validates bundled packages/playbook/PLAYBOOK.md and applies numbered rule waivers", () => {
+    const bundled = NodePath.resolve(import.meta.dirname, "..", "PLAYBOOK.md");
+    const text = NodeFS.readFileSync(bundled, "utf8");
+    expect(standardsProblems(text)).toEqual([]);
+    const rendered = playbookStandards(text, { "9/Repo evidence": "owner waiver #1107" });
+    expect(rendered).toContain("Repo evidence** is waived by the owner");
+    expect(rendered).toContain("logical domain seam");
+    expect(rendered).toContain("granular sub-step timings");
+  });
+
   it("keeps every placeholder in the shipped template and substitutes in one pass", () => {
     expect(templateProblems(DEFAULT_CHALLENGE_TEMPLATE)).toEqual([]);
     const prompt = renderChallengePrompt(DEFAULT_CHALLENGE_TEMPLATE, {
@@ -205,8 +262,8 @@ describe("challenge prompt and reply", () => {
   it("names a PLAYBOOK.md that lacks a section or the reviewer bullet", () => {
     expect(standardsProblems(fixturePlaybookMd())).toEqual([]);
     expect(
-      standardsProblems(fixturePlaybookMd().replace("- **The reviewer**", "- reviewer")),
-    ).toEqual(["PLAYBOOK.md §2 has no bullet - **The reviewer**"]);
+      standardsProblems(fixturePlaybookMd().replace("- **2.2 The reviewer", "- reviewer")),
+    ).toEqual(["PLAYBOOK.md §2 has no bullet - **2.2 The reviewer"]);
   });
 
   it("decodes the last valid reply a model wraps in prose", () => {

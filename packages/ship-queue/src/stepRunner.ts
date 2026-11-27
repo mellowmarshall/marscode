@@ -149,6 +149,14 @@ export function buildLocalStepEnv(input: {
     "work",
     "reason",
   );
+  env.PLAYBOOK_EVIDENCE_DIR = NodePath.join(
+    input.ctx.queueRoot,
+    "jobs",
+    input.ctx.jobId,
+    "work",
+    "playbook-evidence",
+  );
+  env.PLAYBOOK_EVIDENCE_JOB = input.ctx.jobId;
   if (input.ctx.ghRepo) env.SHIP_QUEUE_GH_REPO = input.ctx.ghRepo;
   if (input.ctx.ontoSha) env.SHIP_QUEUE_ONTO = input.ctx.ontoSha;
   if (input.ctx.tipSha) env.SHIP_QUEUE_TIP = input.ctx.tipSha;
@@ -194,6 +202,8 @@ export async function runLocalStep(input: LocalStepInput): Promise<ProcessResult
   });
   const stateDir = env.SHIP_QUEUE_STATE;
   if (stateDir) NodeFS.mkdirSync(stateDir, { recursive: true });
+  const evidenceDir = env.PLAYBOOK_EVIDENCE_DIR;
+  if (evidenceDir) NodeFS.mkdirSync(evidenceDir, { recursive: true });
   const [command, ...args] = resolved.argv;
   return input.run({
     command: command!,
@@ -242,7 +252,8 @@ export function buildRemoteStepScript(input: {
     setup,
     `cd ${shellSingleQuote(input.remoteWorktree)} || exit 99`,
     `sq_g=$(git rev-parse --absolute-git-dir) || exit 99`,
-    `export ${exports} DOPPLER_CONFIG_DIR="$sq_g/ship-queue-doppler-config" SHIP_QUEUE_BASE_TREE="$sq_g/ship-queue-base"`,
+    `mkdir -p "$sq_g/ship-queue-playbook-evidence" || exit 99`,
+    `export ${exports} DOPPLER_CONFIG_DIR="$sq_g/ship-queue-doppler-config" SHIP_QUEUE_BASE_TREE="$sq_g/ship-queue-base" PLAYBOOK_EVIDENCE_DIR="$sq_g/ship-queue-playbook-evidence" PLAYBOOK_EVIDENCE_JOB=${shellSingleQuote(input.ctx.jobId)}`,
     `[ ! -f "$sq_g/ship-queue-body.md" ] || export SHIP_QUEUE_BODYFILE="$sq_g/ship-queue-body.md"`,
     REMOTE_SECRET_READER,
     `sq_cmd=(bash "$SHIP_QUEUE_BASE_TREE"/${shellSingleQuote(stepScript)}${stepArgs ? ` ${stepArgs}` : ""})`,

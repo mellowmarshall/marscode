@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  baselineGrowth,
-  expiredEntries,
-  fingerprint,
-  parseBaseline,
-  tooFarEntries,
-  type BaselineEntry,
-} from "./baseline.ts";
-import {
   bypassReason,
   exceptionChanges,
   normalizeExceptions,
@@ -17,170 +9,139 @@ import {
   sectionRuleReasons,
 } from "./bypass.ts";
 import { loosenedDeclaration, reportedCommandChanges } from "./ratchet.ts";
-import { declarationWithSize, FIXED_TODAY } from "./testing/fixtureRepo.ts";
-
-const entry = (over: Partial<BaselineEntry> = {}): BaselineEntry => ({
-  rule: "size",
-  file: "src/big.ts",
-  issue: "#7",
-  expires: "2027-01-31",
-  fingerprint: null,
-  lines: 600,
-  count: 1,
-  value: null,
-  ...over,
-});
+import { evidenceDeclaration } from "./testing/fixtureRepo.ts";
 
 describe("declaration ratchet", () => {
-  const base = declarationWithSize(
-    {},
+  const base = evidenceDeclaration(
     {
-      design: { client: ["apps/web/src", "apps/mobile/src"], tokens: "packages/ui/tokens.css" },
+      design: { evidence: ".playbook/evidence/design.json", choke: "packages/ui" },
       intent: { contracts: { surface: "config/surface.json" } },
+    },
+    {
+      evidence: ".playbook/evidence/ci.json",
+      parallel: 4,
+      granularThresholdMs: 30_000,
+      maxTier1Ms: 60_000,
+      full: ["pnpm-lock.yaml"],
     },
   );
 
-  it("passes a branch that only tightens or adopts a contract", () => {
-    const head = declarationWithSize(
-      {},
+  it("passes a branch that only tightens, adopts, or removes scoped exceptions", () => {
+    const head = evidenceDeclaration(
       {
-        design: {
-          client: ["apps/web/src", "apps/mobile/src", "apps/desktop/src"],
-          tokens: "packages/ui/tokens.css",
-        },
+        design: { evidence: ".playbook/evidence/design.json", choke: "packages/ui" },
         intent: { contracts: { surface: "config/surface.json", fleet: "fleet-shape.json" } },
-        migrations: { dir: "migrations" },
+        migrations: { engine: "surrealql", dir: "migrations" },
+      },
+      {
+        evidence: ".playbook/evidence/ci.json",
+        parallel: 8,
+        granularThresholdMs: 25_000,
+        maxTier1Ms: 50_000,
+        full: ["pnpm-lock.yaml"],
       },
     );
     expect(loosenedDeclaration(head, base)).toEqual([]);
   });
 
-  it("refuses a removed contract, a dropped list item, a moved intent file and an opt-out", () => {
+  it("refuses removed contracts, opt-outs, moved intent files, added exceptions, and loosened CI bounds", () => {
+    const { intent: _removed, ...withoutIntent } = evidenceDeclaration().contracts;
     const head = {
       contracts: {
-        ...declarationWithSize({}).contracts,
-        size: { none: "no source" },
-        design: { client: ["apps/web/src"], tokens: "tokens.css" },
+        ...withoutIntent,
+        size: { none: "no source files at all" },
+        design: {
+          evidence: ".playbook/evidence/design.json",
+          exceptions: [{ subject: "raw.tsx", reason: "temporary raw button", issue: "#9" }],
+        },
+      },
+      ci: {
+        evidence: ".playbook/evidence/ci.json",
+        parallel: 2,
+        granularThresholdMs: 60_000,
+        maxTier1Ms: 90_000,
+        full: [],
       },
     };
     const problems = loosenedDeclaration(head, base);
     expect(problems).toContain("contract intent removed");
     expect(problems).toContain("contract size opted out: the base declares it");
-    expect(problems).toContain("design.client dropped: apps/mobile/src");
-    expect(problems.some((p) => p.startsWith("design.tokens widened or moved"))).toBe(true);
+    expect(
+      problems.some((p) => p.includes("design.exceptions adds scoped exception 'raw.tsx'")),
+    ).toBe(true);
+    expect(problems.some((p) => p.includes("ci.parallel lowered"))).toBe(true);
+    expect(problems.some((p) => p.includes("ci.granularThresholdMs loosened"))).toBe(true);
+    expect(problems.some((p) => p.includes("ci.maxTier1Ms loosened"))).toBe(true);
+    expect(problems.some((p) => p.includes("ci.full removed trigger(s): pnpm-lock.yaml"))).toBe(
+      true,
+    );
   });
 
-  it("reports the repo's own commands without refusing them", () => {
-    const head = declarationWithSize({ "a.ts": 1 });
-    expect(loosenedDeclaration(head, declarationWithSize({}))).toEqual([]);
-    expect(reportedCommandChanges(head, declarationWithSize({}))).toEqual([
-      `size.command: "echo '{}'" -> "echo '{\\"a.ts\\":1}'"`,
+  it("reports evidence path changes without refusing them", () => {
+    const head = evidenceDeclaration({ size: { evidence: ".playbook/custom-size.json" } });
+    expect(loosenedDeclaration(head, evidenceDeclaration())).toEqual([]);
+    expect(reportedCommandChanges(head, evidenceDeclaration())).toEqual([
+      'size.evidence: ".playbook/evidence/size.json" -> ".playbook/custom-size.json"',
     ]);
   });
 
-  it("treats a first Baseline as adoption and its removal as loosening", () => {
-    const withBaseline = declarationWithSize({}, {});
-    const head = {
-      contracts: { ...withBaseline.contracts, size: { command: "echo '{}'", baseline: "b.json" } },
-    };
-    expect(loosenedDeclaration(head, withBaseline)).toEqual([]);
-    expect(loosenedDeclaration(withBaseline, head)).toEqual([
-      'size.baseline removed: "b.json" -> None',
-    ]);
-  });
-
-  it("refuses a new size exempt place and a first allowlist that holds entries", () => {
-    const head = {
-      contracts: {
-        ...declarationWithSize({}).contracts,
-        size: {
-          command: "echo '{}'",
-          exempt: { "^vendor/": "third party" },
-          allowlist: "allow.txt",
-        },
-      },
-    };
-    const problems = loosenedDeclaration(head, declarationWithSize({}), (rel) =>
+  it("refuses a first size allowlist that already holds entries and catches growth on an existing allowlist", () => {
+    const head = evidenceDeclaration({
+      size: { evidence: ".playbook/evidence/size.json", allowlist: "allow.txt" },
+    });
+    const first = loosenedDeclaration(head, evidenceDeclaration(), (rel) =>
       rel === "allow.txt" ? "# header\nsrc/a.ts#parse\n" : null,
     );
-    expect(problems).toEqual([
-      "size.allowlist added: allow.txt must start empty (1)",
-      "size.exempt adds exempt place(s): ^vendor/ (the owner's call)",
-    ]);
-  });
-});
+    expect(first).toEqual(["size.allowlist added: allow.txt must start empty (1)"]);
 
-describe("Baseline shrink-only ratchet", () => {
-  it("parses entries and refuses malformed ones by field", () => {
-    const parsed = parseBaseline(
-      JSON.stringify({
-        entries: [
-          { rule: "size", file: "a.ts", lines: 600, issue: "#7", expires: "2027-01-31" },
-          { rule: "size", file: "../x", lines: 1, issue: "7", expires: "2027-02-30" },
-        ],
-      }),
-      "b.json",
+    const missingOrSymlink = loosenedDeclaration(head, evidenceDeclaration(), () => null);
+    expect(missingOrSymlink).toEqual([
+      "size.allowlist added: 'allow.txt' is missing, unreadable, or a symlink (§3.2)",
+    ]);
+
+    const grown = loosenedDeclaration(
+      head,
+      head,
+      (rel) => (rel === "allow.txt" ? "src/a.ts\nsrc/b.ts\n" : null),
+      (rel) => (rel === "allow.txt" ? "src/a.ts\n" : null),
     );
-    expect(parsed.entries).toHaveLength(1);
-    expect(parsed.errors).toEqual([
-      "b.json entries[1]: file '../x' must be repo-relative",
-      "b.json entries[1]: issue '7' must look like #123",
-      "b.json entries[1]: expires '2027-02-30' is not a real date",
-    ]);
-  });
+    expect(grown).toEqual(["size.allowlist added 1 entry(ies): src/b.ts (§3.2)"]);
 
-  it("holds every entry to shrink-only against the base", () => {
-    const base = [
-      entry(),
-      entry({
-        rule: "design/raw",
-        file: "ui.tsx",
-        fingerprint: fingerprint("a  b"),
-        lines: null,
-        count: 2,
-      }),
-    ];
-    const current = [
-      entry({ lines: 650, expires: "2027-03-01", issue: "#8" }),
-      entry({
-        rule: "design/raw",
-        file: "ui.tsx",
-        fingerprint: fingerprint("a b"),
-        lines: null,
-        count: 3,
-      }),
-      entry({ file: "src/new.ts" }),
-    ];
-    expect(baselineGrowth(current, base, { adopting: false })).toEqual([
-      "grew: src/big.ts [size] 600 -> 650 lines",
-      "expiry moved later: src/big.ts [size] 2027-01-31 -> 2027-03-01",
-      "issue changed: src/big.ts [size] #7 -> #8",
-      "count grew: ui.tsx [design/raw] 2 -> 3",
-      "added: src/new.ts [size] (#7, expires 2027-01-31)",
-    ]);
-    expect(baselineGrowth([entry({ lines: 550 })], base.slice(0, 1), { adopting: false })).toEqual(
-      [],
+    const shrunk = loosenedDeclaration(
+      head,
+      head,
+      (rel) => (rel === "allow.txt" ? "src/a.ts\n" : null),
+      (rel) => (rel === "allow.txt" ? "src/a.ts\nsrc/b.ts\n" : null),
     );
+    expect(shrunk).toEqual([]);
   });
 
-  it("lets adoption add entries except for files new on the branch", () => {
-    const added = baselineGrowth([entry({ file: "src/fresh.ts" }), entry()], [], {
-      adopting: true,
-      addedFiles: new Set(["src/fresh.ts"]),
-    });
-    expect(added).toEqual([
-      "added: src/fresh.ts [size] (#7, expires 2027-01-31) (a brand-new file cannot be baselined)",
-    ]);
-  });
+  it("refuses ci.always gate removals and ci.select changes", () => {
+    const ciBase = evidenceDeclaration(
+      {},
+      {
+        evidence: ".playbook/evidence/ci.json",
+        always: ["lint", "typecheck"],
+        select: { "packages/a": ["test:a"] },
+      },
+    );
+    const ciHead = evidenceDeclaration(
+      {},
+      {
+        evidence: ".playbook/evidence/ci.json",
+        always: ["lint"],
+        select: { "packages/a": [] },
+      },
+    );
+    const problems = loosenedDeclaration(ciHead, ciBase);
+    expect(problems).toContain("ci.always removed mandatory gate(s): typecheck (§14.2)");
+    expect(problems.some((p) => p.startsWith("ci.select changed:"))).toBe(true);
 
-  it("finds expired entries and entries past the 180-day limit from a fixed today", () => {
-    const entries = [
-      entry({ expires: "2026-11-26" }),
-      entry({ expires: "2027-05-26" }),
-      entry({ expires: "2027-05-27" }),
-    ];
-    expect(expiredEntries(entries, FIXED_TODAY).map((e) => e.expires)).toEqual(["2026-11-26"]);
-    expect(tooFarEntries(entries, FIXED_TODAY).map((e) => e.expires)).toEqual(["2027-05-27"]);
+    const addedSelect = loosenedDeclaration(
+      evidenceDeclaration({}, { evidence: ".playbook/evidence/ci.json", select: "scripts/sel.sh" }),
+      evidenceDeclaration({}, { evidence: ".playbook/evidence/ci.json" }),
+    );
+    expect(addedSelect.some((p) => p.startsWith("ci.select changed:"))).toBe(true);
   });
 });
 
@@ -191,7 +152,8 @@ describe("owner exceptions", () => {
       "sample-repo": {
         playbook: {
           "§3": "size refactor tracked in #7",
-          "10/The limit": "x",
+          "9/Repo evidence": "x",
+          "14": "legacy numeric waiver must not silently waive ci",
           challenge: "owner said",
         },
         guards: "vendor exempt 2026-10-01 #3",
@@ -199,14 +161,16 @@ describe("owner exceptions", () => {
     },
   };
 
-  it("merges the wildcard repo and resolves sections, names and aliases", () => {
+  it("merges the wildcard repo, resolves names/aliases, and refuses bare renumbered numeric keys 12..15", () => {
     const bp = repoBypasses(data, "Sample-Repo");
     expect(bypassReason(bp, "size")).toBe("size refactor tracked in #7");
-    expect(bypassReason(bp, "13")).toBe("no maps host-wide");
+    expect(bypassReason(bp, "12")).toBe("no maps host-wide");
     expect(bypassReason(bp, "declaration-challenge")).toBe("owner said");
     expect(bypassReason(bp, "tools")).toBeNull();
+    expect(bypassReason(bp, "ci")).toBeNull();
+    expect(sectionBypassReason(bp, 14)).toBeNull();
     expect(sectionBypassReason(bp, 3)).toBe("size refactor tracked in #7");
-    expect(sectionRuleReasons(bp, 10, ["The limit", "Other"])).toEqual([["The limit", "x"]]);
+    expect(sectionRuleReasons(bp, 9, ["Repo evidence", "Other"])).toEqual([["Repo evidence", "x"]]);
   });
 
   it("flattens waivers for display with their dates and issue refs", () => {
@@ -216,7 +180,7 @@ describe("owner exceptions", () => {
       date: "2026-10-01",
       issueRef: "#3",
     });
-    expect(flat.filter((w) => w.scope === "playbook")).toHaveLength(4);
+    expect(flat.filter((w) => w.scope === "playbook")).toHaveLength(5);
   });
 
   it("holds an added or changed exception value for the owner, never a removal", () => {
