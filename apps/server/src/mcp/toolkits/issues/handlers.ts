@@ -15,6 +15,7 @@ import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ThreadIssueService from "../../../orchestration-v2/ThreadIssueService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import { stampMcpGitHubProse } from "../githubAttribution.ts";
 import {
   IssueLinkFailedError,
   IssueProjectNotFoundError,
@@ -234,10 +235,11 @@ const make = Effect.gen(function* () {
     create_issue: McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
         const scope = yield* requireProjectScope(input.projectId, { scope: input.scope });
+        const body = yield* stampMcpGitHubProse(input.body ?? "");
         const created = yield* issues.create({
           ...scope,
           title: input.title,
-          body: input.body ?? "",
+          body,
           labels: input.labels ?? [],
           assignees: input.assignees ?? [],
         });
@@ -252,7 +254,8 @@ const make = Effect.gen(function* () {
     comment_on_issue: McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
         const target = yield* resolveTarget(input);
-        yield* issues.comment({ ...refOf(target), body: input.body });
+        const body = yield* stampMcpGitHubProse(input.body);
+        yield* issues.comment({ ...refOf(target), body });
         return identityOf(target);
       }),
     ),

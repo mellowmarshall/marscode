@@ -136,7 +136,7 @@ export async function enforceDirectGuard(
   const verdict: GuardVerdict =
     tool === "git"
       ? decideGit(args, env, cwd, runtime.config, { procFs })
-      : decideGh(args, cwd, runtime.config, { procFs });
+      : decideGh(args, cwd, runtime.config, { procFs, env });
   if (verdict.verdict === "allow") return 0;
 
   const state = createOverrideState();

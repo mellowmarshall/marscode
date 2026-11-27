@@ -442,4 +442,85 @@ describe("issue toolkit handlers", () => {
       expect(unlinked.wasLinked).toBe(true);
     }),
   );
+
+  it.effect(
+    "stamps create_issue and comment_on_issue idempotently and allows closing issues via set_issue_state",
+    () =>
+      Effect.gen(function* () {
+        const createdBodies: Array<string> = [];
+        const commentBodies: Array<string> = [];
+        const stateChanges: Array<{ readonly key: string; readonly state: string }> = [];
+        const issueLayer = Layer.mock(IssueService.IssueService)({
+          detail: () => Effect.succeed(detail),
+          linkMetadata: () => Effect.succeed(detail),
+          projectScope: (projectId) =>
+            Effect.succeed({
+              projectId,
+              tracker: GITHUB,
+              host: "github.com",
+              scope: "t3tools/t3code",
+            }),
+          resolveUrl: (url) =>
+            Effect.succeed({
+              projectId: PROJECT_ID,
+              tracker: GITHUB,
+              host: "github.com",
+              scope: "t3tools/t3code",
+              key: url.split("/").at(-1)!,
+              writable: true,
+            }),
+          create: (input) =>
+            Effect.sync(() => void createdBodies.push(input.body)).pipe(
+              Effect.as({
+                key: "42",
+                url: "https://github.com/T3Tools/T3Code/issues/42",
+                displayKey: "#42",
+              }),
+            ),
+          comment: (input) => Effect.sync(() => void commentBodies.push(input.body)),
+          setState: (input) =>
+            Effect.sync(() => void stateChanges.push({ key: input.key, state: input.state })),
+        });
+        const harness = yield* makeHarness([], issueLayer);
+
+        yield* harness.call("create_issue", {
+          title: "Track attribution",
+          body: "Initial issue details.",
+        });
+        expect(createdBodies).toEqual([
+          [
+            "Initial issue details.",
+            "",
+            "Co-authored-by: Thread <thread@agents.local>",
+            "Agent Session: provider-session-1",
+            `Agent Thread: ${THREAD_ID}`,
+          ].join("\n"),
+        ]);
+
+        yield* harness.call("comment_on_issue", {
+          key: "42",
+          body: "Investigating now.",
+        });
+        const stampedComment = commentBodies[0]!;
+        expect(stampedComment).toContain("Investigating now.");
+        expect(stampedComment).toContain("Co-authored-by: Thread <thread@agents.local>");
+        expect(stampedComment).toContain("Agent Session: provider-session-1");
+        expect(stampedComment).toContain(`Agent Thread: ${THREAD_ID}`);
+
+        // Idempotency: already-stamped prose is not stamped a second time.
+        yield* harness.call("comment_on_issue", {
+          key: "42",
+          body: stampedComment,
+        });
+        expect(commentBodies[1]).toBe(stampedComment);
+
+        // Agents can close issues freely without obstruction.
+        const closed = yield* harness.call("set_issue_state", {
+          key: "42",
+          state: "closed",
+        });
+        expect(closed.key).toBe("42");
+        expect(stateChanges).toEqual([{ key: "42", state: "closed" }]);
+      }),
+  );
 });

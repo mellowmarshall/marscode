@@ -27,7 +27,14 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --no-hooks|--no-hook) INSTALL_HOOKS=0; shift ;;
-    --prefix) PREFIX="$2"; shift 2 ;;
+    --prefix)
+      if [ $# -lt 2 ] || [ -z "${2:-}" ]; then
+        printf 'install.sh: --prefix requires a directory argument\n' >&2
+        exit 64
+      fi
+      PREFIX="$2"
+      shift 2
+      ;;
     --real-git) REAL_GIT="$2"; shift 2 ;;
     --real-node) REAL_NODE="$2"; shift 2 ;;
     --real-gh) REAL_GH="$2"; shift 2 ;;

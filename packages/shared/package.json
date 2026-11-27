@@ -678,6 +678,10 @@
     "./assistantInsights": {
       "types": "./src/assistantInsights.ts",
       "import": "./src/assistantInsights.ts"
+    },
+    "./githubAttribution": {
+      "types": "./src/githubAttribution.ts",
+      "import": "./src/githubAttribution.ts"
     }
   },
   "scripts": {

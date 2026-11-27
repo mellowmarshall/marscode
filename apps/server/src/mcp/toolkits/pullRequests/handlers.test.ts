@@ -1345,7 +1345,13 @@ describe("source control tools", () => {
         {
           number: 42,
           verdict: "request-changes",
-          body: "Two things.",
+          body: [
+            "Two things.",
+            "",
+            "Co-authored-by: Thread <thread@agents.local>",
+            "Agent Session: provider-session-1",
+            `Agent Thread: ${THREAD_ID}`,
+          ].join("\n"),
           comments: [
             {
               path: "b.ts",
@@ -1425,6 +1431,84 @@ describe("source control tools", () => {
         .call("pull_request_update", { requestReviewers: ["nobody"] })
         .pipe(Effect.flip);
       expect(unknown.message).toContain("No reviewer named nobody");
+    }),
+  );
+
+  it.effect("stamps PR create, update, comment, reply, and review bodies idempotently", () =>
+    Effect.gen(function* () {
+      const createdBodies: Array<string> = [];
+      const updatedPayloads: Array<{ readonly title?: string; readonly body?: string }> = [];
+      const commentBodies: Array<string> = [];
+      const replyBodies: Array<string> = [];
+      const reviewBodies: Array<string> = [];
+      const harness = yield* makeHarness({
+        thread: branchThread,
+        git: {
+          createPullRequest: (input) =>
+            Effect.sync(() => void createdBodies.push(input.body)).pipe(
+              Effect.as({
+                status: "created" as const,
+                url: "https://github.com/t3tools/t3code/pull/42",
+                number: 42,
+                baseBranch: "main",
+                headBranch: "tools",
+                title: input.title,
+              }),
+            ),
+        },
+        pullRequests: {
+          update: (input) =>
+            Effect.sync(
+              () =>
+                void updatedPayloads.push({
+                  ...(input.title === undefined ? {} : { title: input.title }),
+                  ...(input.body === undefined ? {} : { body: input.body }),
+                }),
+            ),
+          comment: (input) => Effect.sync(() => void commentBodies.push(input.body)),
+          replyToThread: (input) => Effect.sync(() => void replyBodies.push(input.body)),
+          submitReview: (input) => Effect.sync(() => void reviewBodies.push(input.body)),
+        },
+      });
+
+      const expectedTrailer = [
+        "Co-authored-by: Thread <thread@agents.local>",
+        "Agent Session: provider-session-1",
+        `Agent Thread: ${THREAD_ID}`,
+      ].join("\n");
+
+      yield* harness.call("pull_request_create", {
+        title: "Attribution PR",
+        body: "PR body.",
+      });
+      expect(createdBodies).toEqual([`PR body.\n\n${expectedTrailer}`]);
+
+      yield* harness.call("pull_request_update", { title: "Title only" });
+      yield* harness.call("pull_request_update", { body: "Updated body." });
+      expect(updatedPayloads).toEqual([
+        { title: "Title only" },
+        { body: `Updated body.\n\n${expectedTrailer}` },
+      ]);
+
+      yield* harness.call("pull_request_respond", { body: "Top-level comment." });
+      yield* harness.call("pull_request_respond", {
+        body: `Already stamped.\n\n${expectedTrailer}`,
+      });
+      yield* harness.call("pull_request_respond", {
+        reviewThreadId: "open-thread",
+        body: "Reply text.",
+      });
+      expect(commentBodies).toEqual([
+        `Top-level comment.\n\n${expectedTrailer}`,
+        `Already stamped.\n\n${expectedTrailer}`,
+      ]);
+      expect(replyBodies).toEqual([`Reply text.\n\n${expectedTrailer}`]);
+
+      yield* harness.call("pull_request_review", {
+        verdict: "approve",
+        body: "Looks good.",
+      });
+      expect(reviewBodies).toEqual([`Looks good.\n\n${expectedTrailer}`]);
     }),
   );
 });

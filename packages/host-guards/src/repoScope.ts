@@ -111,6 +111,25 @@ export function parseGithubSlug(url: string): RepoSlug | null {
   };
 }
 
+const GH_ITEM_URL_RE = /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:pull|issues)\/\d+(?:\/.*)?$/i;
+
+export function parseRepoSlugArg(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const item = GH_ITEM_URL_RE.exec(trimmed);
+  if (item?.[1] && item[2]) {
+    return `${item[1].toLowerCase()}/${item[2].toLowerCase()}`;
+  }
+  const fromUrl = parseGithubSlug(trimmed);
+  if (fromUrl) return `${fromUrl.owner}/${fromUrl.name}`;
+  const withoutHost = trimmed.replace(/^github\.com\//i, "");
+  if (/^[^/\s]+\/[^/\s]+$/.test(withoutHost)) {
+    const [owner, name] = withoutHost.split("/");
+    return `${owner!.toLowerCase()}/${name!.toLowerCase().replace(/\.git$/, "")}`;
+  }
+  return null;
+}
+
 export function isSlugInScope(
   ownerOrSlug: string,
   config: HostGuardsConfig,

@@ -5,6 +5,7 @@ import { resolveGuardSocketPath } from "@t3tools/guard-protocol/client";
 
 import { checkArgvSecrets } from "./argvGuard.ts";
 import { decideCloudCli } from "./cloudCliGuard.ts";
+import { runGhSubcommand } from "./ghRun.ts";
 import { enforceDirectGuard, REFUSED_EXIT_CODE, runPreToolUseHook } from "./hook.ts";
 import { loadHostConfig, type HostGuardsConfig } from "./hostConfig.ts";
 import { decideInstallTokens, extractPackageScript } from "./installGuard.ts";
@@ -214,6 +215,7 @@ function usageText(): string {
     "commands:",
     "  git-check [--cwd DIR] [--] <git-args...>",
     "  gh-check [--cwd DIR] [--] <gh-args...>",
+    "  gh-run [--cwd DIR] [--real-gh PATH] [--] <gh-args...>",
     "  install-check [--cwd DIR] [--with-tree] [--] <cmd...>",
     "  tree-check [--kind test|gate|auto|push] [--script NAME] [--cwd DIR] [--] <args...>",
     "  ports-check [--cwd DIR] [--] <cmd...>",
@@ -291,6 +293,10 @@ export async function runHostGuardCli(argv: ReadonlyArray<string>, io: CliIo): P
   if (sub === "gh-check" || sub === "gh") {
     const { cwd, rest } = splitCwdAndRest(args, io.cwd);
     return enforceDirectGuard("gh", rest, cwd, runtime);
+  }
+
+  if (sub === "gh-run") {
+    return runGhSubcommand(args, config, runtime, io);
   }
 
   if (sub === "argv-check") {

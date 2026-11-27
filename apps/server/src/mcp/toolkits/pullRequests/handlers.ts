@@ -46,6 +46,7 @@ import {
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { threadNotFound } from "../../threadAccess.ts";
+import { stampMcpGitHubProse } from "../githubAttribution.ts";
 import {
   type ListThreadPullRequestsResult,
   PullRequestBranchHasNoneError,
@@ -1052,12 +1053,13 @@ const make = Effect.gen(function* () {
         if (project === undefined) {
           return yield* new PullRequestProjectNotFoundError({ repository: "" });
         }
+        const body = yield* stampMcpGitHubProse(input.body, thread);
         const created = yield* git
           .createPullRequest({
             cwd: thread.worktreePath ?? project.workspaceRoot,
             projectId: project.id,
             title: input.title,
-            body: input.body,
+            body,
             baseBranch: input.base,
             draft: input.draft,
             private: input.private,
@@ -1095,13 +1097,15 @@ const make = Effect.gen(function* () {
             detail: "Pass title, body, ready, state, addLabels, removeLabels, or requestReviewers.",
           });
         }
-        const { target, ref } = yield* locate(input);
+        const { thread, target, ref } = yield* locate(input);
         if (input.title !== undefined || input.body !== undefined) {
+          const body =
+            input.body === undefined ? undefined : yield* stampMcpGitHubProse(input.body, thread);
           yield* pullRequests
             .update({
               ...ref,
               ...(input.title === undefined ? {} : { title: input.title }),
-              ...(input.body === undefined ? {} : { body: input.body }),
+              ...(body === undefined ? {} : { body }),
             })
             .pipe(Effect.mapError(forgeFailure));
         }
@@ -1151,13 +1155,14 @@ const make = Effect.gen(function* () {
             detail: "resolved needs reviewThreadId.",
           });
         }
-        const { target, ref } = yield* locate(input);
+        const { thread, target, ref } = yield* locate(input);
         const reviewThreadId = input.reviewThreadId;
         if (input.body !== undefined) {
+          const body = yield* stampMcpGitHubProse(input.body, thread);
           yield* (
             reviewThreadId === undefined
-              ? pullRequests.comment({ ...ref, body: input.body })
-              : pullRequests.replyToThread({ ...ref, threadId: reviewThreadId, body: input.body })
+              ? pullRequests.comment({ ...ref, body })
+              : pullRequests.replyToThread({ ...ref, threadId: reviewThreadId, body })
           ).pipe(Effect.mapError(forgeFailure));
         }
         if (reviewThreadId !== undefined && input.resolved !== undefined) {
@@ -1184,10 +1189,11 @@ const make = Effect.gen(function* () {
     ),
     pull_request_review: McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
-        const { target, ref } = yield* locate(input);
+        const { thread, target, ref } = yield* locate(input);
         const comments = yield* reviewComments(ref, input.comments ?? []);
+        const body = yield* stampMcpGitHubProse(input.body ?? "", thread);
         yield* pullRequests
-          .submitReview({ ...ref, verdict: input.verdict, body: input.body ?? "", comments })
+          .submitReview({ ...ref, verdict: input.verdict, body, comments })
           .pipe(Effect.mapError(forgeFailure));
         return identityOf(target);
       }),

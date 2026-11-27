@@ -1,78 +1,20 @@
-// @effect-diagnostics nodeBuiltinImport:off - GitHub CLI merge guard: blocks direct merges, repo sync, shell aliases, and manual merge drills.
+// @effect-diagnostics nodeBuiltinImport:off - GitHub CLI merge guard: blocks direct merges, PR creation, base retargeting, repo sync, shell aliases, and manual merge drills.
 import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 
 import { decideGhApiCall } from "./ghApiGuard.ts";
+import {
+  expandGhAlias,
+  extractGhCommandTokens,
+  inspectGhCommandTarget,
+  MAX_GH_ALIAS_DEPTH,
+  resolveEnvGhRepoSlug,
+} from "./ghArgParse.ts";
 import { safeRealpath, type HostGuardsConfig } from "./hostConfig.ts";
 import { defaultProcFs, type ProcFsReader } from "./procFs.ts";
 import { isQueueDaemonInAncestry } from "./t3ServerTrust.ts";
 import { ALLOW_VERDICT, type GuardVerdict } from "./pushGuard.ts";
-import { formatMergeRefusal, inspectRepo, isSlugInScope } from "./repoScope.ts";
-
-const GH_GLOBAL_VALUE_FLAGS = new Set([
-  "-R",
-  "--repo",
-  "--hostname",
-  "--subject",
-  "--author-email",
-  "-A",
-  "--match-head-commit",
-  "-X",
-  "--method",
-  "-f",
-  "--raw-field",
-  "-F",
-  "--field",
-  "--input",
-  "-H",
-  "--header",
-  "-q",
-  "--jq",
-  "-t",
-  "--template",
-  "-p",
-  "--preview",
-  "--cache",
-]);
-
-const GH_COMMANDS = new Set([
-  "agent-task",
-  "alias",
-  "api",
-  "attestation",
-  "auth",
-  "browse",
-  "cache",
-  "codespace",
-  "completion",
-  "config",
-  "copilot",
-  "extension",
-  "gist",
-  "gpg-key",
-  "help",
-  "issue",
-  "label",
-  "org",
-  "pr",
-  "preview",
-  "project",
-  "release",
-  "repo",
-  "ruleset",
-  "run",
-  "search",
-  "secret",
-  "ssh-key",
-  "status",
-  "variable",
-  "workflow",
-  "agent-session",
-  "version",
-  "--version",
-  "--help",
-  "-h",
-]);
+import { FALLBACK_BASES, formatMergeRefusal, inspectRepo, isSlugInScope } from "./repoScope.ts";
 
 const MERGE_LONG_VALUES = new Set([
   "--subject",
@@ -153,6 +95,7 @@ function resolvePrMergeTarget(
   args: ReadonlyArray<string>,
   cwd: string,
   config: HostGuardsConfig,
+  env: NodeJS.ProcessEnv,
 ): { readonly owner: string; readonly name: string } | null {
   const parsed = parsePrMergeSelector(args);
   if (!parsed) return null;
@@ -169,10 +112,16 @@ function resolvePrMergeTarget(
     return { owner: owner!.toLowerCase(), name: name!.toLowerCase().replace(/\.git$/, "") };
   }
 
+  const envSlug = resolveEnvGhRepoSlug(env);
+  if (envSlug) {
+    const [owner, name] = envSlug.split("/");
+    return { owner: owner!, name: name! };
+  }
+
   const res = NodeChildProcess.spawnSync(
     config.realGh,
     ["pr", "view", ...parsed.repoArgs, "--json", "url", "--jq", ".url", "--", ...parsed.selector],
-    { cwd, encoding: "utf8", timeout: 30_000 },
+    { cwd, env, encoding: "utf8", timeout: 30_000 },
   );
   if (res.status !== 0) return null;
   const match = PR_URL_RE.exec((res.stdout ?? "").trim());
@@ -180,67 +129,6 @@ function resolvePrMergeTarget(
   return { owner: match[1].toLowerCase(), name: match[2].toLowerCase() };
 }
 
-function extractCommandTokens(
-  args: ReadonlyArray<string>,
-): Array<{ readonly index: number; readonly word: string }> {
-  const tokens: Array<{ readonly index: number; readonly word: string }> = [];
-  let skip = false;
-  for (let i = 0; i < args.length; i += 1) {
-    if (skip) {
-      skip = false;
-      continue;
-    }
-    const word = args[i]!;
-    if (GH_GLOBAL_VALUE_FLAGS.has(word)) {
-      skip = true;
-      continue;
-    }
-    if (word.startsWith("-")) continue;
-    tokens.push({ index: i, word: word.toLowerCase() });
-  }
-  return tokens;
-}
-
-function expandGhAlias(
-  args: ReadonlyArray<string>,
-  cwd: string,
-  config: HostGuardsConfig,
-):
-  | { readonly shell: true; readonly body: string }
-  | { readonly shell: false; readonly expanded: ReadonlyArray<string> }
-  | null {
-  const tokens = extractCommandTokens(args);
-  if (tokens.length === 0 || GH_COMMANDS.has(tokens[0]!.word)) return null;
-  const res = NodeChildProcess.spawnSync(config.realGh, ["alias", "list"], {
-    cwd,
-    encoding: "utf8",
-    timeout: 15_000,
-  });
-  if (res.status !== 0) return null;
-  const firstWord = tokens[0]!.word;
-  for (const line of (res.stdout ?? "").split(/\r?\n/)) {
-    const colon = line.indexOf(":");
-    if (colon === -1) continue;
-    const aliasName = line.slice(0, colon).trim().toLowerCase();
-    if (aliasName !== firstWord) continue;
-    const rawExpansion = line
-      .slice(colon + 1)
-      .trim()
-      .replace(/^'+|'+$/g, "");
-    if (rawExpansion.startsWith("!")) {
-      return { shell: true, body: rawExpansion };
-    }
-    const parts = rawExpansion.split(/\s+/).filter(Boolean);
-    const idx = tokens[0]!.index;
-    return {
-      shell: false,
-      expanded: [...args.slice(0, idx), ...parts, ...args.slice(idx + 1)],
-    };
-  }
-  return null;
-}
-
-const MAX_GH_ALIAS_DEPTH = 8;
 const REPO_SYNC_VALUE_FLAGS = new Set([
   "-b",
   "--branch",
@@ -256,6 +144,7 @@ function resolveRepoSyncTarget(
   syncTokenIndex: number,
   cwd: string,
   config: HostGuardsConfig,
+  env: NodeJS.ProcessEnv,
 ): string | null {
   let repoFlag = "";
   const positionals: string[] = [];
@@ -285,7 +174,9 @@ function resolveRepoSyncTarget(
   }
   if (positionals[0]) return positionals[0].trim();
   if (repoFlag) return repoFlag;
-  const here = inspectRepo(cwd, config);
+  const envSlug = resolveEnvGhRepoSlug(env);
+  if (envSlug) return envSlug;
+  const here = inspectRepo(cwd, config, env);
   return here && here.slug !== "?" ? here.slug : null;
 }
 
@@ -297,17 +188,19 @@ export function decideGh(
     readonly depth?: number | undefined;
     readonly seenAliases?: ReadonlySet<string> | undefined;
     readonly procFs?: ProcFsReader | undefined;
+    readonly env?: NodeJS.ProcessEnv | undefined;
   },
 ): GuardVerdict {
   const depth = options?.depth ?? 0;
   const seenAliases = options?.seenAliases ?? new Set<string>();
   const procFs = options?.procFs ?? defaultProcFs;
+  const env = options?.env ?? process.env;
 
   const alias = expandGhAlias(args, cwd, config);
   if (alias !== null) {
-    const aliasName = extractCommandTokens(args)[0]?.word ?? "alias";
+    const aliasName = extractGhCommandTokens(args)[0]?.word ?? "alias";
     if (alias.shell) {
-      const here = inspectRepo(cwd, config);
+      const here = inspectRepo(cwd, config, env);
       const said = [alias.body, ...args].join(" ").replace(/[\\'"]/g, "");
       if ((here && here.inScope) || /\b(merge|api|sync|issue|pr)\b/.test(said)) {
         return {
@@ -326,7 +219,7 @@ export function decideGh(
         verdict: "deny",
         reason: formatMergeRefusal(
           `gh alias \`${aliasName}\`: alias expansion ${seenAliases.has(aliasName) ? "detected a cycle" : `exceeded max depth (${MAX_GH_ALIAS_DEPTH})`}`,
-          inspectRepo(cwd, config),
+          inspectRepo(cwd, config, env),
           config,
         ),
       };
@@ -337,17 +230,45 @@ export function decideGh(
       depth: depth + 1,
       seenAliases: nextSeen,
       procFs,
+      env,
     });
   }
 
-  const tokens = extractCommandTokens(args);
+  const tokens = extractGhCommandTokens(args);
   const words = tokens.map((t) => t.word);
   const queued = isQueueDaemonInAncestry(config.queueRoot, undefined, procFs);
 
+  if (words[0] === "pr" && (words[1] === "create" || words[1] === "new")) {
+    if (queued) return ALLOW_VERDICT;
+    const { slug, repo } = inspectGhCommandTarget(args, cwd, config, env);
+    if (slug && isSlugInScope(slug, config)) {
+      return {
+        verdict: "deny",
+        reason: formatMergeRefusal(`gh pr ${words[1]} on ${slug}`, repo, config),
+      };
+    }
+    return ALLOW_VERDICT;
+  }
+
+  if (words[0] === "pr" && words[1] === "edit") {
+    if (queued) return ALLOW_VERDICT;
+    const { slug, repo, baseBranch } = inspectGhCommandTarget(args, cwd, config, env);
+    if (baseBranch && slug && isSlugInScope(slug, config)) {
+      const bases = repo ? repo.bases() : FALLBACK_BASES;
+      if (bases.includes(baseBranch)) {
+        return {
+          verdict: "deny",
+          reason: formatMergeRefusal(`gh pr edit --base ${baseBranch} on ${slug}`, repo, config),
+        };
+      }
+    }
+    return ALLOW_VERDICT;
+  }
+
   if (words[0] === "pr" && words[1] === "merge") {
     if (queued) return ALLOW_VERDICT;
-    const target = resolvePrMergeTarget(args, cwd, config);
-    const here = inspectRepo(cwd, config);
+    const target = resolvePrMergeTarget(args, cwd, config, env);
+    const here = inspectRepo(cwd, config, env);
     if (target === null) {
       return {
         verdict: "deny",
@@ -369,13 +290,13 @@ export function decideGh(
   if (words[0] === "api") {
     const idx = tokens[0]!.index;
     const normalizedArgs = ["api", ...args.slice(0, idx), ...args.slice(idx + 1)];
-    return decideGhApiCall(normalizedArgs, cwd, config, queued);
+    return decideGhApiCall(normalizedArgs, cwd, config, queued, env);
   }
 
   if (words[0] === "repo" && words[1] === "sync") {
     if (queued) return ALLOW_VERDICT;
     const syncIdx = tokens[1]!.index;
-    const targetSlug = resolveRepoSyncTarget(args, syncIdx, cwd, config);
+    const targetSlug = resolveRepoSyncTarget(args, syncIdx, cwd, config, env);
     if (targetSlug && isSlugInScope(targetSlug, config)) {
       return {
         verdict: "deny",

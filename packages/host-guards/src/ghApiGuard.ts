@@ -2,26 +2,11 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import { resolveEnvGhRepoSlug } from "./ghArgParse.ts";
+import { decideGhGraphqlCall, GH_UNREADABLE_INPUT } from "./ghGraphqlGuard.ts";
 import type { HostGuardsConfig } from "./hostConfig.ts";
 import { ALLOW_VERDICT, type GuardVerdict } from "./pushGuard.ts";
 import { FALLBACK_BASES, formatMergeRefusal, inspectRepo, isSlugInScope } from "./repoScope.ts";
-
-const GRAPHQL_WRITES: ReadonlyArray<string> = [
-  "mergePullRequest",
-  "enablePullRequestAutoMerge",
-  "enqueuePullRequest",
-  "mergeBranch",
-  "updateRef",
-  "updateRefs",
-  "deleteRef",
-  "createCommitOnBranch",
-  "updateRepository",
-  "createRepositoryRuleset",
-  "updateRepositoryRuleset",
-  "deleteRepositoryRuleset",
-  "updateBranchProtectionRule",
-  "deleteBranchProtectionRule",
-];
 
 const API_VALUE_FLAGS = new Set([
   "-X",
@@ -44,14 +29,14 @@ const API_VALUE_FLAGS = new Set([
 ]);
 
 function readRegularInputFile(filePath: string, cwd: string): string {
-  if (filePath === "-") return "__GH_UNREADABLE_INPUT__";
+  if (filePath === "-") return GH_UNREADABLE_INPUT;
   const abs = NodePath.resolve(cwd, filePath);
   try {
     const st = NodeFS.statSync(abs);
-    if (!st.isFile()) return "__GH_UNREADABLE_INPUT__";
+    if (!st.isFile()) return GH_UNREADABLE_INPUT;
     return NodeFS.readFileSync(abs, "utf8");
   } catch {
-    return "__GH_UNREADABLE_INPUT__";
+    return GH_UNREADABLE_INPUT;
   }
 }
 
@@ -116,7 +101,7 @@ function parseApiParts(
   return { endpoint, method, fields, raw, hasInputFlag };
 }
 
-function normalizeApiPath(endpoint: string): string {
+export function normalizeApiPath(endpoint: string): string {
   const stripped = endpoint.trim().replace(/^https?:\/\/[^/]+\/(?:api\/v3\/)?/i, "");
   const noQuery = stripped.replace(/^\/+/, "").split("?", 1)[0] ?? "";
   try {
@@ -137,105 +122,19 @@ function readJsonStringField(raw: string, key: string): string {
   }
 }
 
-function collectDecodedStrings(value: unknown, out: string[]): void {
-  if (typeof value === "string") {
-    out.push(value);
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) collectDecodedStrings(item, out);
-    return;
-  }
-  if (value && typeof value === "object") {
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out.push(k);
-      collectDecodedStrings(v, out);
-    }
-  }
-}
-
-function decodeMaybeJsonField(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith('"')) {
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      const parts: string[] = [];
-      collectDecodedStrings(parsed, parts);
-      return parts.join(" ");
-    } catch {
-      // fall through to raw string
-    }
-  }
-  return raw;
-}
-
 export function decideGhApiCall(
   args: ReadonlyArray<string>,
   cwd: string,
   config: HostGuardsConfig,
   queued: boolean,
+  env: NodeJS.ProcessEnv = process.env,
 ): GuardVerdict {
   const { endpoint, method, fields, raw, hasInputFlag } = parseApiParts(args, cwd);
   const path = normalizeApiPath(endpoint);
-  const here = inspectRepo(cwd, config);
+  const here = inspectRepo(cwd, config, env);
 
   if (path === "graphql") {
-    if (queued) return ALLOW_VERDICT;
-    const hasUnreadableField = Object.values(fields).some((v) => v === "__GH_UNREADABLE_INPUT__");
-    if (raw === "__GH_UNREADABLE_INPUT__" || hasUnreadableField) {
-      return {
-        verdict: "deny",
-        reason: formatMergeRefusal(
-          "gh api graphql with unreadable stdin/FIFO/@file input (cannot verify mutation safety)",
-          here,
-          config,
-        ),
-      };
-    }
-
-    const decodedParts: string[] = [endpoint];
-    for (const [k, v] of Object.entries(fields)) {
-      decodedParts.push(k, decodeMaybeJsonField(v));
-    }
-    if (raw.trim()) {
-      try {
-        const parsed = JSON.parse(raw) as unknown;
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-          return {
-            verdict: "deny",
-            reason: formatMergeRefusal(
-              "gh api graphql --input must be a valid JSON object",
-              here,
-              config,
-            ),
-          };
-        }
-        collectDecodedStrings(parsed, decodedParts);
-      } catch {
-        return {
-          verdict: "deny",
-          reason: formatMergeRefusal(
-            "gh api graphql --input contains invalid JSON (cannot verify mutation safety)",
-            here,
-            config,
-          ),
-        };
-      }
-    }
-
-    const text = decodedParts.join(" ");
-    const matchedMutation = GRAPHQL_WRITES.find((mut) => new RegExp(`\\b${mut}\\b`).test(text));
-    if (matchedMutation || (!text.trim() && hasInputFlag)) {
-      return {
-        verdict: "deny",
-        reason: formatMergeRefusal(
-          `a GraphQL mutation (${matchedMutation ?? "unreadable input"}) that merges or moves a branch`,
-          here,
-          config,
-        ),
-      };
-    }
-    return ALLOW_VERDICT;
+    return decideGhGraphqlCall({ endpoint, fields, raw, hasInputFlag }, here, config, queued);
   }
 
   const repoMatch = /^repos\/([^/]+)\/([^/]+)(?:\/(.*))?$/.exec(path);
@@ -244,25 +143,28 @@ export function decideGhApiCall(
   let owner = repoMatch[1]!.toLowerCase();
   let name = repoMatch[2]!.toLowerCase();
   const rest = (repoMatch[3] ?? "").replace(/\/+$/, "");
+  const envSlug = resolveEnvGhRepoSlug(env);
+  const envParts = envSlug ? envSlug.split("/") : null;
   const hereSlug = here && here.inScope ? here.slug.split("/") : null;
+  const fallbackSlug = envParts ?? hereSlug;
 
   if (owner === "{owner}" || owner === ":owner") {
-    if (!hereSlug?.[0]) {
+    if (!fallbackSlug?.[0]) {
       return {
         verdict: "deny",
         reason: formatMergeRefusal(`gh api ${method} ${path} (unresolved {owner})`, here, config),
       };
     }
-    owner = hereSlug[0];
+    owner = fallbackSlug[0];
   }
   if (name === "{repo}" || name === ":repo") {
-    if (!hereSlug?.[1]) {
+    if (!fallbackSlug?.[1]) {
       return {
         verdict: "deny",
         reason: formatMergeRefusal(`gh api ${method} ${path} (unresolved {repo})`, here, config),
       };
     }
-    name = hereSlug[1];
+    name = fallbackSlug[1];
   }
 
   if (!isSlugInScope(owner, config, name)) return ALLOW_VERDICT;
@@ -270,6 +172,17 @@ export function decideGhApiCall(
 
   const target = hereSlug && hereSlug[0] === owner && hereSlug[1] === name ? here : null;
   const bases = target ? target.bases() : FALLBACK_BASES;
+
+  if (method === "POST" && rest === "pulls") {
+    return {
+      verdict: "deny",
+      reason: formatMergeRefusal(
+        `gh api ${method} ${path} (creating a pull request)`,
+        target,
+        config,
+      ),
+    };
+  }
 
   if (
     /^pulls\/\d+\/merge$/.test(rest) ||
@@ -284,19 +197,48 @@ export function decideGhApiCall(
     };
   }
 
+  const hasTemplatePlaceholder = (value: string): boolean =>
+    value.includes("{") || value.includes("}");
+
   const refMatch =
     /^git\/refs\/heads\/(.+)$/.exec(rest) ??
     /^branches\/([^/]+)\/(?:protection(?:\/.*)?|rename)$/.exec(rest);
-  if (refMatch?.[1] && bases.includes(refMatch[1])) {
+  if (refMatch?.[1] && (bases.includes(refMatch[1]) || hasTemplatePlaceholder(refMatch[1]))) {
     return {
       verdict: "deny",
       reason: formatMergeRefusal(`gh api ${method} ${path} (the base branch)`, target, config),
     };
   }
 
+  if (method === "PATCH" && /^pulls\/\d+$/.test(rest)) {
+    if (raw === GH_UNREADABLE_INPUT || fields.base === GH_UNREADABLE_INPUT) {
+      return {
+        verdict: "deny",
+        reason: formatMergeRefusal(
+          `gh api ${method} ${path} with unreadable input (cannot verify PR base)`,
+          target,
+          config,
+        ),
+      };
+    }
+    const base = (fields.base || readJsonStringField(raw, "base"))
+      .trim()
+      .replace(/^refs\/heads\//, "");
+    if (base && (bases.includes(base) || hasTemplatePlaceholder(base))) {
+      return {
+        verdict: "deny",
+        reason: formatMergeRefusal(
+          `gh api ${method} ${path} (retargeting PR base to ${base})`,
+          target,
+          config,
+        ),
+      };
+    }
+  }
+
   if (rest.startsWith("contents/") && (method === "PUT" || method === "DELETE")) {
     const branch = fields.branch || readJsonStringField(raw, "branch");
-    if (!branch || bases.includes(branch)) {
+    if (!branch || bases.includes(branch) || hasTemplatePlaceholder(branch)) {
       return {
         verdict: "deny",
         reason: formatMergeRefusal(

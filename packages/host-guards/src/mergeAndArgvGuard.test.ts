@@ -259,6 +259,507 @@ describe("mergeGuard and ghApiGuard", () => {
     expect(isManualMergeDrill(["./scripts/merge-pr.sh", "12"], repoDir, config)).toBe(true);
     expect(isManualMergeDrill(["echo", "hello"], repoDir, config)).toBe(false);
   });
+
+  it("enforces queue-only gh pr create and base-retargeting while allowing gh issue close", () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "hg-pr-create-"));
+    tempDirs.push(root);
+    const { config, repoDir } = setupMergeFixture(root);
+
+    // Direct gh pr create refused in in-scope repo (cwd or -R), allowed out-of-scope
+    expect(
+      decideGh(["pr", "create", "--title", "Feat", "--body", "Details"], repoDir, config).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        ["pr", "create", "-R", "example-org/demo-app", "-t", "Feat", "-b", "Details"],
+        root,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        ["pr", "create", "-R", "other-org/other-repo", "-t", "Feat", "-b", "x"],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("allow");
+
+    // gh pr edit retargeting to base branch refused; retargeting to feature branch or editing body allowed
+    expect(decideGh(["pr", "edit", "12", "-B", "main"], repoDir, config).verdict).toBe("deny");
+    expect(decideGh(["pr", "edit", "12", "--base=main"], repoDir, config).verdict).toBe("deny");
+    expect(decideGh(["pr", "edit", "12", "-Brefs/heads/main"], repoDir, config).verdict).toBe(
+      "deny",
+    );
+    expect(
+      decideGh(
+        ["pr", "edit", "https://github.com/example-org/demo-app/pull/12", "--base", "main"],
+        root,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(decideGh(["pr", "edit", "12", "--base", "feat/parent"], repoDir, config).verdict).toBe(
+      "allow",
+    );
+    expect(
+      decideGh(
+        ["pr", "edit", "12", "--title", "Updated", "--body", "Better notes"],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("allow");
+    expect(
+      decideGh(
+        ["pr", "edit", "12", "-R", "other-org/other-repo", "--base", "main"],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("allow");
+
+    // REST PATCH repos/{owner}/{repo}/pulls/{n} modifying base to a base branch refused
+    expect(
+      decideGh(
+        ["api", "-X", "PATCH", "repos/example-org/demo-app/pulls/12", "-f", "base=main"],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        ["api", "-X", "PATCH", "repos/{owner}/{repo}/pulls/12", "-f", "base=refs/heads/main"],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    const patchBaseJson = NodePath.join(root, "patch-base.json");
+    NodeFS.writeFileSync(patchBaseJson, JSON.stringify({ base: "main", title: "x" }), "utf8");
+    expect(
+      decideGh(
+        ["api", "-X", "PATCH", "repos/example-org/demo-app/pulls/12", "--input", patchBaseJson],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        ["api", "-X", "PATCH", "repos/example-org/demo-app/pulls/12", "--input", "-"],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    // REST PATCH modifying only body or non-base branch allowed
+    expect(
+      decideGh(
+        ["api", "-X", "PATCH", "repos/example-org/demo-app/pulls/12", "-f", "base=feat/parent"],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("allow");
+    expect(
+      decideGh(
+        ["api", "-X", "PATCH", "repos/example-org/demo-app/pulls/12", "-f", "body=Updated body"],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("allow");
+
+    // GraphQL updatePullRequest modifying baseRefName to a base branch refused (inline, variable, JSON input)
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          'query=mutation { updatePullRequest(input:{pullRequestId:"1", baseRefName:"main"}) { clientMutationId } }',
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          'query=mutation($b: String!) { updatePullRequest(input:{pullRequestId:"1", baseRefName:$b}) { clientMutationId } }',
+          "-f",
+          "b=main",
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    const gqlVarJson = NodePath.join(root, "gql-retarget.json");
+    NodeFS.writeFileSync(
+      gqlVarJson,
+      JSON.stringify({
+        query:
+          "mutation($input: UpdatePullRequestInput!) { updatePullRequest(input: $input) { clientMutationId } }",
+        variables: { input: { pullRequestId: "1", baseRefName: "main" } },
+      }),
+      "utf8",
+    );
+    expect(decideGh(["api", "graphql", "--input", gqlVarJson], repoDir, config).verdict).toBe(
+      "deny",
+    );
+    // GraphQL updatePullRequest targeting a non-base branch or editing body/title allowed
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          'query=mutation { updatePullRequest(input:{pullRequestId:"1", baseRefName:"feat/parent"}) { clientMutationId } }',
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("allow");
+    // B4 regressions: G1 (nested x[b] + variable default), G2 (comma before colon + safe alias),
+    // G3 (comment before colon + unused zz[baseRefName]), G11 (comment before colon + safe alias)
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          'query=mutation($b:String="main"){updatePullRequest(input:{pullRequestId:"1",baseRefName:$b}){clientMutationId}}',
+          "-f",
+          "x[b]=feature",
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          'query=mutation{a:updatePullRequest(input:{pullRequestId:"1",baseRefName:"feature"}){clientMutationId} b:updatePullRequest(input:{pullRequestId:"1",baseRefName,:"main"}){clientMutationId}}',
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          'query=mutation{updatePullRequest(input:{pullRequestId:"1",baseRefName#c\n:"main"}){clientMutationId}}',
+          "-f",
+          "zz[baseRefName]=feature",
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          'query=mutation{a:updatePullRequest(input:{pullRequestId:"1",baseRefName:"feature"}){clientMutationId} b:updatePullRequest(input:{pullRequestId:"1",baseRefName#c\n:"main"}){clientMutationId}}',
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    // {branch} placeholder bypass regressions (GraphQL -F variable, GraphQL nested input, REST PATCH pull base, REST git/refs)
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          'query=mutation($b:String!){updatePullRequest(input:{pullRequestId:"1",baseRefName:$b}){clientMutationId}}',
+          "-F",
+          "b={branch}",
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          "query=mutation($in:UpdatePullRequestInput!){updatePullRequest(input:$in){clientMutationId}}",
+          "-F",
+          "in[pullRequestId]=1",
+          "-F",
+          "in[baseRefName]={branch}",
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        ["api", "-X", "PATCH", "repos/example-org/demo-app/pulls/12", "-F", "base={branch}"],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        ["api", "-X", "PATCH", "repos/{owner}/{repo}/git/refs/heads/{branch}", "-f", "sha=abc"],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    // Safe response selection of baseRefName without setting input.baseRefName is allowed
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          'query=mutation{updatePullRequest(input:{pullRequestId:"1",title:"hi"}){pullRequest{baseRefName}}}',
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("allow");
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          'query=mutation { updatePullRequest(input:{pullRequestId:"1", title:"New title"}) { clientMutationId } }',
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("allow");
+
+    // Explicitly do NOT block gh issue close or REST issue state closing
+    expect(decideGh(["issue", "close", "42"], repoDir, config).verdict).toBe("allow");
+    expect(
+      decideGh(
+        ["issue", "close", "-R", "example-org/demo-app", "42", "-r", "completed"],
+        root,
+        config,
+      ).verdict,
+    ).toBe("allow");
+    expect(
+      decideGh(
+        ["api", "-X", "PATCH", "repos/example-org/demo-app/issues/42", "-f", "state=closed"],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("allow");
+  });
+
+  it("blocks B1-B7 bypasses: pr new, REST POST pulls, GraphQL createPullRequest/escapes/nested fields, and GH_REPO fallback", () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "hg-b1-b7-"));
+    tempDirs.push(root);
+    const { config, repoDir } = setupMergeFixture(root);
+
+    // B1: gh pr new treated identically to gh pr create
+    expect(
+      decideGh(["pr", "new", "--title", "Feat", "--body", "Details"], repoDir, config).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(["pr", "new", "-R", "example-org/demo-app", "-t", "Feat"], root, config).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(["pr", "new", "-R", "other-org/other-repo", "-t", "Feat"], repoDir, config).verdict,
+    ).toBe("allow");
+
+    // B2: REST POST repos/<in-scope>/pulls denied when !queued, allowed out-of-scope
+    expect(
+      decideGh(
+        [
+          "api",
+          "-X",
+          "POST",
+          "repos/example-org/demo-app/pulls",
+          "-f",
+          "title=Direct",
+          "-f",
+          "head=feat/x",
+          "-f",
+          "base=main",
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        ["api", "repos/example-org/demo-app/pulls", "-f", "title=ImplicitPost"],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        ["api", "-X", "POST", "repos/other-org/other-repo/pulls", "-f", "title=Ok"],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("allow");
+
+    // B3: GraphQL createPullRequest denied (inline and unicode-escaped JSON input)
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          'query=mutation { createPullRequest(input:{repositoryId:"R1",baseRefName:"main",headRefName:"feat",title:"x"}) { pullRequest { id } } }',
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    const createPrJson = NodePath.join(root, "gql-create-pr.json");
+    NodeFS.writeFileSync(
+      createPrJson,
+      '{"query":"mutation { \\u0063reatePullRequest(input:{repositoryId:\\"R1\\"}) { clientMutationId } }"}',
+      "utf8",
+    );
+    expect(decideGh(["api", "graphql", "--input", createPrJson], repoDir, config).verdict).toBe(
+      "deny",
+    );
+
+    // B4-B5: Fail-closed GraphQL updatePullRequest touching baseRefName
+    // Nested field syntax (-F / -f input[baseRefName]=...)
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          "query=mutation($input: UpdatePullRequestInput!) { updatePullRequest(input: $input) { clientMutationId } }",
+          "-F",
+          "input[baseRefName]=main",
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          "query=mutation($input: UpdatePullRequestInput!) { updatePullRequest(input: $input) { clientMutationId } }",
+          "-f",
+          "input[baseRefName]=main",
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          "query=mutation($input: UpdatePullRequestInput!) { updatePullRequest(input: $input) { clientMutationId } }",
+          "-f",
+          "input[baseRefName]=feat/parent",
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("allow");
+    // GraphQL unicode escape inside string literal
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          'query=mutation { updatePullRequest(input:{pullRequestId:"1", baseRefName:"\\u006dain"}) { clientMutationId } }',
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    // GraphQL block string
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          'query=mutation { updatePullRequest(input:{pullRequestId:"1", baseRefName:"""main"""}) { clientMutationId } }',
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    // Unresolved variable & unreadable @-
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          'query=mutation($b: String!) { updatePullRequest(input:{pullRequestId:"1", baseRefName:$b}) { clientMutationId } }',
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        [
+          "api",
+          "graphql",
+          "-f",
+          "query=mutation($input: UpdatePullRequestInput!) { updatePullRequest(input: $input) { clientMutationId } }",
+          "-F",
+          "input[baseRefName]=@-",
+        ],
+        repoDir,
+        config,
+      ).verdict,
+    ).toBe("deny");
+
+    // B6-B7: GH_REPO env fallback from out-of-scope cwd (and explicit -R precedence)
+    const ghRepoEnv = { GH_REPO: "example-org/demo-app" };
+    expect(
+      decideGh(["pr", "create", "-t", "From env", "-b", "Body"], root, config, { env: ghRepoEnv })
+        .verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(["pr", "new", "-t", "From env", "-b", "Body"], root, config, { env: ghRepoEnv })
+        .verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(["pr", "edit", "3", "-B", "main"], root, config, { env: ghRepoEnv }).verdict,
+    ).toBe("deny");
+    expect(
+      decideGh(
+        ["api", "-X", "POST", "repos/{owner}/{repo}/pulls", "-f", "title=EnvPull"],
+        root,
+        config,
+        { env: ghRepoEnv },
+      ).verdict,
+    ).toBe("deny");
+    // Explicit -R takes precedence over GH_REPO
+    expect(
+      decideGh(
+        ["pr", "create", "-R", "other-org/other-repo", "-t", "Other", "-b", "Body"],
+        root,
+        config,
+        { env: ghRepoEnv },
+      ).verdict,
+    ).toBe("allow");
+  });
 });
 
 describe("argvGuard command-line secret detection and redaction", () => {
