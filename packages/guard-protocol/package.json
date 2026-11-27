@@ -1,8 +1,23 @@
 {
   "name": "@t3tools/guard-protocol",
   "private": true,
+  "bin": {
+    "marscode-guard": "./src/cli.ts"
+  },
   "type": "module",
   "exports": {
+    "./bundle-inspect": {
+      "types": "./src/bundleInspect.ts",
+      "import": "./src/bundleInspect.ts"
+    },
+    "./cli": {
+      "types": "./src/cli.ts",
+      "import": "./src/cli.ts"
+    },
+    "./client": {
+      "types": "./src/client.ts",
+      "import": "./src/client.ts"
+    },
     "./digests": {
       "types": "./src/digests.ts",
       "import": "./src/digests.ts"
