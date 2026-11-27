@@ -198,6 +198,14 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
      by the composer, its context strip and attached banners. */
   --shadow-composer: 0 1px 2px rgb(0 0 0 / 5%);
   --shadow-composer-dark: 0 14px 32px -18px rgb(0 0 0 / 75%);
+  /* Floating action pill elevation: a separating canvas halo plus a crisp drop
+     shadow so the control reads clearly over dense or highlighted text. */
+  --shadow-floating-action:
+    0 0 0 2px color-mix(in srgb, var(--background) 88%, transparent),
+    0 8px 20px -6px rgb(0 0 0 / 35%);
+  --shadow-floating-action-dark:
+    0 0 0 2px color-mix(in srgb, var(--background) 92%, transparent),
+    0 10px 24px -6px rgb(0 0 0 / 75%);
   /* Overlap the lower toolbar backdrop by one pixel to cover the composer seam. */
   --spacing-composer-seam: calc(var(--spacing) * 4 - 1px);
   /* Dark-mode shade where an attached surface meets the composer: 10px of
@@ -235,6 +243,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --animate-step-in: step-in 180ms ease-out;
   --animate-step-ping: step-ping 520ms ease-out;
   --animate-check-draw: check-draw 200ms ease-out;
+  /* One-off entrance for floating text-selection actions; never loops. */
+  --animate-selection-action-pop: selection-action-pop 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-selection-action-halo: selection-action-halo 460ms ease-out both;
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
   --color-warning-surface: var(--warning-surface);
@@ -368,6 +379,33 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   @keyframes check-draw {
     from {
       stroke-dashoffset: 12;
+    }
+  }
+  @keyframes selection-action-pop {
+    0% {
+      opacity: 0;
+      translate: 0 6px;
+      scale: 0.86;
+    }
+    65% {
+      opacity: 1;
+      translate: 0 -1.5px;
+      scale: 1.04;
+    }
+    100% {
+      opacity: 1;
+      translate: 0 0;
+      scale: 1;
+    }
+  }
+  @keyframes selection-action-halo {
+    0% {
+      opacity: 0.8;
+      box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 70%, transparent);
+    }
+    100% {
+      opacity: 0;
+      box-shadow: 0 0 0 8px color-mix(in oklab, var(--primary) 70%, transparent);
     }
   }
   @keyframes status-ping {

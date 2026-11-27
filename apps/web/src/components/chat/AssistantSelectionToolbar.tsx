@@ -34,25 +34,31 @@ export function AssistantSelectionToolbar({
     citation: AssistantCitation;
     position: SelectionActionPoint;
     sourceAnchor: AssistantCitationSourceAnchor;
+    animate: boolean;
   } | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLButtonElement>(null);
   const actionsRef = useRef<ReturnType<typeof observeSelectionActions> | null>(null);
+  const lastAnimatedKeyRef = useRef<string | null>(null);
   const backgroundThread = use(BackgroundThreadContext);
   const gt = useGT();
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- measures the toolbar DOM node and clamps its position inside the window before paint
   useLayoutEffect(() => {
-    const toolbar = toolbarRef.current;
-    if (!toolbar || !selection) return;
-    const rect = toolbar.getBoundingClientRect();
-    toolbar.style.left = `${Math.max(8, Math.min(selection.position.x, window.innerWidth - rect.width - 8))}px`;
-    toolbar.style.top = `${Math.max(8, Math.min(selection.position.y, window.innerHeight - rect.height - 8))}px`;
+    const container = containerRef.current;
+    if (!container || !selection) return;
+    const rect = container.getBoundingClientRect();
+    container.style.left = `${Math.max(8, Math.min(selection.position.x, window.innerWidth - rect.width - 8))}px`;
+    container.style.top = `${Math.max(8, Math.min(selection.position.y, window.innerHeight - rect.height - 8))}px`;
   }, [selection]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to document selectionchange and keydown to track text selections in the viewport
   useEffect(() => {
     if (!viewport) return;
-    const clear = () => setSelection(null);
+    const clear = (resetAnimation = true) => {
+      if (resetAnimation) lastAnimatedKeyRef.current = null;
+      setSelection(null);
+    };
     const update = (pointer: SelectionActionPoint | null) => {
       const nativeSelection = window.getSelection();
       const captured = captureAssistantTextSelection(viewport, nativeSelection);
@@ -64,7 +70,7 @@ export function AssistantSelectionToolbar({
       const rect = captured.range.getBoundingClientRect();
       const viewportRect = viewport.getBoundingClientRect();
       if (!isSelectionRectVisible(rect, [viewportRect])) {
-        clear();
+        clear(false);
         return;
       }
       // A selection can cross blocks with different clipping ancestors.
@@ -110,7 +116,7 @@ export function AssistantSelectionToolbar({
         visible = lines.some((line) => isSelectionRectVisible(line, clips));
       }
       if (!visible) {
-        clear();
+        clear(false);
         return;
       }
       const rects = captured.range.getClientRects();
@@ -123,6 +129,9 @@ export function AssistantSelectionToolbar({
             pointer.y >= line.top - 8 &&
             pointer.y <= line.bottom + 8,
         );
+      const citationKey = `${threadRef.environmentId}:${threadRef.threadId}:${messageId}:${captured.selector.start}:${captured.selector.end}:${captured.selector.text}`;
+      const animate = lastAnimatedKeyRef.current !== citationKey;
+      lastAnimatedKeyRef.current = citationKey;
       setSelection({
         sourceAnchor: { source: captured.source, range: captured.range, viewport },
         citation: {
@@ -137,6 +146,7 @@ export function AssistantSelectionToolbar({
           pointer: pointerOnText ? pointer : null,
           viewport: { width: window.innerWidth, height: window.innerHeight },
         }),
+        animate,
       });
     };
     const actions = observeSelectionActions({
@@ -145,7 +155,7 @@ export function AssistantSelectionToolbar({
       restoreAfterScroll: true,
       immediateMultiClick: true,
       onSelection: update,
-      onDismiss: clear,
+      onDismiss: (reason) => clear(reason === "interaction"),
     });
     actionsRef.current = actions;
     const focusActions = (event: KeyboardEvent) => {
@@ -176,6 +186,7 @@ export function AssistantSelectionToolbar({
       document.removeEventListener("selectionchange", actions.selectionChanged);
       actions.dispose();
       actionsRef.current = null;
+      lastAnimatedKeyRef.current = null;
     };
   }, [backgroundThread, threadRef, viewport]);
 
@@ -183,6 +194,7 @@ export function AssistantSelectionToolbar({
   const tooLong = selection.citation.text.length > ASSISTANT_CITATION_MAX_TEXT_LENGTH;
   const dismiss = () => {
     actionsRef.current?.cancel();
+    lastAnimatedKeyRef.current = null;
     setSelection(null);
   };
   const cite = () => {
@@ -192,30 +204,52 @@ export function AssistantSelectionToolbar({
     return true;
   };
   return createPortal(
-    <Button
-      ref={toolbarRef}
-      type="button"
-      size="xs"
-      variant="glass"
-      disabled={tooLong}
-      aria-label={tooLong ? gt("Selection is too long to cite") : gt("Cite selection in composer")}
+    <div
+      ref={containerRef}
+      data-slot="assistant-selection-toolbar"
       className="fixed z-50 max-w-[calc(100vw-1rem)]"
       style={{ left: selection.position.x, top: selection.position.y }}
-      onPointerDown={(event) => event.preventDefault()}
-      onClick={cite}
-      onKeyDown={(event) => {
-        event.stopPropagation();
-        if (event.key === "Escape" && !event.nativeEvent.isComposing) {
-          event.preventDefault();
-          dismiss();
-        }
-      }}
     >
-      <QuoteIcon aria-hidden="true" className="size-3.5" />
-      {tooLong
-        ? gt("Shorten selection")
-        : gt("Cite", { $context: "verb, button that quotes the selected text" })}
-    </Button>,
+      <div
+        className={
+          selection.animate
+            ? "relative flex motion-safe:animate-selection-action-pop"
+            : "relative flex"
+        }
+      >
+        {selection.animate && !tooLong ? (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 rounded-full motion-safe:animate-selection-action-halo motion-reduce:hidden"
+          />
+        ) : null}
+        <Button
+          ref={toolbarRef}
+          type="button"
+          size="sm-pill"
+          variant="floating-primary"
+          disabled={tooLong}
+          aria-label={
+            tooLong ? gt("Selection is too long to cite") : gt("Cite selection in composer")
+          }
+          className="max-w-full"
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={cite}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === "Escape" && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              dismiss();
+            }
+          }}
+        >
+          <QuoteIcon aria-hidden="true" className="size-3.5" />
+          {tooLong
+            ? gt("Shorten selection")
+            : gt("Cite", { $context: "verb, button that quotes the selected text" })}
+        </Button>
+      </div>
+    </div>,
     document.body,
   );
 }

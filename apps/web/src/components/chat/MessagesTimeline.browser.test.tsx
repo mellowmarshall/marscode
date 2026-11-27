@@ -1300,6 +1300,7 @@ const CITATION_REQUEST = {
 describe("MessagesTimeline citations", () => {
   it("offers Cite for text an agent sent with send_to_user", async () => {
     const text = "The draft the next question refers to";
+    const onCiteAssistantText = vi.fn(() => true);
     await using screen = await renderTimeline(
       [
         {
@@ -1310,13 +1311,43 @@ describe("MessagesTimeline citations", () => {
           text,
         },
       ],
-      { onCiteAssistantText: () => true },
+      { onCiteAssistantText },
     );
-    await expect.element(screen.getByText(text)).toHaveStyle({ pointerEvents: "auto" });
-    await userEvent.tripleClick(screen.getByText(text));
-    await expect
-      .element(page.getByRole("button", { name: "Cite selection in composer" }))
-      .toBeVisible();
+    const messageEl = screen.getByText(text);
+    await expect.element(messageEl).toHaveStyle({ pointerEvents: "auto" });
+    await userEvent.tripleClick(messageEl);
+    const citeButton = page.getByRole("button", { name: "Cite selection in composer" });
+    await expect.element(citeButton).toBeVisible();
+
+    const buttonEl = citeButton.element() as HTMLButtonElement;
+    const messageStyle = getComputedStyle(messageEl.element());
+    const buttonStyle = getComputedStyle(buttonEl);
+    expect(buttonStyle.backgroundColor).not.toBe(getComputedStyle(document.body).backgroundColor);
+    expect(buttonStyle.backgroundColor).not.toMatch(/^rgba\(/);
+    expect(buttonStyle.color).not.toBe(messageStyle.color);
+    expect(buttonEl.parentElement?.className).toContain("motion-safe:animate-selection-action-pop");
+
+    const containerEl = buttonEl.closest<HTMLElement>('[data-slot="assistant-selection-toolbar"]');
+    expect(containerEl).not.toBeNull();
+
+    // Restoring the same selection after a scroll must not replay the entrance animation.
+    const viewportEl = screen.container.querySelector<HTMLElement>(
+      "[data-assistant-citation-viewport]",
+    );
+    expect(viewportEl).not.toBeNull();
+    viewportEl!.dispatchEvent(new Event("scroll"));
+    await expect.element(citeButton).not.toBeInTheDocument();
+    await expect.element(citeButton).toBeVisible();
+    expect((citeButton.element() as HTMLButtonElement).parentElement?.className).not.toContain(
+      "motion-safe:animate-selection-action-pop",
+    );
+
+    await userEvent.keyboard("{Tab}");
+    expect(document.activeElement).toBe(citeButton.element());
+
+    await userEvent.click(citeButton);
+    expect(onCiteAssistantText).toHaveBeenCalledTimes(1);
+    await expect.element(citeButton).not.toBeInTheDocument();
   });
 
   it("lands a citation present at mount under StrictMode", async () => {
