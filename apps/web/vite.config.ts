@@ -201,7 +201,7 @@ const readmeMediaProject = {
         launchOptions: process.env.T3CODE_README_MEDIA_BROWSER
           ? { executablePath: process.env.T3CODE_README_MEDIA_BROWSER }
           : {},
-        contextOptions: { deviceScaleFactor: 2 },
+        contextOptions: { deviceScaleFactor: 2, timezoneId: "UTC" },
       }),
       instances: [{ browser: "chromium", viewport: { width: 1200, height: 1600 } }],
       commands: {
