@@ -500,13 +500,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "devtools-fleet-devdeck",
   },
   {
-    id: "devtools-devdeck-endpoint",
-    title: msg("DevDeck endpoint override"),
-    to: "/settings/devtools",
-    searchTerms: [msg("devdeck unix socket host port override")],
-    targetId: "devtools-fleet-devdeck",
-  },
-  {
     id: "panel-animations",
     title: msg("Panel animations"),
     to: "/settings/appearance",

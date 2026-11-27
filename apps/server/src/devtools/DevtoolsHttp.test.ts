@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Tests exercise local Unix sockets and the real Python host-guards client.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
-import * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
 import * as NodePath from "node:path";
 
@@ -35,8 +34,9 @@ import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as KnownWorkspaces from "../workspace/KnownWorkspaces.ts";
 import * as CliRunners from "./CliRunners.ts";
-import * as DevdeckProxy from "./DevdeckProxy.ts";
 import * as DevtoolsHttp from "./DevtoolsHttp.ts";
+import { isAllowedFleetPath } from "./fleet/FleetRoutePolicy.ts";
+import { NativeFleetService } from "./fleet/NativeFleetService.ts";
 import * as JobRegistry from "./jobs/JobRegistry.ts";
 import { GuardGrantBroker, redactArgvCommand, type GuardBrokerEvent } from "./GuardGrantBroker.ts";
 import { makeTrustedProviderRegistry, readProcStartTime } from "./TrustedProviderRegistry.ts";
@@ -1013,19 +1013,17 @@ for line in sys.stdin:
   );
 });
 
-describe("DevdeckProxy & CliRunners validation", () => {
+describe("FleetRoutePolicy & CliRunners validation", () => {
   it("enforces path allowlist, %2F server IDs, no restart, no traversal, and CLI argument safety", () => {
-    expect(DevdeckProxy.isAllowedDevdeckPath("GET", "/api/events?panels=servers,nodes,hosts")).toBe(
-      true,
-    );
-    expect(DevdeckProxy.isAllowedDevdeckPath("POST", "/api/servers/proj%2Fsvc/start")).toBe(true);
-    expect(DevdeckProxy.isAllowedDevdeckPath("POST", "/api/servers/proj/svc/stop")).toBe(true);
-    expect(DevdeckProxy.isAllowedDevdeckPath("POST", "/api/servers/proj/svc/restart")).toBe(false);
-    expect(DevdeckProxy.isAllowedDevdeckPath("POST", "/api/servers/../evil/start")).toBe(false);
-    expect(DevdeckProxy.isAllowedDevdeckPath("POST", "/api/servers/%2e%2e/svc/start")).toBe(false);
-    expect(DevdeckProxy.isAllowedDevdeckPath("GET", "/api/events?evil=1")).toBe(false);
-    expect(DevdeckProxy.isAllowedDevdeckPath("GET", "/api/events?toString=1")).toBe(false);
-    expect(DevdeckProxy.isAllowedDevdeckPath("GET", "/api/events?constructor=1")).toBe(false);
+    expect(isAllowedFleetPath("GET", "/api/events?panels=servers,nodes,hosts")).toBe(true);
+    expect(isAllowedFleetPath("POST", "/api/servers/proj%2Fsvc/start")).toBe(true);
+    expect(isAllowedFleetPath("POST", "/api/servers/proj/svc/stop")).toBe(true);
+    expect(isAllowedFleetPath("POST", "/api/servers/proj/svc/restart")).toBe(false);
+    expect(isAllowedFleetPath("POST", "/api/servers/../evil/start")).toBe(false);
+    expect(isAllowedFleetPath("POST", "/api/servers/%2e%2e/svc/start")).toBe(false);
+    expect(isAllowedFleetPath("GET", "/api/events?evil=1")).toBe(false);
+    expect(isAllowedFleetPath("GET", "/api/events?toString=1")).toBe(false);
+    expect(isAllowedFleetPath("GET", "/api/events?constructor=1")).toBe(false);
 
     expect(CliRunners.validatePlaybookRequest({ mode: "check", contracts: ["fleet"] }).ok).toBe(
       true,
@@ -1044,45 +1042,21 @@ describe("DevdeckProxy & CliRunners validation", () => {
 
 describe("DevtoolsHttp routes", () => {
   it.effect(
-    "enforces auth scopes, chunked body cap, workspace allowlist, DevDeck oversized 502, and SSE teardown",
+    "enforces auth scopes, chunked body cap, workspace allowlist, native fleet routes, and SSE teardown",
     () =>
       Effect.gen(function* () {
         const dir = mkTempDir("t3-devtools-http-");
         const guardSock = NodePath.join(dir, "t3-guard-grant.sock");
-        const devdeckSock = NodePath.join(dir, "devdeck.sock");
-
-        const fakeDevdeck = NodeHttp.createServer((req, res) => {
-          if (req.url === "/api/snapshot") {
-            res.writeHead(200, {
-              "content-type": "application/json",
-              "x-devdeck-passive": "1",
-            });
-            res.end(
-              req.method === "HEAD"
-                ? undefined
-                : JSON.stringify({ ok: true, source: "fake-devdeck" }),
-            );
-            return;
-          }
-          if (req.url === "/api/servers") {
-            res.writeHead(200, { "content-type": "application/json" });
-            res.end("x".repeat(4 * 1024 * 1024 + 128));
-            return;
-          }
-          if (req.url === "/api/actions/act_123") {
-            res.writeHead(200, { "content-type": "application/json" });
-            res.end(JSON.stringify({ id: "act_123", state: "ok" }));
-            return;
-          }
-          res.writeHead(404);
-          res.end("nope");
+        const nativeFleet = new NativeFleetService({
+          hostname: "fleet-test-host",
+          platform: "linux",
+          stateDir: dir,
+          manifestPath: NodePath.join(dir, "missing-ci-hosts.json"),
+          githubAuditPath: NodePath.join(dir, "missing-audit.json"),
+          enableBackgroundPolling: false,
+          writeNodesFile: false,
         });
-        yield* Effect.promise(
-          () => new Promise<void>((resolve) => fakeDevdeck.listen(devdeckSock, resolve)),
-        );
-        yield* Effect.addFinalizer(() =>
-          Effect.promise(() => new Promise<void>((resolve) => fakeDevdeck.close(() => resolve()))),
-        );
+        yield* Effect.addFinalizer(() => Effect.sync(() => nativeFleet.close()));
 
         const broker = new GuardGrantBroker({ socketPath: guardSock });
         yield* Effect.promise(() => broker.start("linux"));
@@ -1090,10 +1064,13 @@ describe("DevtoolsHttp routes", () => {
         const registry = JobRegistry.makeJobRegistry({ enableShipBridge: false });
         yield* Effect.addFinalizer(() => Effect.promise(() => registry.dispose()));
 
-        const handler = DevtoolsHttp.makeHandler(broker, registry, {
-          kind: "unix",
-          socketPath: devdeckSock,
-        });
+        const handler = DevtoolsHttp.makeHandler(
+          broker,
+          registry,
+          undefined,
+          undefined,
+          nativeFleet,
+        );
 
         // Maintenance-only scope cannot preapprove overrides or run playbook code
         const maintainPreapprove = yield* runHandler(handler, {
@@ -1523,10 +1500,13 @@ describe("DevtoolsHttp routes", () => {
             cwd: macDir,
           });
           expect(macPre.ok).toBe(false);
-          const macHandler = DevtoolsHttp.makeHandler(macBroker, registry, {
-            kind: "unix",
-            socketPath: devdeckSock,
-          });
+          const macHandler = DevtoolsHttp.makeHandler(
+            macBroker,
+            registry,
+            undefined,
+            undefined,
+            nativeFleet,
+          );
           const macHttpPre = yield* runHandler(macHandler, {
             method: "POST",
             url: "/api/devtools/guards/preapprove",
@@ -1660,19 +1640,15 @@ describe("DevtoolsHttp routes", () => {
         expect((caps.json as { guardBrokerListening: boolean }).guardBrokerListening).toBe(true);
         expect("guardSocketPath" in (caps.json as Record<string, unknown>)).toBe(false);
 
-        // DevDeck proxy succeeds on allowed route and returns 502 on >4MB response
+        // Native fleet serves allowed routes; the GitHub audit file is missing, so alerts stay silent.
         const snap = yield* runHandler(handler, {
           method: "GET",
-          url: "/api/devtools/devdeck/snapshot",
+          url: "/api/devtools/devdeck/snapshot?panels=alerts",
         });
         expect(snap.status).toBe(200);
-        expect(snap.json).toEqual({ ok: true, source: "fake-devdeck" });
-
-        const oversized = yield* runHandler(handler, {
-          method: "GET",
-          url: "/api/devtools/devdeck/servers",
-        });
-        expect(oversized.status).toBe(502);
+        const snapAlerts = (snap.json as { alerts: { items: ReadonlyArray<{ name: string }> } })
+          .alerts.items;
+        expect(snapAlerts.map((item) => item.name)).toContain("Audit coverage");
 
         const forbidden = yield* runHandler(handler, {
           method: "GET",
@@ -1681,12 +1657,25 @@ describe("DevtoolsHttp routes", () => {
         expect(forbidden.status).toBe(404);
 
         // Operator with only terminal:operate can poll GET /devdeck/actions/:id (not blocked by diagnostics:read)
+        const kick = yield* runHandler(handler, {
+          method: "POST",
+          url: "/api/devtools/devdeck/sessions/proc%3A999999999/close",
+          body: {},
+        });
+        expect(kick.status).toBe(202);
+        const actionId = (kick.json as { action_id: string }).action_id;
         const actionStatus = yield* runHandler(handler, {
           method: "GET",
-          url: "/api/devtools/devdeck/actions/act_123",
+          url: `/api/devtools/devdeck/actions/${actionId}`,
           scopes: [AuthTerminalOperateScope],
         });
         expect(actionStatus.status).toBe(200);
+        const missingAction = yield* runHandler(handler, {
+          method: "GET",
+          url: "/api/devtools/devdeck/actions/act_missing",
+          scopes: [AuthTerminalOperateScope],
+        });
+        expect(missingAction.status).toBe(404);
 
         // SSE /guards/events + live resolve + session invalidation teardown
         const invalidateDeferred = Deferred.makeUnsafe<void>();
@@ -1958,7 +1947,7 @@ describe("DevtoolsHttp routes", () => {
         const broker = new GuardGrantBroker();
         const registry = JobRegistry.makeJobRegistry({ enableShipBridge: false });
         yield* Effect.addFinalizer(() => Effect.promise(() => registry.dispose()));
-        const handler = DevtoolsHttp.makeHandler(broker, registry, undefined, undefined, dir);
+        const handler = DevtoolsHttp.makeHandler(broker, registry, undefined, dir);
 
         const listRes = yield* runHandler(handler, {
           method: "GET",
@@ -2070,46 +2059,29 @@ describe("DevtoolsHttp routes", () => {
         });
         expect(scanBadRepo.status).toBe(400);
 
-        // /devdeck/start requires AuthTerminalOperateScope and rejects MCP / peer callers
-        const startMcp = yield* runHandler(handler, {
+        // The legacy DevDeck daemon start route is retired.
+        const retiredStart = yield* runHandler(handler, {
           method: "POST",
           url: "/api/devtools/devdeck/start",
-          subject: "mcp-agent",
           body: {},
         });
-        expect(startMcp.status).toBe(403);
-
-        const startReadOnly = yield* runHandler(handler, {
-          method: "POST",
-          url: "/api/devtools/devdeck/start",
-          scopes: [AuthOrchestrationReadScope],
-          body: {},
-        });
-        expect(startReadOnly.status).toBe(403);
+        expect(retiredStart.status).toBe(404);
       }),
   );
 
   it("allows POST /api/sessions/<id>/close with ?node=<host> and rejects invalid POST queries", () => {
     expect(
-      DevdeckProxy.isAllowedDevdeckPath(
+      isAllowedFleetPath(
         "POST",
         "/api/sessions/process%3A1180298%3A26379999/close?node=dev-host-x",
       ),
     ).toBe(true);
     expect(
-      DevdeckProxy.isAllowedDevdeckPath(
-        "POST",
-        "/api/sessions/process%3A1180298%3A26379999/close?panels=host",
-      ),
+      isAllowedFleetPath("POST", "/api/sessions/process%3A1180298%3A26379999/close?panels=host"),
     ).toBe(false);
-    expect(DevdeckProxy.isAllowedDevdeckPath("POST", "/api/hosts/check?node=dev-host-x")).toBe(
-      false,
-    );
+    expect(isAllowedFleetPath("POST", "/api/hosts/check?node=dev-host-x")).toBe(false);
     expect(
-      DevdeckProxy.isAllowedDevdeckPath(
-        "POST",
-        "/api/sessions/process%3A1180298%3A26379999/close?node=../etc",
-      ),
+      isAllowedFleetPath("POST", "/api/sessions/process%3A1180298%3A26379999/close?node=../etc"),
     ).toBe(false);
   });
 

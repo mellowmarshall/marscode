@@ -836,24 +836,14 @@ describe("Devtools live browser UI", () => {
     expect(kickedPaths).toEqual([]);
   });
 
-  it("shows DevDeck offline error, Start DevDeck button, and tracked T3 jobs when DevDeck daemon is stopped (both empty and cached host states)", async () => {
-    const startedPaths: string[] = [];
-    fetchSpy.mockImplementation((envId: string, subPath: string, opts?: { method?: string }) => {
-      if (subPath === "/devdeck/start" && opts?.method === "POST") {
-        startedPaths.push(subPath);
-        return Promise.resolve({ ok: true, status: 200, data: { ok: true, reachable: true } });
-      }
-      return defaultMockFetch(envId, subPath, opts);
-    });
-
+  it("shows fleet telemetry offline error and tracked T3 jobs without a legacy Start DevDeck action (both empty and cached host states)", async () => {
     await using screen = await render(
       <TooltipProvider delay={0}>
         <FleetMachinesView
           environmentId={"env-local" as EnvironmentId}
           hosts={[]}
           selectedHost={null}
-          devdeckError="DevDeck daemon is not running on this host"
-          canStartDevdeck
+          devdeckError="Fleet telemetry is offline on this host"
           hostJobs={[
             {
               id: "bg:3333333333333333",
@@ -875,14 +865,11 @@ describe("Devtools live browser UI", () => {
     );
 
     await expect.element(page.getByTestId("fleet-telemetry-offline")).toBeVisible();
-    await expect
-      .element(page.getByText("DevDeck daemon is not running on this host"))
-      .toBeVisible();
+    await expect.element(page.getByText("Fleet telemetry is offline on this host")).toBeVisible();
     await expect
       .element(page.getByText("[1/4] Re-exporting SeamPackedReader-v5-68m"))
       .toBeVisible();
-    await page.getByRole("button", { name: "Start DevDeck" }).click();
-    await expect.poll(() => startedPaths).toEqual(["/devdeck/start"]);
+    expect(page.getByRole("button", { name: "Start DevDeck" }).elements()).toHaveLength(0);
 
     // Offline banner still appears above host grid when DevDeck stops after hosts already loaded
     const cachedHosts = mergeFleetHosts({
@@ -901,8 +888,7 @@ describe("Devtools live browser UI", () => {
           environmentId={"env-local" as EnvironmentId}
           hosts={cachedHosts}
           selectedHost={cachedHosts[0] ?? null}
-          devdeckError="DevDeck daemon is not running on this host"
-          canStartDevdeck
+          devdeckError="Fleet telemetry is offline on this host"
           hostJobs={[]}
           selectedJobId={null}
           onFeedback={() => {}}
@@ -910,7 +896,7 @@ describe("Devtools live browser UI", () => {
       </TooltipProvider>,
     );
     await expect.element(page.getByTestId("fleet-telemetry-offline")).toBeVisible();
-    await expect.element(page.getByRole("button", { name: "Start DevDeck" })).toBeVisible();
+    expect(page.getByRole("button", { name: "Start DevDeck" }).elements()).toHaveLength(0);
   });
 
   it("routes blocking dependency holds out of ShipQueuePanel (no buried box) and shows Approval + Open thread on held rows", async () => {

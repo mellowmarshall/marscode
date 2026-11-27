@@ -47,7 +47,6 @@ export function FleetMachinesView({
   selectedJobId,
   devdeckStatus,
   devdeckError = null,
-  canStartDevdeck = false,
   onFeedback,
 }: {
   readonly environmentId: EnvironmentId;
@@ -57,28 +56,26 @@ export function FleetMachinesView({
   readonly selectedJobId: string | null;
   readonly devdeckStatus?: DevtoolsResourceStatus | undefined;
   readonly devdeckError?: string | null;
-  readonly canStartDevdeck?: boolean;
   readonly onFeedback: (fb: ConsoleActionFeedback) => void;
 }) {
   const gt = useGT();
   const navigate = useNavigate();
   const [busyKeys, setBusyKeys] = useState<ReadonlySet<string>>(() => new Set());
-  const withBusyKey = async <T,>(key: string, fn: () => Promise<T>): Promise<T> => {
+  const withBusyKey = <T,>(key: string, fn: () => Promise<T>): Promise<T> => {
     setBusyKeys((prev) => {
       const next = new Set(prev);
       next.add(key);
       return next;
     });
-    try {
-      return await fn();
-    } finally {
+    const clearBusyKey = () => {
       setBusyKeys((prev) => {
         if (!prev.has(key)) return prev;
         const next = new Set(prev);
         next.delete(key);
         return next;
       });
-    }
+    };
+    return Promise.resolve().then(fn).finally(clearBusyKey);
   };
   const [reportBanner, setReportBanner] = useState<FleetStorageBannerData | null>(null);
 
@@ -379,8 +376,6 @@ export function FleetMachinesView({
               environmentId={environmentId}
               devdeckStatus={bannerStatus}
               devdeckError={devdeckError}
-              canStartDevdeck={canStartDevdeck}
-              onFeedback={onFeedback}
             />
           </div>
         ) : null}

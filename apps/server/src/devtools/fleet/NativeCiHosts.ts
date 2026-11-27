@@ -17,12 +17,6 @@ export function defaultT3StateDir(): string {
   return NodePath.join(base, "t3code");
 }
 
-function legacyDevdeckHostsCheckPath(): string {
-  const xdg = process.env.XDG_STATE_HOME?.trim();
-  const base = xdg || NodePath.join(NodeOS.homedir(), ".local", "state");
-  return NodePath.join(base, "devdeck", "hosts-check.json");
-}
-
 function resolveCiHostsManifestPath(): string | null {
   const candidates: string[] = [];
   const mainCheckout = process.env.SHIP_QUEUE_MAIN_CHECKOUT?.trim() || "/dataprivate-repo/main";
@@ -159,17 +153,11 @@ export class NativeCiHosts {
   }
 
   private loadInitialReport(): void {
-    for (const candidate of [this.stateFile, legacyDevdeckHostsCheckPath()]) {
-      try {
-        const raw = NodeFS.readFileSync(candidate, "utf8");
-        const parsed = parseHostsReport(raw);
-        if (parsed) {
-          this.report = parsed;
-          return;
-        }
-      } catch {
-        // try next
-      }
+    try {
+      const parsed = parseHostsReport(NodeFS.readFileSync(this.stateFile, "utf8"));
+      if (parsed) this.report = parsed;
+    } catch {
+      // no persisted report yet
     }
   }
 

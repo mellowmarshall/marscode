@@ -731,9 +731,6 @@ export interface DevtoolsHostConfig {
   readonly jobs: {
     readonly default_stall_minutes: number;
   };
-  readonly devdeck: {
-    readonly endpoint_override: string;
-  };
 }
 
 export interface ResolvedModelCandidate extends ReviewModelSpec {

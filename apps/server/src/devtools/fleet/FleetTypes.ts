@@ -127,14 +127,63 @@ export interface FleetAction {
   readonly at: string;
 }
 
+export type FleetAlertState = "ok" | "firing" | "silent";
+
+export interface FleetAlertItem {
+  readonly source: string;
+  readonly name: string;
+  readonly state: FleetAlertState;
+  readonly since?: string | undefined;
+  readonly detail?: string | undefined;
+  readonly url?: string | undefined;
+}
+
+export interface FleetAlertsPanel {
+  readonly items: ReadonlyArray<FleetAlertItem>;
+}
+
+/** A host process listening on a TCP port. */
+export interface FleetPortListener {
+  readonly port: number;
+  readonly pid: number;
+  readonly procName: string;
+}
+
+export interface FleetWorktreeItem {
+  readonly path: string;
+  readonly branch: string;
+  readonly dirty?: boolean | undefined;
+  readonly ahead?: number | undefined;
+  readonly unpushed?: number | undefined;
+  readonly merged?: boolean | undefined;
+  readonly stale: boolean;
+  readonly stuck?: boolean | undefined;
+  readonly last_commit_at: string;
+}
+
+export interface FleetWorktreeRepo {
+  readonly repo: string;
+  readonly root: string;
+  readonly items: ReadonlyArray<FleetWorktreeItem>;
+}
+
+export interface FleetWorktreesPanel {
+  readonly total: number;
+  readonly dirty: number;
+  readonly stale: number;
+  readonly merged: number;
+  readonly stuck: number;
+  readonly repos: ReadonlyArray<FleetWorktreeRepo>;
+}
+
 export interface FleetSnapshot {
   readonly host: FleetHostTelemetry;
   readonly servers: ReadonlyArray<FleetServerItem>;
   readonly sessions: ReadonlyArray<FleetSessionItem>;
   readonly nodes: Readonly<Record<string, FleetNodeState>>;
   readonly hosts: FleetHostsPanel;
-  readonly alerts: { readonly items: ReadonlyArray<never> };
-  readonly worktrees: null;
+  readonly alerts: FleetAlertsPanel;
+  readonly worktrees: FleetWorktreesPanel | null;
 }
 
 export interface CiHostManifestEntry {

@@ -44,9 +44,6 @@ export interface DevtoolsHostConfig {
   readonly jobs: {
     readonly default_stall_minutes: number;
   };
-  readonly devdeck: {
-    readonly endpoint_override: string;
-  };
 }
 
 export interface ResolvedModelCandidate extends ReviewModelSpec {
@@ -97,15 +94,11 @@ export const DEFAULT_DEVTOOLS_HOST_CONFIG: DevtoolsHostConfig = {
   jobs: {
     default_stall_minutes: 15,
   },
-  devdeck: {
-    endpoint_override: "",
-  },
 };
 
 const VALID_EFFORT_SET = new Set<string>(VALID_REVIEW_EFFORTS);
 const SAFE_PROVIDER_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const SAFE_MODEL_RE = /^[A-Za-z0-9.:/_@[\]-]{1,128}$/;
-const SAFE_LOOPBACK_ENDPOINT_RE = /^(?:127\.0\.0\.1|localhost):([1-9][0-9]{0,4})$/;
 
 const PROVIDER_ALIASES: Readonly<Record<string, string>> = {
   codex: "codex",
@@ -186,39 +179,6 @@ function parseRoleConfig(raw: unknown, defaults: ReviewRoleConfig): ReviewRoleCo
   };
 }
 
-export function validateDevdeckEndpointOverride(raw: unknown): {
-  readonly ok: boolean;
-  readonly value: string;
-  readonly error?: string;
-} {
-  if (raw === undefined || raw === null || raw === "") {
-    return { ok: true, value: "" };
-  }
-  if (typeof raw !== "string") {
-    return { ok: false, value: "", error: "DevDeck endpoint override must be a string" };
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) return { ok: true, value: "" };
-  if (trimmed.length > 256 || /[\u0000-\u001f\u007f]/.test(trimmed)) {
-    return { ok: false, value: "", error: "Invalid DevDeck endpoint override" };
-  }
-  if (trimmed.startsWith("/")) {
-    return { ok: true, value: trimmed };
-  }
-  const match = SAFE_LOOPBACK_ENDPOINT_RE.exec(trimmed);
-  if (match?.[1]) {
-    const port = Number(match[1]);
-    if (port >= 1 && port <= 65535) {
-      return { ok: true, value: trimmed };
-    }
-  }
-  return {
-    ok: false,
-    value: "",
-    error: "DevDeck endpoint must be an absolute Unix socket path or 127.0.0.1:PORT",
-  };
-}
-
 const hostConfigReadCache = new Map<
   string,
   { readonly mtimeMs: number; readonly size: number; readonly raw: Record<string, unknown> }
@@ -254,11 +214,6 @@ export function normalizeHostConfig(raw: Record<string, unknown>): DevtoolsHostC
     raw.jobs && typeof raw.jobs === "object" && !Array.isArray(raw.jobs)
       ? (raw.jobs as Record<string, unknown>)
       : {};
-  const devdeckRaw =
-    raw.devdeck && typeof raw.devdeck === "object" && !Array.isArray(raw.devdeck)
-      ? (raw.devdeck as Record<string, unknown>)
-      : {};
-  const endpointCheck = validateDevdeckEndpointOverride(devdeckRaw.endpoint_override);
 
   return {
     challenge_timeout_s: clampInt(
@@ -296,9 +251,6 @@ export function normalizeHostConfig(raw: Record<string, unknown>): DevtoolsHostC
         1,
         240,
       ),
-    },
-    devdeck: {
-      endpoint_override: endpointCheck.ok ? endpointCheck.value : "",
     },
   };
 }
@@ -347,17 +299,6 @@ export function prepareMergedHostConfig(
     }
   }
 
-  const devdeckPatch =
-    patch.devdeck && typeof patch.devdeck === "object" && !Array.isArray(patch.devdeck)
-      ? (patch.devdeck as Record<string, unknown>)
-      : undefined;
-  if (devdeckPatch && "endpoint_override" in devdeckPatch) {
-    const check = validateDevdeckEndpointOverride(devdeckPatch.endpoint_override);
-    if (!check.ok) {
-      return { ok: false, error: check.error ?? "Invalid DevDeck endpoint override" };
-    }
-  }
-
   const sanitizedPatch: Record<string, unknown> = { ...patch };
   delete sanitizedPatch.targetHost;
   delete sanitizedPatch.host;
@@ -377,10 +318,6 @@ export function prepareMergedHostConfig(
         ? sanitizedPatch.jobs
         : {}),
     },
-    devdeck: {
-      ...(existing.devdeck && typeof existing.devdeck === "object" ? existing.devdeck : {}),
-      ...devdeckPatch,
-    },
   };
   const normalized = normalizeHostConfig(mergedRaw);
   const toPersist: Record<string, unknown> = {
@@ -390,11 +327,11 @@ export function prepareMergedHostConfig(
     ship_queue_review: normalized.ship_queue_review,
     guards: normalized.guards,
     jobs: normalized.jobs,
-    devdeck: normalized.devdeck,
   };
   delete toPersist.challenge_time_limit_s;
   delete toPersist.targetHost;
   delete toPersist.host;
+  delete toPersist.devdeck;
   return { ok: true, config: normalized, toPersist };
 }
 

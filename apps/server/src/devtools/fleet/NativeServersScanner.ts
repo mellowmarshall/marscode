@@ -4,7 +4,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
 import { parseDockerPsLines, parseSizeBytes, parseSsListeners } from "./DockerPsParser.ts";
-import type { FleetServerItem } from "./FleetTypes.ts";
+import type { FleetPortListener, FleetServerItem } from "./FleetTypes.ts";
 
 const DOCKER_PS_TIMEOUT_MS = 4_000;
 const DOCKER_STATS_TIMEOUT_MS = 4_000;
@@ -38,6 +38,16 @@ const IGNORED_DEV_PROCS = new Set([
   "chrome",
   "chromium",
   "firefox",
+]);
+
+/** Processes that forward Docker-published ports; their listeners are the container's own. */
+const DOCKER_FORWARDER_PROCS = new Set([
+  "docker-proxy",
+  "dockerd",
+  "containerd",
+  "rootlesskit",
+  "rootlessport",
+  "slirp4netns",
 ]);
 
 function execFileSafe(
@@ -149,6 +159,7 @@ export class NativeServersScanner {
     readonly map: ReadonlyMap<string, { readonly cpuPct: number; readonly memBytes: number }>;
   } | null = null;
   private latestServers: ReadonlyArray<FleetServerItem> = [];
+  private latestPortShadows: ReadonlyArray<FleetPortListener> = [];
   private devStartTicksByPid = new Map<number, string>();
   private lastScanAt = 0;
 
@@ -158,6 +169,11 @@ export class NativeServersScanner {
 
   getLatest(): ReadonlyArray<FleetServerItem> {
     return this.latestServers;
+  }
+
+  /** Host listeners on a port that a running container also publishes. */
+  getPortShadows(): ReadonlyArray<FleetPortListener> {
+    return this.latestPortShadows;
   }
 
   getLastScanAt(): number {
@@ -216,6 +232,7 @@ export class NativeServersScanner {
   private async scanLocalDevListeners(
     dockerPorts: ReadonlySet<number>,
   ): Promise<ReadonlyArray<FleetServerItem>> {
+    this.latestPortShadows = [];
     if (this.platform !== "linux") return [];
     const [ssRes, protectedPids] = await Promise.all([
       execFileSafe("ss", ["-Hltnp"], SOCKET_SCAN_TIMEOUT_MS),
@@ -227,11 +244,16 @@ export class NativeServersScanner {
     const listeners = parseSsListeners(ssRes.stdout);
     const out: FleetServerItem[] = [];
     const nextTicks = new Map<number, string>();
+    const shadows: FleetPortListener[] = [];
 
     for (const item of listeners) {
-      if (dockerPorts.has(item.port)) continue;
       if (protectedPids.has(item.pid)) continue;
-      if (IGNORED_DEV_PROCS.has(item.procName.toLowerCase())) continue;
+      const procLower = item.procName.toLowerCase();
+      if (dockerPorts.has(item.port)) {
+        if (!DOCKER_FORWARDER_PROCS.has(procLower)) shadows.push(item);
+        continue;
+      }
+      if (IGNORED_DEV_PROCS.has(procLower)) continue;
 
       const [meta, startTicks] = await Promise.all([
         readLinuxProcessMeta(item.pid),
@@ -271,6 +293,7 @@ export class NativeServersScanner {
       });
     }
     this.devStartTicksByPid = nextTicks;
+    this.latestPortShadows = shadows;
     return out;
   }
 

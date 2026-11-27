@@ -3,6 +3,12 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
+import {
+  defaultSystemdUserServiceDeps,
+  resolveVerifiedUserService,
+  stopUserService,
+  type SystemdUserServiceDeps,
+} from "./FleetSystemdUnits.ts";
 import type { FleetSessionItem } from "./FleetTypes.ts";
 import { collectProtectedSelfPids, readLinuxProcStartTicks } from "./NativeServersScanner.ts";
 
@@ -115,9 +121,19 @@ export class NativeSessionsScanner {
     { readonly pid: number; readonly startTicks: string | null; readonly item: FleetSessionItem }
   >();
   private latestList: ReadonlyArray<FleetSessionItem> = [];
+  private readonly systemd: SystemdUserServiceDeps;
 
-  constructor(platform: NodeJS.Platform = "linux") {
+  constructor(
+    platform: NodeJS.Platform = "linux",
+    systemd: SystemdUserServiceDeps = defaultSystemdUserServiceDeps,
+  ) {
     this.platform = platform;
+    this.systemd = systemd;
+  }
+
+  private forget(sessionId: string): void {
+    this.latestById.delete(sessionId);
+    this.latestList = this.latestList.filter((s) => s.id !== sessionId);
   }
 
   getLatest(): ReadonlyArray<FleetSessionItem> {
@@ -226,10 +242,18 @@ export class NativeSessionsScanner {
         message: `Process PID ${entry.pid} exited or was reused before close`,
       };
     }
+    // A user service's main process restarts after SIGTERM; stop the verified unit instead.
+    const unit = await resolveVerifiedUserService(entry.pid, this.systemd);
+    if (unit !== null) {
+      const stopped = await stopUserService(unit, this.systemd);
+      if (stopped.ok) this.forget(sessionId);
+      return stopped.ok
+        ? { ok: true, message: `${stopped.message} (${entry.item.name}, PID ${entry.pid})` }
+        : stopped;
+    }
     try {
       process.kill(entry.pid, "SIGTERM");
-      this.latestById.delete(sessionId);
-      this.latestList = this.latestList.filter((s) => s.id !== sessionId);
+      this.forget(sessionId);
       return { ok: true, message: `Sent SIGTERM to ${entry.item.name} (PID ${entry.pid})` };
     } catch (err) {
       return {

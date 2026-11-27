@@ -15,7 +15,6 @@ import {
   classifyModel,
   readDevtoolsHostConfig,
   resolveReviewRolePlan,
-  validateDevdeckEndpointOverride,
   writeDevtoolsHostConfig,
 } from "./DevtoolsConfig.ts";
 import {
@@ -95,7 +94,13 @@ describe("DevtoolsConfig & usage-based review model resolution", () => {
     const cfgPath = NodePath.join(dir, "host-config.json");
     expect(readDevtoolsHostConfig(cfgPath)).toEqual(DEFAULT_DEVTOOLS_HOST_CONFIG);
 
-    NodeFS.writeFileSync(cfgPath, JSON.stringify({ custom_host_flag: "keep-me" }));
+    NodeFS.writeFileSync(
+      cfgPath,
+      JSON.stringify({
+        custom_host_flag: "keep-me",
+        devdeck: { endpoint_override: "/run/user/1000/devdeck.sock" },
+      }),
+    );
     const res = writeDevtoolsHostConfig(
       {
         challenge_timeout_s: 300,
@@ -118,18 +123,12 @@ describe("DevtoolsConfig & usage-based review model resolution", () => {
     expect(res.config.challenge_timeout_s).toBe(300);
     expect(res.config.guards.request_timeout_s).toBe(180);
     expect(res.config.jobs.default_stall_minutes).toBe(20);
-    expect(res.config.devdeck.endpoint_override).toBe("127.0.0.1:3219");
+    expect("devdeck" in res.config).toBe(false);
 
     const raw = JSON.parse(NodeFS.readFileSync(cfgPath, "utf8")) as Record<string, unknown>;
     expect(raw.custom_host_flag).toBe("keep-me");
-  });
-
-  it("rejects non-loopback / malformed DevDeck endpoint overrides", () => {
-    expect(validateDevdeckEndpointOverride("").ok).toBe(true);
-    expect(validateDevdeckEndpointOverride("/run/user/1000/devdeck.sock").ok).toBe(true);
-    expect(validateDevdeckEndpointOverride("127.0.0.1:3210").ok).toBe(true);
-    expect(validateDevdeckEndpointOverride("evil.example:3210").ok).toBe(false);
-    expect(validateDevdeckEndpointOverride("127.0.0.1:99999").ok).toBe(false);
+    // The retired DevDeck endpoint override is never persisted again.
+    expect("devdeck" in raw).toBe(false);
   });
 
   it("picks default first when healthy, and auto-picks highest remaining usage fallback when default is below threshold", () => {

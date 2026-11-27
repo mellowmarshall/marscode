@@ -1119,30 +1119,6 @@ function DevtoolsSettingsPanelInner() {
           }
         />
 
-        {draft ? (
-          <SettingsRow
-            {...searchableSetting("devtools-devdeck-endpoint")}
-            description={gt(
-              "Optional legacy DevDeck daemon override (Unix socket path or loopback host:port). Leave blank to use T3's built-in native fleet telemetry.",
-            )}
-            control={
-              <Input
-                type="text"
-                size="sm"
-                className="w-full sm:w-64"
-                placeholder={gt("Built-in native (default)")}
-                value={draft.devdeck.endpoint_override}
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    devdeck: { endpoint_override: e.target.value },
-                  })
-                }
-              />
-            }
-          />
-        ) : null}
-
         <SettingsRow
           title={gt("TUI palettes & output highlighting")}
           description={gt(

@@ -334,11 +334,6 @@ function FleetConsoleBody({ environmentId }: { readonly environmentId: Environme
             selectedJobId={selectedJobId}
             devdeckStatus={devdeckState.status}
             devdeckError={devdeckState.error}
-            canStartDevdeck={Boolean(
-              capsState.capabilities?.tools.devdeck &&
-              capsState.capabilities?.devdeckReachable === false &&
-              capsState.capabilities?.canOperateTerminal,
-            )}
             onFeedback={setFeedback}
           />
         </DevtoolsErrorBoundary>

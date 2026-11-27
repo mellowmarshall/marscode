@@ -49,7 +49,6 @@ const SAFE_ENV_EXACT = new Set([
 const SAFE_ENV_PREFIXES = [
   "LC_",
   "XDG_",
-  "DEVDECK_",
   "SHIP_QUEUE_",
   "DEVLEASE_",
   "ANDROID_",
@@ -120,55 +119,15 @@ function resolveReaperToolName(): "agent-tmp-reap.py" | "agent-tmp-reap" {
   return "agent-tmp-reap";
 }
 
-export function discoverTools(devdeckAvailable: boolean): ToolAvailabilityFlags {
+export function discoverTools(nativeFleetAvailable: boolean): ToolAvailabilityFlags {
   return {
-    devdeck: devdeckAvailable || resolveToolPath("devdeck") !== null,
+    devdeck: nativeFleetAvailable,
     shipQueue: resolveToolPath("ship-queue") !== null,
     playbook: resolveToolPath("playbook") !== null,
     devlease: resolveToolPath("devlease") !== null,
     reaper:
       resolveToolPath("agent-tmp-reap.py") !== null || resolveToolPath("agent-tmp-reap") !== null,
   };
-}
-
-let inFlightDevdeckStart: Promise<ExecJsonResult> | null = null;
-
-export function startDevdeckService(
-  probeReachable?: () => Promise<boolean>,
-): Promise<ExecJsonResult> {
-  if (inFlightDevdeckStart) return inFlightDevdeckStart;
-  const run = (async (): Promise<ExecJsonResult> => {
-    if (resolveToolPath("devdeck") === null) {
-      return {
-        ok: false,
-        exitCode: 127,
-        data: null,
-        error: "devdeck is not installed on this host",
-        errorCode: "tool_missing",
-      };
-    }
-    const started = await execTextTool("systemctl", ["--user", "start", "devdeck.service"], {
-      timeoutMs: 10_000,
-    });
-    if (!started.ok || !probeReachable) return started;
-    for (let attempt = 0; attempt < 16; attempt += 1) {
-      if (await probeReachable()) {
-        return { ok: true, exitCode: 0, data: { reachable: true } };
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-    return {
-      ok: false,
-      exitCode: 124,
-      data: null,
-      error: "Started devdeck.service, but daemon is not responding yet",
-      errorCode: "daemon_stopped",
-    };
-  })();
-  inFlightDevdeckStart = run;
-  return run.finally(() => {
-    if (inFlightDevdeckStart === run) inFlightDevdeckStart = null;
-  });
 }
 
 function buildToolEnv(): NodeJS.ProcessEnv {

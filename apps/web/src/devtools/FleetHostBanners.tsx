@@ -6,7 +6,6 @@ import {
   AlertTriangleIcon,
   CpuIcon,
   Maximize2Icon,
-  PlayIcon,
   RefreshCwIcon,
   WrenchIcon,
   XIcon,
@@ -15,10 +14,8 @@ import {
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import type { MergedFleetHost } from "./devdeckTypes";
-import { fetchDevtoolsJson } from "./devtoolsClient";
 import { DevtoolsStateBanner } from "./DevtoolsStateBanner";
 import type { DevtoolsResourceStatus } from "./devtoolsState";
-import type { ConsoleActionFeedback } from "./devtoolsStore";
 import { refreshSharedDevdeck } from "./devtoolsStreams";
 import {
   formatJobBytes,
@@ -43,42 +40,17 @@ export function FleetOfflineBanner({
   environmentId,
   devdeckStatus,
   devdeckError,
-  canStartDevdeck,
-  onFeedback,
 }: {
   readonly environmentId: EnvironmentId;
   readonly devdeckStatus?: Exclude<DevtoolsResourceStatus, "ready"> | undefined;
   readonly devdeckError: string | null;
-  readonly canStartDevdeck: boolean;
-  readonly onFeedback: (fb: ConsoleActionFeedback) => void;
 }) {
-  const gt = useGT();
-  const [starting, setStarting] = useState(false);
-
-  const handleStartDevdeck = async () => {
-    setStarting(true);
-    onFeedback({ tone: "busy", text: gt("Starting DevDeck daemon…") });
-    const res = await fetchDevtoolsJson<{ readonly ok?: boolean; readonly error?: string }>(
-      environmentId,
-      "/devdeck/start",
-      { method: "POST", body: {} },
-    );
-    setStarting(false);
-    if (res.ok && res.data?.ok) {
-      await refreshSharedDevdeck(environmentId);
-      onFeedback({ tone: "ok", text: gt("DevDeck daemon started") });
-    } else {
-      onFeedback({
-        tone: "error",
-        text: res.data?.error ?? res.error ?? gt("Failed to start DevDeck daemon"),
-      });
-    }
-  };
+  const [retrying, setRetrying] = useState(false);
 
   const handleRetry = async () => {
-    setStarting(true);
+    setRetrying(true);
     await refreshSharedDevdeck(environmentId);
-    setStarting(false);
+    setRetrying(false);
   };
 
   const resolvedStatus: Exclude<DevtoolsResourceStatus, "ready"> =
@@ -89,24 +61,8 @@ export function FleetOfflineBanner({
       testId="fleet-telemetry-offline"
       status={resolvedStatus}
       title={devdeckError ? devdeckError : <T>Waiting for fleet host telemetry…</T>}
-      detail={
-        devdeckError && canStartDevdeck ? (
-          <T>
-            The configured legacy DevDeck override is offline. Start devdeck.service or clear the
-            override in DevTools Settings to use T3 native fleet telemetry.
-          </T>
-        ) : undefined
-      }
-      primaryAction={
-        devdeckError && canStartDevdeck ? (
-          <Button size="xs" disabled={starting} onClick={() => void handleStartDevdeck()}>
-            <PlayIcon className="mr-1 size-3" />
-            {starting ? <T>Starting…</T> : <T>Start DevDeck</T>}
-          </Button>
-        ) : undefined
-      }
       onRetry={() => void handleRetry()}
-      retrying={starting}
+      retrying={retrying}
     />
   );
 }

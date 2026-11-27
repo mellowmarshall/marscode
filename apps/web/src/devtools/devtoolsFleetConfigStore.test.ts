@@ -72,7 +72,6 @@ function makeConfig(timeoutS: number): DevtoolsHostConfig {
     },
     guards: { request_timeout_s: 120, grant_ttl_s: 60 },
     jobs: { default_stall_minutes: 15 },
-    devdeck: { endpoint_override: "" },
   };
 }
 

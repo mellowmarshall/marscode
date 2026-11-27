@@ -12,7 +12,7 @@ import { CallerIdentity } from "./callerIdentity.ts";
 /** One rotation step past this size; at most two files of this size exist on disk. */
 const DEFAULT_MAX_LOG_BYTES = 10 * 1024 * 1024;
 
-export const AccessLogEvent = Schema.Literals([
+const AccessLogEvent = Schema.Literals([
   "started",
   /** A Secret Service call other than session plumbing or GetSecrets. */
   "call",
@@ -49,7 +49,7 @@ export interface AccessLogOptions {
   readonly maxBytes?: number | undefined;
 }
 
-export class AccessLogUnavailable extends Schema.TaggedError<AccessLogUnavailable>()(
+class AccessLogUnavailable extends Schema.TaggedError<AccessLogUnavailable>()(
   "AccessLogUnavailable",
   { path: Schema.String, reason: Schema.String },
 ) {}

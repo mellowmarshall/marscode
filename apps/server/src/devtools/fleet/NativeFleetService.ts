@@ -6,13 +6,17 @@ import * as NodePath from "node:path";
 import type { HostPowerSnapshot, HostResourcesSnapshot } from "@t3tools/contracts";
 
 import { FleetActionTracker } from "./FleetActionTracker.ts";
+import { buildFleetAlertsPanel, defaultGitHubAuditPath } from "./FleetAlerts.ts";
+import { FleetCachedPanel } from "./FleetCachedPanel.ts";
+import { redactPeerServerItem } from "./FleetPeerWire.ts";
 import { createFleetEventStream, type FleetSseListener } from "./FleetSseStream.ts";
 import type {
   FleetAction,
+  FleetAlertsPanel,
   FleetHostTelemetry,
   FleetNodeState,
-  FleetServerItem,
   FleetSnapshot,
+  FleetWorktreesPanel,
 } from "./FleetTypes.ts";
 import { defaultT3StateDir, NativeCiHosts, readCiHostsManifest } from "./NativeCiHosts.ts";
 import { NativeHostSampler } from "./NativeHostSampler.ts";
@@ -27,6 +31,7 @@ const ON_DEMAND_SCAN_TTL_MS = 15_000;
 const KICK_LEASE_MS = 12_000;
 const KICK_MIN_INTERVAL_MS = 4_500;
 const NODES_FILE_THROTTLE_MS = 5_000;
+const WORKTREES_TTL_MS = 60_000;
 
 export interface NativeFleetServiceDeps {
   readonly hostname?: string | undefined;
@@ -38,21 +43,11 @@ export interface NativeFleetServiceDeps {
   readonly readHostResources?: (() => Promise<HostResourcesSnapshot | null>) | undefined;
   readonly readDesktopPower?: (() => Promise<HostPowerSnapshot | null>) | undefined;
   readonly listPeerLinks?: (() => Promise<ReadonlyArray<PeerLinkCandidate>>) | undefined;
-}
-
-function redactPeerServerItem(srv: FleetServerItem): FleetServerItem {
-  return {
-    id: srv.id,
-    ...(srv.project ? { project: srv.project } : {}),
-    ...(srv.service ? { service: srv.service } : {}),
-    kind: srv.kind,
-    ...(srv.port !== undefined ? { port: srv.port } : {}),
-    ...(srv.ports ? { ports: srv.ports } : {}),
-    state: srv.state,
-    ...(srv.cpu_pct !== undefined ? { cpu_pct: srv.cpu_pct } : {}),
-    ...(srv.mem_bytes !== undefined ? { mem_bytes: srv.mem_bytes } : {}),
-    ...(srv.uptime_s !== undefined ? { uptime_s: srv.uptime_s } : {}),
-  };
+  readonly githubAuditPath?: string | undefined;
+  readonly readWorktrees?: (() => Promise<FleetWorktreesPanel | null>) | undefined;
+  /** Test seams: the active workload scan cadence and the panel-cache clock. */
+  readonly activeScansIntervalMs?: number | undefined;
+  readonly now?: (() => number) | undefined;
 }
 
 export class NativeFleetService {
@@ -60,6 +55,7 @@ export class NativeFleetService {
   private readonly nodesFilePath: string;
   private readonly manifestPath: string | undefined;
   private readonly enableBackgroundPolling: boolean;
+  private readonly activeScansIntervalMs: number;
   private readonly writeNodesFileEnabled: boolean;
 
   private readonly hostSampler: NativeHostSampler;
@@ -67,6 +63,8 @@ export class NativeFleetService {
   private readonly sessionsScanner: NativeSessionsScanner;
   private readonly ciHosts: NativeCiHosts;
   private readonly remoteProber: RemoteNodeProber;
+  private readonly githubAuditPath: string;
+  private readonly worktrees: FleetCachedPanel<FleetWorktreesPanel | null>;
 
   private readonly activeListeners = new Set<FleetSseListener>();
   private readonly passiveListeners = new Set<FleetSseListener>();
@@ -92,6 +90,7 @@ export class NativeFleetService {
     this.nodesFilePath = NodePath.join(stateDir, "fleet-nodes.json");
     this.manifestPath = deps.manifestPath;
     this.enableBackgroundPolling = deps.enableBackgroundPolling ?? true;
+    this.activeScansIntervalMs = deps.activeScansIntervalMs ?? ACTIVE_SCANS_INTERVAL_MS;
     this.writeNodesFileEnabled = deps.writeNodesFile ?? true;
 
     const platform = deps.platform ?? "linux";
@@ -111,6 +110,15 @@ export class NativeFleetService {
       listPeerLinks: deps.listPeerLinks,
     });
     this.actions = new FleetActionTracker((act) => this.emit("action", act));
+    this.githubAuditPath = deps.githubAuditPath ?? defaultGitHubAuditPath();
+    const readWorktrees = deps.readWorktrees ?? (async () => null);
+    this.worktrees = new FleetCachedPanel({
+      load: readWorktrees,
+      ttlMs: WORKTREES_TTL_MS,
+      now: deps.now,
+      initial: null,
+      onUpdate: (panel) => this.emit("worktrees", panel),
+    });
 
     if (this.enableBackgroundPolling) {
       this.startBackgroundLoop();
@@ -154,7 +162,9 @@ export class NativeFleetService {
       void this.probeAllRemotes().catch(() => undefined);
       this.activeScansTimer = setInterval(() => {
         void this.scanLocalWorkloads(true).catch(() => undefined);
-      }, ACTIVE_SCANS_INTERVAL_MS);
+        // Past its TTL this starts a refresh whose result reaches open streams as "worktrees".
+        this.worktrees.peek();
+      }, this.activeScansIntervalMs);
       this.activeScansTimer.unref();
     }
   }
@@ -234,6 +244,7 @@ export class NativeFleetService {
       this.lastWorkloadScanAt = Date.now();
       this.emit("servers", servers);
       this.emit("sessions", sessions);
+      this.emit("alerts", this.getAlerts());
       this.emit("nodes", this.getNodesMap());
     } catch {
       // isolate workload scan failures
@@ -378,12 +389,9 @@ export class NativeFleetService {
     if (!this.hostSampler.getLatest()) {
       await this.sampleLocalHost(false);
     }
-    if (
-      !requestedPanels ||
-      requestedPanels.size === 0 ||
-      requestedPanels.has("servers") ||
-      requestedPanels.has("sessions")
-    ) {
+    const wants = (panel: keyof FleetSnapshot) =>
+      !requestedPanels || requestedPanels.size === 0 || requestedPanels.has(panel);
+    if (wants("servers") || wants("sessions") || wants("alerts")) {
       await this.ensureRecentWorkloadScan();
     }
     const full: FleetSnapshot = {
@@ -392,8 +400,9 @@ export class NativeFleetService {
       sessions: this.sessionsScanner.getLatest(),
       nodes: this.getNodesMap(false),
       hosts: this.ciHosts.getPanel(),
-      alerts: { items: [] },
-      worktrees: null,
+      alerts: this.getAlerts(),
+      // A full Git and pull-request pass can be slow; the "worktrees" event carries the result.
+      worktrees: wants("worktrees") ? this.worktrees.peek() : null,
     };
     if (!requestedPanels || requestedPanels.size === 0) {
       return full as unknown as Record<string, unknown>;
@@ -405,6 +414,15 @@ export class NativeFleetService {
       }
     }
     return filtered;
+  }
+
+  getAlerts(): FleetAlertsPanel {
+    return buildFleetAlertsPanel({
+      servers: this.serversScanner.getLatest(),
+      portShadows: this.serversScanner.getPortShadows(),
+      githubAuditPath: this.githubAuditPath,
+      nowMs: Date.now(),
+    });
   }
 
   async getServers(): Promise<ReadonlyArray<unknown>> {
