@@ -83,5 +83,16 @@ export function ghForge(run: ProcessRunner): ShipForge {
       ]);
       return { exitCode: res.exitCode, message: `${res.stdout}${res.stderr}`.trim() };
     },
+    commentOnPullRequest: async ({ cwd, repo, number, body }) => {
+      const res = await gh(
+        run,
+        cwd,
+        ["pr", "comment", String(number), "--repo", repo, "--body-file", "-"],
+        body,
+      );
+      if (res.exitCode !== 0) {
+        throw new Error(`gh pr comment failed: ${res.stderr.trim() || res.stdout.trim()}`);
+      }
+    },
   };
 }

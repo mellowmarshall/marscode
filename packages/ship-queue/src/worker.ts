@@ -1,4 +1,7 @@
-// @effect-diagnostics globalDate:off - Serialized per-repo merge queue: one job of a repo lands at a time, in submit order.
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off - Serialized per-repo merge queue: one job of a repo lands at a time, in submit order.
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+
 import { cleanupMergedJob } from "./cleanup.ts";
 import { houseStages } from "./houseGate.ts";
 import {
@@ -8,6 +11,9 @@ import {
   failJob,
   hasLiveWatcher,
   isEnded,
+  jobBodyPath,
+  jobDir,
+  jobReviewPath,
   listJobIds,
   mark,
   readJob,
@@ -17,7 +23,7 @@ import {
 } from "./jobStore.ts";
 import { markerValue } from "./markers.ts";
 import { runPostMergeSync } from "./postMergeSync.ts";
-import { mergePhase, pullRequestPhase, pushPhase } from "./prFlow.ts";
+import { mergePhase, postReviewComment, pullRequestPhase, pushPhase } from "./prFlow.ts";
 import { sameProcess } from "./processIdentity.ts";
 import { releaseRepoLock, repoLockHolder, tryAcquireRepoLock } from "./processLocks.ts";
 import { rebaseJob } from "./rebaseEngine.ts";
@@ -206,6 +212,21 @@ export async function runJob(deps: ShipQueueDeps, id: string): Promise<JobStep> 
   job = updateJob(deps.root, id, { rebased_onto: rebase.onto });
   if (cancelled()) return "ended";
 
+  const outFile = jobReviewPath(deps.root, id);
+  const workDir = NodePath.join(jobDir(deps.root, id), "work");
+  const reviewTipPath = NodePath.join(workDir, "review-tip");
+  const priorTip = (() => {
+    try {
+      return NodeFS.readFileSync(reviewTipPath, "utf8").trim();
+    } catch {
+      return "";
+    }
+  })();
+  if (priorTip && priorTip !== rebase.head) {
+    NodeFS.rmSync(outFile, { force: true });
+    NodeFS.rmSync(reviewTipPath, { force: true });
+  }
+
   const house = await houseStages(deps, job, rebase.onto);
   if (house.kind === "fail") return stop(house.reason);
   if (house.kind === "action") {
@@ -215,12 +236,49 @@ export async function runJob(deps: ShipQueueDeps, id: string): Promise<JobStep> 
   job = updateJob(deps.root, id, { state: "running", waiting_for: undefined, worker: deps.self });
   if (cancelled()) return "ended";
 
+  const alreadyReviewed = priorTip === rebase.head && NodeFS.existsSync(outFile);
+  const challengePromise: Promise<void> =
+    deps.declarationChallenge && !alreadyReviewed
+      ? (async () => {
+          NodeFS.rmSync(outFile, { force: true });
+          try {
+            const challenge = await deps.declarationChallenge!({
+              jobId: id,
+              worktree: job.worktree,
+              baseSha: rebase.onto,
+              tipSha: rebase.head,
+              bodyFile: jobBodyPath(deps.root, id),
+              outFile,
+              threadId: job.thread_id,
+            });
+            if (challenge.output) appendLog(deps.root, id, challenge.output);
+          } catch (err) {
+            const why = err instanceof Error ? err.message : String(err);
+            appendLog(deps.root, id, `house declaration-challenge: advisory (${why})`);
+            if (!NodeFS.existsSync(outFile)) {
+              NodeFS.writeFileSync(outFile, `PLAYBOOK REVIEW: NOT RUN\n  ${why}\n`, "utf8");
+            }
+          } finally {
+            NodeFS.mkdirSync(workDir, { recursive: true });
+            NodeFS.writeFileSync(reviewTipPath, `${rebase.head}\n`, "utf8");
+          }
+        })()
+      : Promise.resolve();
+
   const push = await pushPhase(deps, job, rebase.head, rebase.remoteTip);
-  if (!push.ok) return stop(push.reason);
-  if (cancelled()) return "ended";
+  if (!push.ok) {
+    await challengePromise;
+    return stop(push.reason);
+  }
+  if (cancelled()) {
+    await challengePromise;
+    return "ended";
+  }
 
   const pr = await pullRequestPhase(deps, requireJob(deps.root, id));
+  await challengePromise;
   if (!pr.ok) return stop(pr.reason);
+  await postReviewComment(deps, requireJob(deps.root, id), pr.value, rebase.head);
   if (cancelled()) return "ended";
 
   const merge = await mergePhase(deps, requireJob(deps.root, id), pr.value, rebase.head);

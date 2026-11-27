@@ -40,6 +40,72 @@ export const PlaybookChallengeReply = Schema.Struct({
 });
 export type PlaybookChallengeReply = typeof PlaybookChallengeReply.Type;
 
+export const PLAYBOOK_CHALLENGE_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    acceptable: { type: "boolean" },
+    summary: { type: "string" },
+    diagnosis: { type: "string" },
+    bypass_detected: { type: "boolean" },
+    playbook_friction: { type: "boolean" },
+    violations: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          section: { type: "string" },
+          file: { type: "string" },
+          what: { type: "string" },
+        },
+        required: ["section", "file", "what"],
+        additionalProperties: false,
+      },
+    },
+    rejected_rises: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          subject: { type: "string" },
+          why: { type: "string" },
+        },
+        required: ["subject", "why"],
+        additionalProperties: false,
+      },
+    },
+    rises_accepted: { type: "boolean" },
+    defects: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          severity: { type: "string", enum: ["breaking", "critical", "high"] },
+          file: { type: "string" },
+          what: { type: "string" },
+        },
+        required: ["severity", "file", "what"],
+        additionalProperties: false,
+      },
+    },
+    analysis: { type: "string" },
+    recommendation: { type: "string" },
+  },
+  required: [
+    "acceptable",
+    "summary",
+    "diagnosis",
+    "bypass_detected",
+    "playbook_friction",
+    "violations",
+    "rejected_rises",
+    "rises_accepted",
+    "defects",
+    "analysis",
+    "recommendation",
+  ],
+  additionalProperties: false,
+} as const;
+
 export const NO_RISES = "(none)";
 const UNREADABLE_RISES = "(the budgets cannot be compared here: judge no rise as accepted)";
 export const RISE_REFUSED = 3;

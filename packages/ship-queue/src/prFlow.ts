@@ -1,11 +1,82 @@
-// @effect-diagnostics nodeBuiltinImport:off - Push, pull request, and merge phases of a job: each records its exit as a marker.
+// @effect-diagnostics nodeBuiltinImport:off - Push, pull request, review comment, and merge phases of a job: each records its exit as a marker.
 import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
 import { git } from "./gitQueries.ts";
-import { appendLog, jobBodyPath, mark, updateJob } from "./jobStore.ts";
+import { appendLog, jobBodyPath, jobDir, jobReviewPath, mark, updateJob } from "./jobStore.ts";
 import { markerValue } from "./markers.ts";
 import { recordPush } from "./rebaseEngine.ts";
 import type { JobRecord, ShipQueueDeps } from "./types.ts";
+
+const MAX_REVIEW_COMMENT_CHARS = 60_000;
+
+export function formatReviewComment(tipSha: string, jobId: string, reviewText: string): string {
+  const body = reviewText.slice(0, MAX_REVIEW_COMMENT_CHARS).trimEnd();
+  let fence = "```";
+  while (body.includes(fence)) fence += "`";
+  return `Playbook review of ${tipSha.slice(0, 12)} (ship-queue job ${jobId}):\n\n${fence}text\n${body}\n${fence}\n`;
+}
+
+async function reviewContainsSecret(
+  deps: ShipQueueDeps,
+  cwd: string,
+  text: string,
+): Promise<boolean> {
+  try {
+    const res = await deps.run({
+      command: "gitleaks",
+      args: ["stdin", "--no-banner", "--redact", "--exit-code", "1"],
+      cwd,
+      stdin: text,
+      timeoutMs: 15_000,
+    });
+    return res.exitCode === 1;
+  } catch {
+    return false;
+  }
+}
+
+/** Posts `declaration-challenge.txt` once per reviewed tip onto the PR (advisory, never fatal). */
+export async function postReviewComment(
+  deps: ShipQueueDeps,
+  job: JobRecord,
+  pr: number,
+  tipSha: string,
+): Promise<void> {
+  if (!deps.forge.commentOnPullRequest) return;
+  const reviewFile = jobReviewPath(deps.root, job.id);
+  let reviewText = "";
+  try {
+    reviewText = NodeFS.readFileSync(reviewFile, "utf8").trim();
+  } catch {
+    return;
+  }
+  if (!reviewText) return;
+  const workDir = NodePath.join(jobDir(deps.root, job.id), "work");
+  const markerPath = NodePath.join(workDir, `review-posted.${tipSha}`);
+  if (NodeFS.existsSync(markerPath)) return;
+  if (await reviewContainsSecret(deps, job.worktree, reviewText)) {
+    appendLog(deps.root, job.id, `review: withheld from PR #${pr}: secret scanner flagged output`);
+    return;
+  }
+  try {
+    await deps.forge.commentOnPullRequest({
+      cwd: job.worktree,
+      repo: job.repo,
+      number: pr,
+      body: formatReviewComment(tipSha, job.id, reviewText),
+    });
+    NodeFS.mkdirSync(workDir, { recursive: true });
+    NodeFS.writeFileSync(markerPath, "");
+    appendLog(deps.root, job.id, `review: posted on PR #${pr}`);
+  } catch (err) {
+    appendLog(
+      deps.root,
+      job.id,
+      `review: could not post on PR #${pr}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
 
 export type PhaseResult<T> =
   | { readonly ok: true; readonly value: T }

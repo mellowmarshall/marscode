@@ -105,6 +105,12 @@ export interface ShipForge {
     readonly headSha: string;
     readonly title: string;
   }) => Promise<MergeOutcome>;
+  readonly commentOnPullRequest?: (input: {
+    readonly cwd: string;
+    readonly repo: string;
+    readonly number: number;
+    readonly body: string;
+  }) => Promise<void>;
 }
 
 export interface GuardCheck {
@@ -136,6 +142,17 @@ export type SecretScanner = (input: {
   readonly baseSha: string;
 }) => Promise<ReadonlyArray<SecretFinding> | null>;
 
+/** Advisory post-check playbook declaration challenge writing its report to `outFile`. */
+export type DeclarationChallenger = (input: {
+  readonly jobId: string;
+  readonly worktree: string;
+  readonly baseSha: string;
+  readonly tipSha: string;
+  readonly bodyFile: string;
+  readonly outFile: string;
+  readonly threadId?: string | undefined;
+}) => Promise<{ readonly output: string; readonly report: string | null }>;
+
 export interface MergedJob {
   readonly job: JobRecord;
   readonly pr: number;
@@ -148,6 +165,7 @@ export interface ShipQueueDeps {
   readonly forge: ShipForge;
   readonly guard: ShipGuard;
   readonly secretScan: SecretScanner;
+  readonly declarationChallenge?: DeclarationChallenger | undefined;
   readonly clock: Clock;
   readonly isProcessAlive: (identity: ProcessIdentity) => boolean;
   readonly self: ProcessIdentity;

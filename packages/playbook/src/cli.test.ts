@@ -47,11 +47,18 @@ function branchRepo() {
 }
 
 describe("playbook CLI", () => {
-  it("prints its version and usage, and refuses an unknown command", async () => {
+  it("prints its version and usage, supports subcommand --help, and refuses an unknown command", async () => {
     const dir = makeTempDir("pb-cli-");
     expect(await cli(dir, ["version"])).toMatchObject({ code: 0, out: "playbook 8" });
     expect((await cli(dir, [])).code).toBe(2);
     expect((await cli(dir, ["bogus"])).err).toMatch(/unknown command bogus/);
+    for (const sub of ["check", "challenge", "amend", "init", "stats", "version"]) {
+      const longHelp = await cli(dir, [sub, "--help"]);
+      expect(longHelp.code).toBe(0);
+      expect(longHelp.out).toContain(`playbook`);
+      const shortHelp = await cli(dir, [sub, "-h"]);
+      expect(shortHelp.code).toBe(0);
+    }
   });
 
   it("init writes the minimal evidence-only declaration once", async () => {
@@ -79,7 +86,9 @@ describe("playbook CLI", () => {
       "size:PASS",
     ]);
     expect((await cli(repo.root, ["check", "nonsense"])).code).toBe(2);
-    const text = await cli(repo.root, ["-C", "src", "check"], { SHIP_QUEUE_BASE_SHA: base });
+    const text = await cli(repo.root, ["-C", "src", "check", "--ship"], {
+      SHIP_QUEUE_BASE_SHA: base,
+    });
     expect(text.out).toContain("PASS fleet:");
     expect(text.code).toBe(0);
   });
@@ -120,9 +129,55 @@ describe("playbook CLI", () => {
       SHIP_QUEUE_ROOT: NodePath.join(state, "queue"),
     });
     expect(JSON.parse(stats.out).totals.reviews).toBe(1);
-    const noModel = await cli(repo.root, ["challenge", "--base", base], { XDG_STATE_HOME: state });
+    const disabledCfg = NodePath.join(state, "disabled-host-config.json");
+    NodeFS.writeFileSync(disabledCfg, JSON.stringify({ playbook_challenge: null }));
+    const noModel = await cli(repo.root, ["challenge", "--base", base], {
+      XDG_STATE_HOME: state,
+      PLAYBOOK_HOST_CONFIG: disabledCfg,
+    });
     expect(noModel.code).toBe(1);
     expect(noModel.out).toContain("no reviewer model is configured");
+
+    const binDir = NodePath.join(state, "bin");
+    NodeFS.mkdirSync(binDir, { recursive: true });
+    const fakeCodex = NodePath.join(binDir, "codex");
+    NodeFS.writeFileSync(
+      fakeCodex,
+      `#!/usr/bin/env bash
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then out="$2"; shift 2; continue; fi
+  shift
+done
+cat >/dev/null
+printf '%s\\n' '${JSON.stringify(reply)}' > "$out"
+printf '{"type":"turn.completed"}\\n'
+`,
+      { mode: 0o755 },
+    );
+    const liveCfg = NodePath.join(state, "live-host-config.json");
+    NodeFS.writeFileSync(
+      liveCfg,
+      JSON.stringify({
+        challenge_timeout_s: 60,
+        playbook_challenge: {
+          default: { provider: "codex", model: "gpt-6.2-astra", effort: "medium" },
+          fallbacks: [],
+        },
+      }),
+    );
+    const liveOut = NodePath.join(state, "live-report.txt");
+    const liveRes = await cli(repo.root, ["challenge", "--base", base, "--out", liveOut], {
+      XDG_STATE_HOME: state,
+      HOME: state,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      PLAYBOOK_HOST_CONFIG: liveCfg,
+    });
+    expect(liveRes.code).toBe(0);
+    expect(liveRes.out).toContain("PLAYBOOK REVIEW: PASS");
+    expect(NodeFS.readFileSync(liveOut, "utf8")).toContain(
+      "Reviewer:       gpt-6.2-astra (medium)",
+    );
   });
 
   it("amend validates PLAYBOOK.md and emits the owner's override descriptor", async () => {

@@ -6,6 +6,7 @@ import {
   isEnded,
   jobDir,
   jobLogPath,
+  jobReviewPath,
   mark,
   readJob,
   readLog,
@@ -87,6 +88,21 @@ function elapsedMs(from: string, to: string): number {
   return Number.isFinite(ms) ? ms : 0;
 }
 
+function emitReviewIfPresent(root: string, id: string, write: (line: string) => void): void {
+  let review = "";
+  try {
+    review = NodeFS.readFileSync(jobReviewPath(root, id), "utf8").trimEnd();
+  } catch {
+    return;
+  }
+  if (!review) return;
+  write(`REVIEW job=${id} (the playbook reviewer's outcome):`);
+  for (const line of review.split("\n")) write(`  ${line}`);
+  write(
+    "AGENT: quote this review to the owner in full in your reply now, pass or not; it is posted on the PR too.",
+  );
+}
+
 /**
  * Prints each marker as it lands. Exits 0 on `DONE job=`, 1 on `FAILED reason=`, 2 with `QUIET job=`
  * when a running job's log has not moved in `quietMs`, and 3 the first time a watch sees the job
@@ -106,17 +122,25 @@ export async function watchJob(options: WatchOptions): Promise<number> {
       const terminal = findTerminal(readLog(root, id), id);
       const lines = tail.poll();
       for (const line of lines) write(line);
-      if (terminal) return terminal === "done" ? WATCH_EXIT.done : WATCH_EXIT.failed;
+      if (terminal) {
+        emitReviewIfPresent(root, id, write);
+        return terminal === "done" ? WATCH_EXIT.done : WATCH_EXIT.failed;
+      }
       if (before && isEnded(before)) {
         const late = findTerminal(readLog(root, id), id);
         if (late) {
           for (const line of tail.poll()) write(line);
+          emitReviewIfPresent(root, id, write);
           return late === "done" ? WATCH_EXIT.done : WATCH_EXIT.failed;
         }
-        if (before.state === "done") return WATCH_EXIT.done;
+        if (before.state === "done") {
+          emitReviewIfPresent(root, id, write);
+          return WATCH_EXIT.done;
+        }
         write(
           `FAILED reason=${before.reason ?? "unknown"} (from the job record; its log has no terminal line)`,
         );
+        emitReviewIfPresent(root, id, write);
         return WATCH_EXIT.failed;
       }
 

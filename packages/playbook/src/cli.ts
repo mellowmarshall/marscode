@@ -9,6 +9,7 @@ import { requestGuardGrant } from "@t3tools/guard-protocol/client";
 import { planAmend } from "./amend.ts";
 import { installedExceptionsPath, readExceptionsFile, repoBypasses } from "./bypass.ts";
 import { decodeChallengeReplyText } from "./challengeReply.ts";
+import { createCliChallengeModel } from "./challengeRunner.ts";
 import { runChallenge, type ChallengeModel } from "./challenger.ts";
 import { ALL_GATE_NAMES, runCheck, type OverrideAsk } from "./checks.ts";
 import {
@@ -36,7 +37,8 @@ export interface CliIo {
 }
 
 const USAGE = `usage: playbook [-C DIR] <command>
-  check [contract...] [--pr-body FILE] [--json]   validate playbook.json and repo-emitted playbook-evidence/v1 receipts
+  check [contract...] [--pr-body FILE] [--ship] [--json]
+                                                  validate playbook.json and repo-emitted playbook-evidence/v1 receipts
   challenge [--base REF] [--tip REF] [--response FILE] [--out FILE] [--advisory] [--json]
                                                   the declaration challenge on the real worktree
   amend <PLAYBOOK.md> [--base REF] [--issue #N] [--collect]
@@ -45,6 +47,27 @@ const USAGE = `usage: playbook [-C DIR] <command>
   stats [--side S] [--by G] [--source S] [--repo R] [--days N] [--json]
                                                   review verdict statistics
   version                                         print the host playbook version`;
+
+const SUBCOMMAND_USAGE: Readonly<Record<string, string>> = {
+  check:
+    "usage: playbook [-C DIR] check [contract...] [--pr-body FILE] [--ship] [--json]\n  validate playbook.json and repo-emitted playbook-evidence/v1 receipts (--ship accepted for compatibility; validation is always strict)",
+  challenge:
+    "usage: playbook [-C DIR] challenge [--base REF] [--tip REF] [--response FILE] [--out FILE] [--advisory] [--json]\n  run the read-only declaration challenge on the real worktree",
+  amend:
+    "usage: playbook [-C DIR] amend <PLAYBOOK.md> [--base REF] [--issue #N] [--collect]\n  amend PLAYBOOK.md under the owner's override",
+  init: "usage: playbook [-C DIR] init [--dry-run]\n  write the minimal evidence-only playbook.json",
+  stats:
+    "usage: playbook stats [--side S] [--by G] [--source S] [--repo R] [--days N] [--json]\n  show review verdict statistics",
+  version: "usage: playbook version\n  print the host playbook version",
+};
+
+function wantsHelp(args: ReadonlyArray<string>): boolean {
+  for (const arg of args) {
+    if (arg === "--") return false;
+    if (arg === "--help" || arg === "-h") return true;
+  }
+  return false;
+}
 
 /** The minimal valid evidence-only declaration. */
 const MINIMAL_DECLARATION = {
@@ -90,7 +113,11 @@ async function cmdCheck(root: string, args: ReadonlyArray<string>, io: CliIo): P
   const { values, positionals } = NodeUtil.parseArgs({
     args: [...args],
     allowPositionals: true,
-    options: { "pr-body": { type: "string" }, json: { type: "boolean" } },
+    options: {
+      "pr-body": { type: "string" },
+      ship: { type: "boolean" },
+      json: { type: "boolean" },
+    },
   });
   const unknown = positionals.filter((c) => !ALL_GATE_NAMES.includes(c));
   if (unknown.length > 0) {
@@ -141,11 +168,15 @@ async function cmdChallenge(root: string, args: ReadonlyArray<string>, io: CliIo
     values.advisory === true ||
     Boolean(io.env.PLAYBOOK_CHALLENGE_ADVISORY) ||
     Boolean(io.env.SHIP_QUEUE_JOB);
+  const ac = new AbortController();
+  const onSignal = () => ac.abort();
+  process.on("SIGTERM", onSignal);
+  process.on("SIGINT", onSignal);
   const outcome = await runChallenge({
     root,
     repo: repoName(root),
     bypasses: bypassesFor(root, io),
-    model: values.response ? responseModel(values.response) : null,
+    model: values.response ? responseModel(values.response) : createCliChallengeModel(io.env),
     now: new Date().toISOString(),
     stateDir: defaultPlaybookStateDir(io.env),
     base: values.base,
@@ -157,11 +188,17 @@ async function cmdChallenge(root: string, args: ReadonlyArray<string>, io: CliIo
     ),
     advisory,
     threadId: io.env.T3CODE_THREAD_ID,
+    signal: ac.signal,
     env: io.env,
-  }).catch((cause: unknown) => {
-    io.err(`playbook challenge: ${cause instanceof Error ? cause.message : String(cause)}`);
-    return null;
-  });
+  })
+    .catch((cause: unknown) => {
+      io.err(`playbook challenge: ${cause instanceof Error ? cause.message : String(cause)}`);
+      return null;
+    })
+    .finally(() => {
+      process.off("SIGTERM", onSignal);
+      process.off("SIGINT", onSignal);
+    });
   if (!outcome) return EXIT_FAIL;
   if (values.out) NodeFS.writeFileSync(values.out, `${outcome.report}\n`);
   if (values.json) io.out(JSON.stringify({ ...outcome, prompt: undefined }, null, 2));
@@ -297,15 +334,20 @@ export async function runPlaybookCli(argv: ReadonlyArray<string>, io: CliIo): Pr
     args.splice(0, 2);
   }
   const [cmd, ...rest] = args;
+  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
+    io.out(USAGE);
+    return cmd ? 0 : EXIT_USAGE;
+  }
+  const subUsage = SUBCOMMAND_USAGE[cmd];
+  if (subUsage && wantsHelp(rest)) {
+    io.out(subUsage);
+    return 0;
+  }
   if (cmd === "version") {
     io.out(`playbook ${HOST_VERSION}`);
     return 0;
   }
   if (cmd === "stats") return cmdStats(rest, io);
-  if (!cmd || cmd === "help" || cmd === "--help") {
-    io.out(USAGE);
-    return cmd ? 0 : EXIT_USAGE;
-  }
   if (!NodeFS.existsSync(dir) || !NodeFS.statSync(dir).isDirectory()) {
     io.err(`playbook: ${dir} is not a directory`);
     return EXIT_USAGE;

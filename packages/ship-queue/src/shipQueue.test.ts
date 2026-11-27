@@ -7,8 +7,16 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { runShipQueueCli } from "./cli.ts";
 import { guardProtocolGuard } from "./houseGate.ts";
-import { jobBodyPath, jobLogPath, readJob, readLog, registerWatcher } from "./jobStore.ts";
+import {
+  jobBodyPath,
+  jobLogPath,
+  jobReviewPath,
+  readJob,
+  readLog,
+  registerWatcher,
+} from "./jobStore.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
+import { formatReviewComment, postReviewComment } from "./prFlow.ts";
 import { currentProcessIdentity, isProcessAlive, processStartTicks } from "./processIdentity.ts";
 import { claimLock, lockHolder, tryAcquireRepoLock } from "./processLocks.ts";
 import { submitJob } from "./submit.ts";
@@ -669,5 +677,87 @@ describe("ship-queue CLI", () => {
     expect(await cli(["cancel", id])).toBe(0);
     expect(readJob(fx.root, id)).toMatchObject({ state: "failed", reason: "cancelled" });
     expect(NodeFS.existsSync(NodePath.join(fx.root, "jobs", "open", id))).toBe(false);
+  });
+
+  it("runs advisory declarationChallenge, posts review comment once per tip, and prints REVIEW in watch", async () => {
+    const fx = makeFixture();
+    const wt = fx.worktree("feat/18-challenge", { "c.txt": "c\n" });
+    const comments: Array<{ number: number; body: string }> = [];
+    const deps: ShipQueueDeps = {
+      ...fx.deps,
+      forge: {
+        ...fx.deps.forge,
+        commentOnPullRequest: async ({ number, body }) => {
+          comments.push({ number, body });
+        },
+      },
+      declarationChallenge: async ({ outFile }) => {
+        const report = "PLAYBOOK REVIEW: PASS\nSummary:\n  Looks good with ```code``` fence\n";
+        NodeFS.writeFileSync(outFile, report, "utf8");
+        return { output: "house declaration-challenge: passed", report };
+      },
+    };
+    const submitted = await submitJob(deps, {
+      worktree: wt,
+      branch: "feat/18-challenge",
+      title: "feat: challenge",
+      body: "Closes #18\n",
+      identity: {},
+    });
+    expect(submitted.ok).toBe(true);
+    if (!submitted.ok) throw new Error(submitted.reason);
+    const unregister = registerWatcher(fx.root, submitted.id, SELF);
+    try {
+      expect(await runJob(deps, submitted.id)).toBe("ended");
+    } finally {
+      unregister();
+    }
+    const job = readJob(fx.root, submitted.id)!;
+    expect(job.state).toBe("done");
+    expect(NodeFS.readFileSync(jobReviewPath(fx.root, submitted.id), "utf8")).toContain(
+      "PLAYBOOK REVIEW: PASS",
+    );
+    expect(comments).toHaveLength(1);
+    expect(comments[0]!.body).toContain("````text");
+    expect(comments[0]!.body).toContain("PLAYBOOK REVIEW: PASS");
+
+    // Re-calling postReviewComment for the same tip is a no-op.
+    await postReviewComment(deps, job, job.pr!, job.pushed_sha!);
+    expect(comments).toHaveLength(1);
+    expect(formatReviewComment("abcdef1234567890", "1000", "```x```")).toContain("````text");
+
+    // Secret-flagged review output is withheld from PR comments.
+    const secretComments: string[] = [];
+    const secretDeps: ShipQueueDeps = {
+      ...deps,
+      run: async (input) =>
+        input.command === "gitleaks"
+          ? { exitCode: 1, stdout: "", stderr: "secret found" }
+          : deps.run(input),
+      forge: {
+        ...deps.forge,
+        commentOnPullRequest: async ({ body }) => {
+          secretComments.push(body);
+        },
+      },
+    };
+    await postReviewComment(secretDeps, job, job.pr!, "deadbeefdeadbeef");
+    expect(secretComments).toHaveLength(0);
+    expect(readLog(fx.root, submitted.id)).toContain("withheld from PR #");
+
+    const watched: string[] = [];
+    const exitCode = await watchJob({
+      root: fx.root,
+      id: submitted.id,
+      self: SELF,
+      clock: fx.clock,
+      quietMs: 60_000,
+      write: (line) => watched.push(line),
+      waitForChange: async () => {},
+    });
+    expect(exitCode).toBe(WATCH_EXIT.done);
+    expect(watched.join("\n")).toContain(`REVIEW job=${submitted.id}`);
+    expect(watched.join("\n")).toContain("PLAYBOOK REVIEW: PASS");
+    expect(watched.join("\n")).toContain("AGENT: quote this review");
   });
 });

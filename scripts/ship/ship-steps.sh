@@ -91,9 +91,34 @@ merge() { # PR
 }
 
 post_merge() {
-  local primary target_ref wt_base work_root build_wt primary_real wt_base_real
+  local primary target_ref wt_base work_root build_wt primary_real wt_base_real base_ref stripped_ref remote_name base_branch fetched_sha
   primary="${SHIP_QUEUE_PRIMARY:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-  target_ref="${SHIP_QUEUE_BASE_SHA:-${SHIP_QUEUE_BASE_REF:-HEAD}}"
+  base_ref="${SHIP_QUEUE_BASE_REF:-origin/main}"
+  if [[ "$base_ref" == refs/remotes/*/* ]]; then
+    stripped_ref="${base_ref#refs/remotes/}"
+    remote_name="${stripped_ref%%/*}"
+    base_branch="${stripped_ref#*/}"
+  elif [[ "$base_ref" == refs/heads/* ]]; then
+    remote_name="origin"
+    base_branch="${base_ref#refs/heads/}"
+  elif [[ "$base_ref" == */* ]]; then
+    remote_name="${base_ref%%/*}"
+    base_branch="${base_ref#*/}"
+  else
+    remote_name="origin"
+    base_branch="$base_ref"
+  fi
+  target_ref="${SHIP_QUEUE_BASE_SHA:-${base_ref}}"
+  if git -C "$primary" fetch --quiet "$remote_name" "$base_branch"; then
+    fetched_sha="$(git -C "$primary" rev-parse --verify "${remote_name}/${base_branch}^{commit}" 2>/dev/null || true)"
+    if [ -n "$fetched_sha" ]; then
+      if [ -z "${SHIP_QUEUE_BASE_SHA:-}" ] || git -C "$primary" merge-base --is-ancestor "$SHIP_QUEUE_BASE_SHA" "$fetched_sha" 2>/dev/null; then
+        target_ref="$fetched_sha"
+      fi
+    fi
+  else
+    echo "marscode ship-steps: warning: git fetch $remote_name $base_branch failed; building $target_ref" >&2
+  fi
 
   wt_base=""
   for candidate in "${SHIP_QUEUE_WORKTREE_ROOT:-}" "${SHIP_QUEUE_DATA_ROOT:-}" "${TMPDIR:-/tmp}"; do
