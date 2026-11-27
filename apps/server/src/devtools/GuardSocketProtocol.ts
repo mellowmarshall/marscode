@@ -1,0 +1,410 @@
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off - NDJSON wire frame handling and RPC dispatch for GuardGrantBroker.
+import * as NodeCrypto from "node:crypto";
+import type * as NodeNet from "node:net";
+import * as NodeStringDecoder from "node:string_decoder";
+
+import {
+  parseBundleSpec,
+  sanitizeText,
+  validateGuardAndCommand,
+  type GuardBrokerEvent,
+  type PendingGuardRequest,
+} from "@t3tools/guard-protocol/protocol";
+
+import type { StoredGuardBundleGrant } from "../persistence/GuardGrants.ts";
+import {
+  bundleKeyOf,
+  onceGrantKey,
+  type PendingEntry,
+  type StoredOnceGrant,
+} from "./GuardBrokerTypes.ts";
+import type { GuardGrantStore } from "./GuardGrantStore.ts";
+import type { PeerThreadResolution } from "./GuardPeerIdentity.ts";
+import { canonicalCwd } from "./GuardSocketPath.ts";
+
+const MAX_LINE_BYTES = 64 * 1024;
+const MIN_REQUEST_TIMEOUT_MS = 5_000;
+const MAX_REQUEST_TIMEOUT_MS = 600_000;
+
+export interface GuardProtocolContext {
+  readonly isClosed: () => boolean;
+  readonly getDefaultRequestTimeoutMs: () => number;
+  readonly maxPending: number;
+  readonly pending: Map<string, PendingEntry>;
+  readonly store: GuardGrantStore;
+  readonly resolvePeer: (socket: NodeNet.Socket) => Promise<PeerThreadResolution>;
+  readonly emit: (event: GuardBrokerEvent) => void;
+  readonly broadcastGrantsChanged: () => void;
+  readonly finishPending: (
+    entry: PendingEntry,
+    decision: "approved" | "denied" | "expired" | "disconnected",
+    payload: Record<string, unknown>,
+  ) => void;
+}
+
+export function writeAndCloseSocket(
+  socket: NodeNet.Socket,
+  payload: Record<string, unknown>,
+): void {
+  if (socket.destroyed) return;
+  const forceDestroy = setTimeout(() => {
+    if (!socket.destroyed) socket.destroy();
+  }, 250);
+  forceDestroy.unref();
+  socket.once("close", () => clearTimeout(forceDestroy));
+  if (!socket.writable) {
+    socket.destroy();
+    return;
+  }
+  try {
+    socket.end(`${JSON.stringify(payload)}\n`, () => {
+      if (!socket.destroyed) socket.destroy();
+    });
+  } catch {
+    socket.destroy();
+  }
+}
+
+export function attachGuardSocketReader(
+  socket: NodeNet.Socket,
+  activeSockets: Set<NodeNet.Socket>,
+  ctx: GuardProtocolContext,
+): void {
+  if (ctx.isClosed()) {
+    socket.destroy();
+    return;
+  }
+  activeSockets.add(socket);
+  const decoder = new NodeStringDecoder.StringDecoder("utf8");
+  let buffer = "";
+  let rawBytes = 0;
+  let handled = false;
+  const headerTimeout = setTimeout(() => {
+    if (!handled) {
+      handled = true;
+      writeAndCloseSocket(socket, { ok: false, error: "request timeout" });
+    }
+  }, 5_000);
+
+  socket.on("error", () => clearTimeout(headerTimeout));
+  socket.on("close", () => {
+    clearTimeout(headerTimeout);
+    activeSockets.delete(socket);
+  });
+  socket.on("data", (chunk: Buffer) => {
+    if (handled) return;
+    rawBytes += chunk.byteLength;
+    if (rawBytes > MAX_LINE_BYTES) {
+      handled = true;
+      clearTimeout(headerTimeout);
+      writeAndCloseSocket(socket, { ok: false, error: "request too large" });
+      return;
+    }
+    buffer += decoder.write(chunk);
+    const newlineIdx = buffer.indexOf("\n");
+    if (newlineIdx === -1) return;
+    handled = true;
+    clearTimeout(headerTimeout);
+    const line = buffer.slice(0, newlineIdx).trim();
+    void handleGuardProtocolMessage(socket, line, ctx).catch(() => {
+      writeAndCloseSocket(socket, { ok: false, error: "internal broker error" });
+    });
+  });
+}
+
+async function handleGuardProtocolMessage(
+  socket: NodeNet.Socket,
+  line: string,
+  ctx: GuardProtocolContext,
+): Promise<void> {
+  if (ctx.isClosed()) {
+    writeAndCloseSocket(socket, { ok: false, denied: false, error: "broker closed" });
+    return;
+  }
+  let msg: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      writeAndCloseSocket(socket, { ok: false, error: "invalid JSON object" });
+      return;
+    }
+    msg = parsed as Record<string, unknown>;
+  } catch {
+    writeAndCloseSocket(socket, { ok: false, error: "malformed JSON" });
+    return;
+  }
+  if (msg.v !== 1) {
+    writeAndCloseSocket(socket, { ok: false, error: "unsupported protocol version" });
+    return;
+  }
+
+  const op = typeof msg.op === "string" ? msg.op : "";
+  if (op === "identify") {
+    const peer = await ctx.resolvePeer(socket);
+    if (ctx.isClosed() || socket.destroyed) return;
+    if (!peer.verified) {
+      writeAndCloseSocket(socket, { ok: false, error: peer.error });
+      return;
+    }
+    writeAndCloseSocket(socket, {
+      ok: true,
+      ...(peer.peerPid !== undefined && peer.peerPid > 0 ? { pid: peer.peerPid } : {}),
+      thread_id: peer.threadId,
+    });
+    return;
+  }
+  if (op !== "peek" && op !== "check" && op !== "request") {
+    writeAndCloseSocket(socket, { ok: false, error: "unsupported op" });
+    return;
+  }
+
+  const validated = validateGuardAndCommand(msg.guard, msg.command, msg.argv_sha256);
+  if (!validated.ok) {
+    writeAndCloseSocket(socket, { ok: false, error: validated.error });
+    return;
+  }
+  const parsedBundle = parseBundleSpec(msg.bundle, validated.guard);
+  if (!parsedBundle.ok) {
+    writeAndCloseSocket(socket, { ok: false, error: parsedBundle.error });
+    return;
+  }
+
+  const cwd = typeof msg.cwd === "string" ? canonicalCwd(msg.cwd) : "";
+  const reqThreadId = sanitizeText(msg.thread_id, 128);
+  const peer = await ctx.resolvePeer(socket);
+  if (ctx.isClosed() || socket.destroyed) return;
+  if (!peer.verified) {
+    writeAndCloseSocket(socket, { ok: false, error: peer.error });
+    return;
+  }
+  if (reqThreadId && reqThreadId !== peer.threadId) {
+    writeAndCloseSocket(socket, { ok: false, error: "thread_id does not match caller process" });
+    return;
+  }
+  const effectiveThreadId = peer.threadId;
+
+  const matchedOnce = ctx.store.lookupOnce(
+    validated.guard,
+    validated.digest,
+    cwd,
+    effectiveThreadId,
+  );
+  const matchedBundle =
+    !matchedOnce && parsedBundle.bundleEligible && parsedBundle.bundle && effectiveThreadId
+      ? await ctx.store.lookupBundle(validated.guard, parsedBundle.bundle, effectiveThreadId)
+      : null;
+
+  if (op === "peek") {
+    writeAndCloseSocket(socket, { ok: matchedOnce !== null || matchedBundle !== null });
+    return;
+  }
+
+  const replyOnce = (key: string, grant: StoredOnceGrant, consume: boolean) => {
+    if (consume) ctx.store.deleteOnce(key);
+    ctx.store.recordEvent({
+      ts: new Date().toISOString(),
+      eventType: "used",
+      grantId: grant.grantId,
+      threadId: grant.threadId || effectiveThreadId,
+      guard: validated.guard,
+      scope: "once",
+      argvSha256: validated.digest,
+      command: validated.displayCommand,
+      summary: validated.displayCommand.slice(0, 3).join(" "),
+      reason: grant.reason,
+    });
+    writeAndCloseSocket(socket, {
+      ok: true,
+      grant_id: grant.grantId,
+      scope: "once",
+      reason: grant.reason,
+      approved_by: grant.approvedBy,
+      ...(grant.approvedVia ? { approved_via: grant.approvedVia } : {}),
+      thread_id: grant.threadId || effectiveThreadId,
+    });
+  };
+
+  const replyBundle = (grant: StoredGuardBundleGrant) => {
+    const nowIso = new Date().toISOString();
+    ctx.store.recordBundleUse(grant, nowIso, ctx.broadcastGrantsChanged);
+    ctx.store.recordEvent({
+      ts: nowIso,
+      eventType: "used",
+      grantId: grant.grantId,
+      threadId: effectiveThreadId || grant.threadId,
+      guard: validated.guard,
+      scope: "bundle",
+      argvSha256: validated.digest,
+      command: validated.displayCommand,
+      summary: grant.summary,
+      reason: grant.reason,
+    });
+    writeAndCloseSocket(socket, {
+      ok: true,
+      grant_id: grant.grantId,
+      scope: "bundle",
+      reason: grant.reason,
+      approved_by: "human",
+      approved_via: grant.approvedVia,
+      signature: grant.signature,
+      thread_id: effectiveThreadId || grant.threadId,
+    });
+  };
+
+  if (op === "check") {
+    if (matchedOnce) return replyOnce(matchedOnce.key, matchedOnce.grant, true);
+    if (matchedBundle) return replyBundle(matchedBundle);
+    writeAndCloseSocket(socket, { ok: false });
+    return;
+  }
+
+  const wait = msg.wait !== false;
+  const consumeExisting = msg.consume_existing !== false;
+  if (matchedOnce) {
+    if (!wait && !consumeExisting) {
+      writeAndCloseSocket(socket, { ok: true, already_approved: true, scope: "once" });
+      return;
+    }
+    return replyOnce(matchedOnce.key, matchedOnce.grant, true);
+  }
+  if (matchedBundle) {
+    if (!wait && !consumeExisting) {
+      writeAndCloseSocket(socket, {
+        ok: true,
+        already_approved: true,
+        scope: "bundle",
+        grant_id: matchedBundle.grantId,
+      });
+      return;
+    }
+    return replyBundle(matchedBundle);
+  }
+  if (socket.destroyed || !socket.writable) return;
+  if (!effectiveThreadId) {
+    writeAndCloseSocket(socket, {
+      ok: false,
+      error: "override requests require a verified thread_id",
+    });
+    return;
+  }
+
+  const coalesceKey =
+    parsedBundle.bundleEligible && parsedBundle.bundle
+      ? `bundle\0${bundleKeyOf(validated.guard, parsedBundle.bundle)}\0${effectiveThreadId}`
+      : `once\0${onceGrantKey(validated.guard, validated.digest, cwd, effectiveThreadId)}`;
+
+  for (const existing of ctx.pending.values()) {
+    if (!existing.settled && existing.coalesceKey === coalesceKey) {
+      if (wait) {
+        existing.sockets.add(socket);
+        socket.once("close", () => existing.sockets.delete(socket));
+      } else {
+        writeAndCloseSocket(socket, {
+          ok: true,
+          queued: true,
+          coalesced: true,
+          request_id: existing.request.requestId,
+        });
+      }
+      return;
+    }
+  }
+
+  if (ctx.pending.size >= ctx.maxPending) {
+    writeAndCloseSocket(socket, { ok: false, error: "too many pending override requests" });
+    return;
+  }
+
+  const rawTimeoutSec = typeof msg.timeout === "number" ? msg.timeout : undefined;
+  const timeoutMs =
+    rawTimeoutSec !== undefined && Number.isFinite(rawTimeoutSec)
+      ? Math.max(
+          MIN_REQUEST_TIMEOUT_MS,
+          Math.min(MAX_REQUEST_TIMEOUT_MS, Math.round(rawTimeoutSec * 1000)),
+        )
+      : ctx.getDefaultRequestTimeoutMs();
+  const nowMs = Date.now();
+  const requestId = `t3r_${NodeCrypto.randomBytes(10).toString("hex")}`;
+  const reportedPid =
+    typeof msg.pid === "number" && Number.isInteger(msg.pid) && msg.pid > 0 ? msg.pid : 0;
+  const request: PendingGuardRequest = {
+    requestId,
+    guard: validated.guard,
+    command: validated.displayCommand,
+    argvSha256: validated.digest,
+    cwd,
+    refusal: sanitizeText(msg.refusal, 1000),
+    proposedReason: sanitizeText(msg.proposed_reason, 400),
+    threadId: effectiveThreadId,
+    session: sanitizeText(msg.session, 128),
+    pid: peer.verified && peer.peerPid && peer.peerPid > 0 ? peer.peerPid : reportedPid,
+    createdAt: new Date(nowMs).toISOString(),
+    expiresAt: new Date(nowMs + timeoutMs).toISOString(),
+    ...(parsedBundle.bundle ? { bundle: parsedBundle.bundle } : {}),
+    bundleEligible: parsedBundle.bundleEligible,
+    wholeCommitGates: parsedBundle.wholeCommitGates,
+  };
+
+  const summary = parsedBundle.bundle?.summary ?? validated.displayCommand.slice(0, 3).join(" ");
+  const scope = parsedBundle.bundleEligible ? "bundle" : "once";
+  const timer = setTimeout(() => {
+    ctx.store.recordEvent({
+      ts: new Date().toISOString(),
+      eventType: "expired",
+      requestId,
+      threadId: effectiveThreadId,
+      guard: validated.guard,
+      scope,
+      argvSha256: validated.digest,
+      command: validated.displayCommand,
+      summary,
+      reason: "override request timed out waiting for owner",
+    });
+    ctx.finishPending(entry, "expired", {
+      ok: false,
+      denied: false,
+      error: "override request timed out waiting for owner",
+    });
+  }, timeoutMs);
+
+  const sockets = new Set<NodeNet.Socket>();
+  if (wait) sockets.add(socket);
+  const entry: PendingEntry = { request, coalesceKey, sockets, timer, settled: false };
+  ctx.pending.set(requestId, entry);
+
+  if (wait) {
+    socket.once("close", () => {
+      entry.sockets.delete(socket);
+      if (!entry.settled && entry.sockets.size === 0) {
+        ctx.store.recordEvent({
+          ts: new Date().toISOString(),
+          eventType: "disconnected",
+          requestId,
+          threadId: effectiveThreadId,
+          guard: validated.guard,
+          scope,
+          argvSha256: validated.digest,
+          command: validated.displayCommand,
+          summary,
+          reason: "client socket closed while awaiting owner approval",
+        });
+      }
+    });
+  } else {
+    writeAndCloseSocket(socket, { ok: true, queued: true, request_id: requestId });
+  }
+
+  ctx.store.recordEvent({
+    ts: request.createdAt,
+    eventType: "pending_added",
+    requestId,
+    threadId: effectiveThreadId,
+    guard: validated.guard,
+    scope,
+    argvSha256: validated.digest,
+    command: validated.displayCommand,
+    summary,
+    reason: request.proposedReason || request.refusal,
+  });
+  ctx.emit({ type: "pending_added", request });
+}

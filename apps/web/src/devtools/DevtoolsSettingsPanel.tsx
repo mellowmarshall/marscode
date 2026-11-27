@@ -56,15 +56,12 @@ import { DevtoolsStateBanner } from "./DevtoolsStateBanner";
 import {
   DEFAULT_COMPLETED_SHIP_LINGER_MINUTES,
   DEFAULT_FLEET_CONSOLE_TAB,
-  DEFAULT_GUARD_NOTIFICATION_MODE,
   DEFAULT_SHOW_SIDEBAR_JOB_STATUS,
   useCompletedShipLingerMinutes,
   useDefaultFleetConsoleTab,
-  useGuardNotificationMode,
   useShowSidebarJobStatus,
   type CompletedShipLingerMinutes,
   type DefaultFleetConsoleTab,
-  type GuardNotificationMode,
 } from "./devtoolsPreferences";
 
 const EMPTY_PROVIDERS: ReadonlyArray<ServerProvider> = [];
@@ -124,13 +121,6 @@ const EFFORT_OPTIONS: ReadonlyArray<{ readonly value: ReviewEffort; readonly lab
   { value: "xhigh", label: msg("XHigh") },
   { value: "max", label: msg("Max") },
 ];
-
-const GUARD_ALERT_LABELS: Record<GuardNotificationMode, string> = {
-  follow: msg("Follow T3 notifications (default)"),
-  always: msg("Always alert (sound + desktop)"),
-  silent: msg("Desktop only (silent)"),
-  off: msg("Off (modal only)"),
-};
 
 const LINGER_LABELS: Record<CompletedShipLingerMinutes, string> = {
   "0": msg("Hide immediately"),
@@ -515,7 +505,6 @@ function DevtoolsSettingsPanelInner() {
   const [error, setError] = useState<string | null>(() => initialSelection?.error ?? null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const [guardAlerts, setGuardAlerts] = useGuardNotificationMode();
   const [showSidebarPills, setShowSidebarPills] = useShowSidebarJobStatus();
   const [shipLinger, setShipLinger] = useCompletedShipLingerMinutes();
   const [defaultTab, setDefaultTab] = useDefaultFleetConsoleTab();
@@ -909,40 +898,18 @@ function DevtoolsSettingsPanelInner() {
 
       <SettingsSection id="devtools-host-guards" title={gt("Host guards")}>
         <SettingsRow
-          {...searchableSetting("devtools-guard-alerts")}
+          title={gt("Active approvals, alerts & audit")}
           description={gt(
-            "Control desktop notifications and sounds when an agent requests a host-guard override.",
+            "Manage active guard bundles, 24-hour password access, host-guard notifications, and audit history in Security & approvals.",
           )}
-          resetAction={
-            guardAlerts !== DEFAULT_GUARD_NOTIFICATION_MODE ? (
-              <SettingResetButton
-                ariaLabel={gt("Reset guard alerts to default")}
-                onClick={() => setGuardAlerts(DEFAULT_GUARD_NOTIFICATION_MODE)}
-              />
-            ) : null
-          }
           control={
-            <div className="w-full sm:w-56">
-              <Select
-                value={guardAlerts}
-                onValueChange={(v) => {
-                  if (v === "follow" || v === "always" || v === "silent" || v === "off") {
-                    setGuardAlerts(v);
-                  }
-                }}
-              >
-                <SelectTrigger size="sm" className="w-full" aria-label={gt("Guard alerts")}>
-                  <SelectValue>{m(GUARD_ALERT_LABELS[guardAlerts])}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end">
-                  {(Object.keys(GUARD_ALERT_LABELS) as GuardNotificationMode[]).map((k) => (
-                    <SelectItem key={k} value={k}>
-                      {m(GUARD_ALERT_LABELS[k])}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
-            </div>
+            <Link
+              to="/settings/security"
+              className="inline-flex items-center gap-1 text-xs font-medium text-info-foreground hover:underline"
+            >
+              <T>Open Security</T>
+              <ArrowUpRightIcon className="size-3.5" />
+            </Link>
           }
         />
 

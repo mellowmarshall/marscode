@@ -66,7 +66,7 @@ export const TimelinePendingApprovalRow = memo(function TimelinePendingApprovalR
       label={
         <code
           aria-label={m(presentation.detailLabel)}
-          className="block max-h-40 min-w-0 overflow-auto whitespace-pre-wrap font-mono text-xs leading-5 text-foreground select-text! wrap-anywhere [scrollbar-width:thin] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+          className="block max-h-56 min-w-0 overflow-auto whitespace-pre-wrap font-mono text-sm leading-6 text-foreground select-text! wrap-anywhere [scrollbar-width:thin] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
           data-approval-detail="complete"
           tabIndex={0}
         >
@@ -74,18 +74,20 @@ export const TimelinePendingApprovalRow = memo(function TimelinePendingApprovalR
         </code>
       }
     >
-      <div className="ms-7.5 flex min-w-0 flex-col gap-1 pb-1 text-xs">
+      <div className="ms-7.5 flex min-w-0 flex-col gap-1.5 pb-1.5 text-sm leading-6">
         {approval.appName ? (
-          <span className="text-muted-foreground wrap-anywhere">{approval.appName}</span>
+          <span className="font-medium text-muted-foreground wrap-anywhere">
+            {approval.appName}
+          </span>
         ) : null}
         {approval.reason ? (
-          <span className="text-muted-foreground select-text wrap-anywhere">{approval.reason}</span>
+          <span className="text-foreground/90 select-text wrap-anywhere">{approval.reason}</span>
         ) : null}
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 pt-0.5">
           {canRespond ? (
             <>
-              <span className="inline-flex items-center gap-1 text-warning">
-                <ShieldIcon aria-hidden className="size-3 shrink-0" />
+              <span className="inline-flex items-center gap-1.5 font-semibold text-destructive">
+                <ShieldIcon aria-hidden className="size-3.5 shrink-0" />
                 <T>Waiting for approval</T>
               </span>
               {onRespondToApproval ? (

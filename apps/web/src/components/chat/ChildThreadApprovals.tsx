@@ -29,14 +29,14 @@ function ChildApproval({ entry }: { entry: ChildThreadApproval }) {
   return (
     <section
       aria-label={gt("Approval from {title}", { title: entry.title })}
-      className="rounded-lg border border-border bg-background p-3 text-xs"
+      className="rounded-lg border border-destructive/40 bg-background p-3.5 text-sm leading-6"
     >
-      <p className="mb-2 font-medium">
+      <p className="mb-2 text-sm font-semibold text-destructive">
         <T>
           Approval needed from <Var>{entry.title}</Var>
         </T>
       </p>
-      <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono">
+      <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words font-mono text-sm leading-6">
         {approval.detail || approval.requestKind}
       </pre>
       {approval.appName ? <p className="mt-2 text-muted-foreground">{approval.appName}</p> : null}
@@ -114,14 +114,14 @@ function ChildDevtoolsApproval({
   return (
     <section
       aria-label={gt("Approval from {title}", { title: item.childTitle })}
-      className="rounded-lg border border-border bg-background p-3 text-xs"
+      className="rounded-lg border border-destructive/40 bg-background p-3.5 text-sm leading-6"
     >
-      <p className="mb-2 font-medium">
+      <p className="mb-2 text-sm font-semibold text-destructive">
         <T>
           Approval needed from <Var>{item.childTitle}</Var>
         </T>
       </p>
-      <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono">
+      <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words font-mono text-sm leading-6">
         {approval.detail || approval.requestKind}
       </pre>
       {approval.appName ? <p className="mt-2 text-muted-foreground">{approval.appName}</p> : null}
@@ -139,13 +139,14 @@ function ChildDevtoolsApproval({
             inFlightRef.current = true;
             setResponding(true);
             setError(null);
-            try {
-              const res = await onRespond(environmentId, item.entry, decision);
-              if (!res.ok) setError(res.error);
-            } finally {
-              inFlightRef.current = false;
-              setResponding(false);
-            }
+            await onRespond(environmentId, item.entry, decision)
+              .then((res) => {
+                if (!res.ok) setError(res.error);
+              })
+              .finally(() => {
+                inFlightRef.current = false;
+                setResponding(false);
+              });
           }}
         />
       </div>

@@ -80,6 +80,7 @@ import { useRightPanelStore } from "../../rightPanelStore";
 import { useShowSidebarJobStatus } from "../../devtools/devtoolsPreferences";
 import { useJobProgressPercent, useThreadJobStatus } from "../../devtools/jobs/jobsStore";
 import { useThreadHasDevtoolsApproval } from "../../devtools/useThreadDevtoolsApprovals";
+import { ThreadGrantKeyBadge } from "../../devtools/ThreadGrantKeyBadge";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
 import { useUiStateStore } from "../../uiStateStore";
 import { useThreadSelectionStore } from "../../threadSelectionStore";
@@ -827,7 +828,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       ? {
           label: gt("Approval", { $context: "thread status: needs approval" }),
           icon: "approval" as const,
-          className: "text-warning-foreground",
+          className: "text-destructive font-semibold",
         }
       : status === "input"
         ? {
@@ -1083,6 +1084,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       "opacity-70 transition-opacity hover:opacity-100 focus-within:opacity-100 motion-reduce:transition-none",
     isFileDragOver && "ring-1 ring-inset ring-primary/70",
     isFileDragOver && !props.isActive && !isSelected && "bg-sidebar-row-hover",
+    status === "approval" && "sidebar-approval-glow",
     props.sortable?.isDragging &&
       "bg-sidebar bg-linear-to-b from-sidebar-row-active to-sidebar-row-active text-sidebar-foreground opacity-100 shadow-lg",
   );
@@ -1424,6 +1426,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {draftIndicator}
               {title}
               {multiline ? titleLineIcons : null}
+              <ThreadGrantKeyBadge environmentId={thread.environmentId} threadId={thread.id} />
               {pinIndicator}
               {multiline ? null : terminalStatusIcon}
               {multiline ? null : issueBadge}
@@ -1625,6 +1628,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               ) : null}
               {/* Left of the status slot, the pin would slide when hover swaps the
                 label for the wider row controls. */}
+              <ThreadGrantKeyBadge environmentId={thread.environmentId} threadId={thread.id} />
               {pinIndicator}
               {props.projectDisplayName ? (
                 <span

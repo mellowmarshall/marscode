@@ -169,17 +169,38 @@ export function createMultiplexedEventStream(
 
       try {
         if (options.topics.has("guards")) {
-          enqueueText(
-            `event: guards:event\ndata: ${JSON.stringify({
-              type: "snapshot",
-              pending: options.broker.listPending(),
-            })}\n\n`,
-          );
+          // Subscribe first and buffer events until the initial snapshot is enqueued so snapshot is
+          // strictly frame #1 and no events emitted during listActiveGrants() are lost.
+          let snapshotSent = false;
+          const buffered: Array<unknown> = [];
           if (!innerCtrl.signal.aborted) {
             unsubGuards = options.broker.subscribe((event) => {
+              if (!snapshotSent) {
+                buffered.push(event);
+                return;
+              }
               enqueueText(`event: guards:event\ndata: ${JSON.stringify(event)}\n\n`);
             });
           }
+          void options.broker
+            .listActiveGrants()
+            .catch(() => [])
+            .then((grants) => {
+              if (closed) return;
+              enqueueText(
+                `event: guards:event\ndata: ${JSON.stringify({
+                  type: "snapshot",
+                  pending: options.broker.listPending(),
+                  grants,
+                })}\n\n`,
+              );
+              snapshotSent = true;
+              for (const ev of buffered) {
+                if (closed) break;
+                enqueueText(`event: guards:event\ndata: ${JSON.stringify(ev)}\n\n`);
+              }
+              buffered.length = 0;
+            });
         }
 
         if (!innerCtrl.signal.aborted && options.topics.has("jobs")) {

@@ -829,3 +829,65 @@ it.effect("a pasted secret is refused without a secrets directory", () =>
     }),
   ),
 );
+
+it.effect(
+  "exposes opaque secret-grant IDs (never raw secret-ref handles), revokes both store and file, and recovers live files on restart",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "secret-grant-revoke-" });
+
+      // 1. secretRef grant uses opaque secret-grant: ID and revoke deletes the store entry.
+      yield* withService(
+        ({ service }) =>
+          Effect.gen(function* () {
+            yield* service.answer({
+              threadId,
+              turnItemId,
+              answer: { type: "save", secret: "top_secret_token" },
+            });
+            const realRef = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+            const active = yield* service.listActiveGrants();
+            assert.equal(active.length, 1);
+            assert.isTrue(active[0]!.grantId.startsWith("secret-grant:"));
+            assert.notEqual(active[0]!.grantId, realRef);
+
+            assert.isTrue(yield* service.revokeGrant(active[0]!.grantId));
+            assert.equal((yield* service.listActiveGrants()).length, 0);
+            const afterRevoke = yield* service
+              .consume({ ref: realRef, projectId })
+              .pipe(Effect.flip);
+            assert.equal(afterRevoke.reason, "ref_unavailable");
+          }),
+        { directory },
+      );
+
+      // 2. Delivered file survives restart sweep, appears in listActiveGrants, and revoke deletes the file on disk.
+      const pastedFile = yield* withService(
+        ({ service }) =>
+          service.savePasted({
+            threadId,
+            requestNamespace: "session-restart",
+            requestKey: "key-restart",
+            value: "restart_password",
+          }),
+        { directory },
+      );
+      assert.isTrue(yield* fs.exists(pastedFile));
+
+      // Fresh service instance simulates server restart: sweep must re-hydrate the live file.
+      yield* withService(
+        ({ service }) =>
+          Effect.gen(function* () {
+            const recovered = yield* service.listActiveGrants();
+            assert.equal(recovered.length, 1);
+            assert.equal(recovered[0]!.delivery, "file");
+            assert.isTrue(recovered[0]!.grantId.startsWith("secret-grant:"));
+            assert.isTrue(yield* service.revokeGrant(recovered[0]!.grantId));
+            assert.equal((yield* service.listActiveGrants()).length, 0);
+          }),
+        { directory },
+      );
+      assert.isFalse(yield* fs.exists(pastedFile));
+    }).pipe(Effect.provide(NodeServices.layer)),
+);

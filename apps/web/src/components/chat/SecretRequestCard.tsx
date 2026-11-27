@@ -197,16 +197,16 @@ function PendingSecretRequestForm(props: {
         document.getElementById(inputId(Math.max(empty, 0)))?.focus();
       }}
     >
-      <div className="flex min-w-0 flex-col gap-1">
+      <div className="flex min-w-0 flex-col gap-1.5">
         {multiple ? (
-          <p className="text-sm font-medium text-foreground">{item.label}</p>
+          <p className="text-base font-semibold text-foreground">{item.label}</p>
         ) : (
-          <label htmlFor={inputId(0)} className="text-sm font-medium text-foreground">
+          <label htmlFor={inputId(0)} className="text-base font-semibold text-foreground">
             {item.label}
           </label>
         )}
         {item.reason.trim() ? (
-          <p className="text-sm wrap-anywhere text-muted-foreground">{item.reason}</p>
+          <p className="text-sm leading-6 wrap-anywhere text-foreground/85">{item.reason}</p>
         ) : null}
       </div>
       {link !== null ? (

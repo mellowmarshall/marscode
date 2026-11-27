@@ -93,7 +93,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
             <Button
               key={option.decision}
               {...buttonProps}
-              size="xs"
+              size="sm"
               variant={option.decision === "accept" ? "default" : "outline"}
             >
               {content}

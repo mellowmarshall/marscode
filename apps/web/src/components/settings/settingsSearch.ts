@@ -37,6 +37,7 @@ export type SettingsPath =
   | "/settings/devtools"
   | "/settings/connections"
   | "/settings/access"
+  | "/settings/security"
   | "/settings/secrets"
   | "/settings/maintenance"
   | "/settings/labs"
@@ -116,6 +117,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/devtools": msg("DevTools"),
   "/settings/connections": msg("Environments"),
   "/settings/access": msg("Sharing & access"),
+  "/settings/security": msg("Security & approvals"),
   "/settings/secrets": msg("Secrets"),
   "/settings/maintenance": msg("Maintenance"),
   "/settings/labs": msg("Labs"),
@@ -175,7 +177,7 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
   },
   {
     heading: msg("Connections"),
-    paths: ["/settings/connections", "/settings/access", "/settings/secrets"],
+    paths: ["/settings/connections", "/settings/access", "/settings/security", "/settings/secrets"],
   },
   {
     heading: msg("More"),
@@ -440,11 +442,20 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "devtools-review-models",
   },
   {
-    id: "devtools-guard-alerts",
-    title: msg("Host guard alerts"),
-    to: "/settings/devtools",
-    searchTerms: [msg("host guards notification sound approval modal override")],
-    targetId: "devtools-host-guards",
+    id: "security-active-grants",
+    title: msg("Active approvals & password access"),
+    to: "/settings/security",
+    searchTerms: [
+      msg("security approvals grants revoke password secret 24h host guard diff audit exceptions"),
+    ],
+    targetId: "security-active-grants",
+  },
+  {
+    id: "security-guard-alerts",
+    title: msg("Host-guard alerts"),
+    to: "/settings/security",
+    searchTerms: [msg("host guards notification sound approval modal override security")],
+    targetId: "security-host-guards",
   },
   {
     id: "devtools-guard-timeout",
@@ -1628,6 +1639,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/devtools": "environment",
   "/settings/connections": "connections",
   "/settings/access": "connections",
+  "/settings/security": "environment",
   "/settings/secrets": null,
   "/settings/scheduled-tasks": null,
   "/settings/maintenance": null,

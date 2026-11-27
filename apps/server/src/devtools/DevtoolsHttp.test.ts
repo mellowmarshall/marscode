@@ -1606,7 +1606,13 @@ describe("DevtoolsHttp routes", () => {
         expect(ownerCheck.thread_id).toBe("thread-owner-A");
         expect(ownerCheck.approved_via).toBe("browser-session-cookie:test-user");
 
-        // Read-only scope cannot call POST mutations
+        // Read-only scope cannot call POST mutations or read privileged /guards/grants
+        const forbiddenGrants = yield* runHandler(handler, {
+          method: "GET",
+          url: "/api/devtools/guards/grants",
+          scopes: [AuthOrchestrationReadScope],
+        });
+        expect(forbiddenGrants.status).toBe(403);
         const forbiddenPost = yield* runHandler(handler, {
           method: "POST",
           url: "/api/devtools/guards/preapprove",

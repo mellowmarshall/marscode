@@ -38,8 +38,11 @@ import {
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import * as GuardGrants from "../persistence/GuardGrants.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as StorageCleanup from "../storageCleanup.ts";
 import { requestUrl } from "../requestUrl.ts";
@@ -53,6 +56,7 @@ import * as DevtoolsErrors from "./DevtoolsErrors.ts";
 import * as DevtoolsEventMux from "./DevtoolsEventMux.ts";
 import * as DevtoolsFleetConfig from "./DevtoolsFleetConfig.ts";
 import * as DevtoolsFleetConfigCache from "./DevtoolsFleetConfigCache.ts";
+import { handleGuardRoute, isGuardPrivilegedRoute } from "./DevtoolsGuardRoutes.ts";
 import { handleNativeFleetRequest } from "./fleet/FleetRoutes.ts";
 import type { NativeFleetService } from "./fleet/NativeFleetService.ts";
 import {
@@ -139,15 +143,13 @@ function requiredScopesForJsonRoute(
   readonly rejectPeerOrMcp?: boolean;
 } {
   if (
-    subPath === "/guards/pending" ||
-    subPath === "/guards/preapprove" ||
+    isGuardPrivilegedRoute(method, subPath) ||
     subPath === "/ship-queue/deps/decide" ||
     (method === "POST" &&
       (subPath === "/config" ||
         subPath === "/reaper/policy" ||
         subPath === "/storage/review" ||
-        subPath === "/storage/scan/refresh")) ||
-    /^\/guards\/requests\/[A-Za-z0-9_-]+\/resolve$/.test(subPath)
+        subPath === "/storage/scan/refresh"))
   ) {
     return {
       scopes: [AuthTerminalOperateScope, AuthAccessWriteScope],
@@ -382,8 +384,13 @@ function guardEventsSseResponse(
   const events = Stream.callback<GuardBrokerEvent>(
     (mailbox) =>
       Effect.gen(function* () {
-        Queue.offerUnsafe(mailbox, { type: "snapshot", pending: broker.listPending() });
+        let snapshotSent = false;
+        const buffered: Array<GuardBrokerEvent> = [];
         const unsubscribe = broker.subscribe((event) => {
+          if (!snapshotSent) {
+            buffered.push(event);
+            return;
+          }
           Queue.offerUnsafe(mailbox, event);
         });
         yield* Effect.addFinalizer(() =>
@@ -393,6 +400,19 @@ function guardEventsSseResponse(
             Queue.endUnsafe(mailbox);
           }),
         );
+        const grants = yield* Effect.promise(() => broker.listActiveGrants()).pipe(
+          Effect.orElseSucceed(() => []),
+        );
+        Queue.offerUnsafe(mailbox, {
+          type: "snapshot",
+          pending: broker.listPending(),
+          grants,
+        });
+        snapshotSent = true;
+        for (const ev of buffered) {
+          Queue.offerUnsafe(mailbox, ev);
+        }
+        buffered.length = 0;
       }),
     { bufferSize: 64, strategy: "dropping" },
   );
@@ -655,26 +675,13 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
     return jsonResponse(selfState);
   }
 
-  if (method === "GET" && subPath === "/guards/pending") {
-    return jsonResponse({
-      listening: broker.listening,
-      pending: broker.listPending(),
-    });
-  }
-
-  if (method === "GET" && subPath === "/guards/audit") {
-    const limit = Number(url.value.searchParams.get("limit") ?? "50");
-    return jsonResponse({
-      entries: broker.readAuditTail(Number.isFinite(limit) ? limit : 50),
-    });
-  }
-
-  if (method === "GET" && subPath === "/guards/exceptions") {
-    const raw = broker.readExceptions();
-    return jsonResponse({
-      ...raw,
-      waivers: normalizeExceptions(raw),
-    });
+  const guardResponse = yield* handleGuardRoute(method, subPath, url.value, broker, {
+    jsonResponse,
+    readJsonBody,
+    session,
+  });
+  if (guardResponse !== null) {
+    return guardResponse;
   }
 
   if (method === "GET" && subPath === "/playbook/declaration") {
@@ -696,59 +703,6 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
     }
     const waivers = normalizeExceptions(broker.readExceptions());
     return jsonResponse(readPlaybookDeclaration(repoDir, waivers));
-  }
-
-  const resolveMatch = /^\/guards\/requests\/([A-Za-z0-9_-]+)\/resolve$/.exec(subPath);
-  if (method === "POST" && resolveMatch?.[1]) {
-    const parsed = yield* readJsonBody;
-    if (!parsed.ok) return jsonResponse({ error: parsed.error }, parsed.status);
-    const decision = parsed.value.decision;
-    if (decision !== "approve" && decision !== "deny") {
-      return jsonResponse({ error: "decision must be 'approve' or 'deny'" }, 400);
-    }
-    const reason = typeof parsed.value.reason === "string" ? parsed.value.reason : undefined;
-    const result = broker.resolveRequest(resolveMatch[1], {
-      decision,
-      reason,
-      approvedVia: `${session.method}:${session.subject}`,
-    });
-    if (!result.found) {
-      return jsonResponse({ error: "Pending guard request not found or already resolved" }, 404);
-    }
-    return jsonResponse({
-      ok: true,
-      decision,
-      ...(result.grantId ? { grantId: result.grantId } : {}),
-    });
-  }
-
-  if (method === "POST" && subPath === "/guards/preapprove") {
-    const parsed = yield* readJsonBody;
-    if (!parsed.ok) return jsonResponse({ error: parsed.error }, parsed.status);
-    const guard = typeof parsed.value.guard === "string" ? parsed.value.guard : "";
-    const command = Array.isArray(parsed.value.command)
-      ? parsed.value.command.filter((x): x is string => typeof x === "string")
-      : [];
-    const cwd = typeof parsed.value.cwd === "string" ? parsed.value.cwd : "";
-    const reason = typeof parsed.value.reason === "string" ? parsed.value.reason : undefined;
-    const threadId = typeof parsed.value.threadId === "string" ? parsed.value.threadId : undefined;
-    const ttlMs = typeof parsed.value.ttlMs === "number" ? parsed.value.ttlMs : undefined;
-    if (!broker.listening) {
-      return jsonResponse({ error: "guard grant broker is not listening" }, 503);
-    }
-    const grant = broker.preapprove({
-      guard,
-      command,
-      cwd,
-      reason,
-      threadId,
-      ttlMs,
-      approvedVia: `${session.method}:${session.subject}`,
-    });
-    if (!grant.ok) {
-      return jsonResponse({ error: grant.error }, 400);
-    }
-    return jsonResponse(grant);
   }
 
   if (method === "POST" && subPath === "/devdeck/start") {
@@ -1507,11 +1461,54 @@ export function makeLayer(deps: DevtoolsDeps = {}) {
       const serverConfig = yield* Effect.serviceOption(ServerConfig.ServerConfig);
       const settingsService = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
       const trustedProviders = yield* TrustedProviderRegistry.TrustedProviderRegistry;
+      const guardGrantsRepo = yield* Effect.serviceOption(GuardGrants.GuardGrantsRepository);
+      const secretRequestsSvc = yield* Effect.serviceOption(SecretRequests.SecretRequests);
+      const pullRequestSvc = yield* Effect.serviceOption(PullRequestService.PullRequestService);
+      const services = yield* Effect.context<never>();
+      const runPromise = Effect.runPromiseWith(services);
+      const bundlePersistence = Option.isSome(guardGrantsRepo)
+        ? yield* GuardGrants.makeGuardBundlePersistenceEffect(guardGrantsRepo.value)
+        : undefined;
+      const secretGrants = Option.isSome(secretRequestsSvc)
+        ? {
+            listActiveGrants: () => runPromise(secretRequestsSvc.value.listActiveGrants()),
+            revokeGrant: (grantId: string) =>
+              runPromise(secretRequestsSvc.value.revokeGrant(grantId)),
+            subscribeGrants: secretRequestsSvc.value.subscribeGrants,
+          }
+        : undefined;
+      const signingStateDir = Option.isSome(serverConfig)
+        ? pathSvc.join(serverConfig.value.stateDir, "guards")
+        : undefined;
       const broker =
         deps.broker ??
         new GuardGrantBroker({
           getTrustedCodexAppServers: trustedProviders.snapshotCodexAppServers,
+          bundlePersistence,
+          secretGrants,
+          signingStateDir,
         });
+      if (Option.isSome(pullRequestSvc)) {
+        const merges = yield* pullRequestSvc.value.subscribeMerges;
+        yield* Effect.forkScoped(
+          Stream.runForEach(merges, (merged) =>
+            Effect.gen(function* () {
+              yield* Effect.promise(() =>
+                broker.invalidateRepoPr(merged.repository, merged.number, "pr-merged"),
+              ).pipe(Effect.ignore);
+              // Also revoke by PR head branch so grants keyed on an issue number (#6) instead of PR (#19) still clear.
+              const summary = yield* pullRequestSvc.value
+                .summary(merged)
+                .pipe(Effect.orElseSucceed(() => null));
+              if (summary?.headBranch) {
+                yield* Effect.promise(() =>
+                  broker.invalidateRepoBranch(merged.repository, summary.headBranch, "pr-merged"),
+                ).pipe(Effect.ignore);
+              }
+            }),
+          ),
+        );
+      }
       const jobRegistry = yield* JobRegistry.JobRegistry;
       const sseLimiter = createSseLimiter();
       const shouldStart = deps.startBroker ?? shouldAutoStartBroker(pathSvc, serverConfig);

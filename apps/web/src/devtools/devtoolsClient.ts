@@ -31,29 +31,23 @@ import {
 const DEVTOOLS_BASE_PATH = "/api/devtools";
 const ACCESS_RETRY_INTERVAL_MS = 10_000;
 
-export interface PendingGuardRequest {
-  readonly requestId: string;
-  readonly guard: string;
-  readonly command: ReadonlyArray<string>;
-  readonly argvSha256: string;
-  readonly cwd: string;
-  readonly refusal: string;
-  readonly proposedReason: string;
-  readonly threadId: string;
-  readonly session: string;
-  readonly pid: number;
-  readonly createdAt: string;
-  readonly expiresAt: string;
-}
+import type {
+  ActiveGuardBundleGrant,
+  ActiveSecretGrant,
+  GuardBrokerEvent,
+  GuardBundleSpec,
+  PendingGuardRequest,
+  UnifiedActiveGrant,
+} from "@t3tools/guard-protocol/protocol";
 
-export type GuardBrokerEvent =
-  | { readonly type: "snapshot"; readonly pending: ReadonlyArray<PendingGuardRequest> }
-  | { readonly type: "pending_added"; readonly request: PendingGuardRequest }
-  | {
-      readonly type: "pending_resolved";
-      readonly requestId: string;
-      readonly decision: "approved" | "denied" | "expired" | "disconnected";
-    };
+export type {
+  ActiveGuardBundleGrant,
+  ActiveSecretGrant,
+  GuardBrokerEvent,
+  GuardBundleSpec,
+  PendingGuardRequest,
+  UnifiedActiveGrant,
+};
 
 export interface DevtoolsCapabilities {
   readonly host: string;

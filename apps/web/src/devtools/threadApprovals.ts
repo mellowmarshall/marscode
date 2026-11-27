@@ -133,16 +133,47 @@ export const EMPTY_DEVTOOLS_APPROVALS: ReadonlyArray<ThreadDevtoolsApproval> = [
 
 function buildGuardApproval(req: PendingGuardRequest): ThreadDevtoolsApproval {
   const requestId = RuntimeRequestId.make(`${DEVTOOLS_GUARD_REQUEST_PREFIX}${req.requestId}`);
-  const detail = formatSafeCommandArgv(req.command);
+  const cmdText = formatSafeCommandArgv(req.command);
   const guardName = sanitizeApprovalDisplayText(req.guard, 80) || "host-guard";
   const cwd = sanitizeApprovalDisplayText(req.cwd, 120);
   const appName = cwd
     ? m(msg("Host guard ({guard}) · {cwd}"), { guard: guardName, cwd })
     : m(msg("Host guard ({guard})"), { guard: guardName });
-  const reason = sanitizeApprovalDisplayText(req.proposedReason || req.refusal, 240);
+
+  let detail = cmdText;
+  if (req.bundle) {
+    const lines: string[] = [];
+    const gateNames = req.bundle.gates
+      .map((g) => sanitizeApprovalDisplayText(g.gateId, 48))
+      .filter(Boolean);
+    if (gateNames.length > 0) {
+      lines.push(`Gates: ${gateNames.join(", ")}`);
+    }
+    if (req.bundle.protectedPaths.length > 0) {
+      lines.push(`Protected files: ${req.bundle.protectedPaths.join(", ")}`);
+    }
+    if (req.bundle.protectedDiffSha256) {
+      lines.push(`Diff SHA-256: ${req.bundle.protectedDiffSha256.slice(0, 16)}`);
+    }
+    if (req.wholeCommitGates && req.wholeCommitGates.length > 0) {
+      lines.push(
+        `Whole-commit gate (${req.wholeCommitGates.join(", ")}): applies to this commit only`,
+      );
+    }
+    if (req.bundle.diffPreview) {
+      lines.push("", req.bundle.diffPreview);
+    }
+    lines.push("", cmdText);
+    detail = lines.join("\n");
+  }
+
+  const reason = sanitizeApprovalDisplayText(req.proposedReason || req.refusal, 280);
+  const approveLabel = req.bundleEligible
+    ? m(msg("Approve for this diff"))
+    : m(msg("Approve once"));
   const options: ReadonlyArray<ProviderApprovalOption> = [
     { decision: "decline", label: m(msg("Deny")) },
-    { decision: "accept", label: m(msg("Approve once")) },
+    { decision: "accept", label: approveLabel },
   ];
   return {
     kind: "guard",
@@ -308,7 +339,9 @@ export async function respondToDevtoolsApproval(
   decision: ProviderApprovalDecision,
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: string }> {
   if (entry.kind === "guard") {
-    const apiDecision = decision === "accept" ? "approve" : "deny";
+    const apiDecision =
+      decision === "accept" || decision === "acceptForSession" ? "approve" : "deny";
+    const scope = apiDecision === "approve" && entry.guard.bundleEligible ? "bundle" : "once";
     const res = await fetchDevtoolsJson<{ readonly ok?: boolean; readonly error?: string }>(
       environmentId,
       `/guards/requests/${encodeURIComponent(entry.guard.requestId)}/resolve`,
@@ -317,7 +350,10 @@ export async function respondToDevtoolsApproval(
         body: {
           decision: apiDecision,
           ...(apiDecision === "approve"
-            ? { reason: entry.guard.proposedReason || "Approved via T3 thread approval" }
+            ? {
+                scope,
+                reason: entry.guard.proposedReason || "Approved via T3 thread approval",
+              }
             : {}),
         },
       },

@@ -18,6 +18,7 @@ import {
   respondToDevtoolsApproval,
   sanitizeApprovalDisplayText,
 } from "./threadApprovals";
+import { formatGrantBriefSummary, formatGrantRemaining } from "./ThreadGrantKeyBadge";
 import { collectDescendantSubagentIds } from "./useThreadDevtoolsApprovals";
 
 const envId = EnvironmentId.make("env-local");
@@ -384,5 +385,111 @@ describe("threadApprovals unified approval subroutine", () => {
     );
     markRepoDepsScanning(envId, "devtools", depScanKey(hold));
     markRepoDepsDeciding(envId, "devtools", depScanKey(hold));
+  });
+
+  it("renders bundled protected-diff approvals with Approve for this diff and sends scope=bundle, while whole-commit gates stay Approve once", async () => {
+    const fetchSpy = vi
+      .spyOn(devtoolsClient, "fetchDevtoolsJson")
+      .mockResolvedValue({ ok: true, status: 200, data: { ok: true } });
+
+    const bundled = makeGuard({
+      requestId: "req-bundle-1",
+      bundleEligible: true,
+      wholeCommitGates: [],
+      bundle: {
+        repo: "private-repo",
+        branch: "issue-1352",
+        prOrIssue: "#1352",
+        gates: [{ gateId: "allowlist", reason: "exceptions.json modified" }],
+        protectedPaths: ["host-guards/exceptions.json"],
+        protectedDiffSha256: "b".repeat(64),
+        bodySha256: "",
+        commitSha: "c".repeat(40),
+        diffPreview: '+  "marscode": {}',
+        summary: "allowlist (host-guards/exceptions.json)",
+      },
+    });
+    const wholeCommit = makeGuard({
+      requestId: "req-wc-1",
+      bundleEligible: false,
+      wholeCommitGates: ["no-review"],
+      bundle: {
+        repo: "private-repo",
+        branch: "issue-1352",
+        prOrIssue: "#1352",
+        gates: [{ gateId: "no-review", reason: "missing review" }],
+        protectedPaths: [],
+        protectedDiffSha256: "",
+        bodySha256: "",
+        commitSha: "c".repeat(40),
+        summary: "no-review",
+      },
+    });
+
+    const entries = deriveThreadDevtoolsApprovals({
+      threadId: "thread-A",
+      pendingGuards: [bundled, wholeCommit],
+      shipJobs: [],
+      depsRepos: [],
+      nowMs,
+    });
+    expect(entries).toHaveLength(2);
+    expect(entries[0]?.approval.detail).toContain("Gates: allowlist");
+    expect(entries[0]?.approval.detail).toContain("Protected files: host-guards/exceptions.json");
+    expect(entries[0]?.approval.options?.find((o) => o.decision === "accept")?.label).toBe(
+      "Approve for this diff",
+    );
+    expect(entries[1]?.approval.detail).toContain("Whole-commit gate (no-review)");
+    expect(entries[1]?.approval.options?.find((o) => o.decision === "accept")?.label).toBe(
+      "Approve once",
+    );
+
+    await respondToDevtoolsApproval(envId, entries[0]!, "accept");
+    expect(fetchSpy).toHaveBeenCalledWith(envId, "/guards/requests/req-bundle-1/resolve", {
+      method: "POST",
+      body: {
+        decision: "approve",
+        scope: "bundle",
+        reason: "Rebase approved by owner",
+      },
+    });
+
+    await respondToDevtoolsApproval(envId, entries[1]!, "accept");
+    expect(fetchSpy).toHaveBeenCalledWith(envId, "/guards/requests/req-wc-1/resolve", {
+      method: "POST",
+      body: {
+        decision: "approve",
+        scope: "once",
+        reason: "Rebase approved by owner",
+      },
+    });
+
+    expect(
+      formatGrantRemaining(
+        {
+          kind: "secret_access",
+          grantId: "secret-ref:aaa",
+          threadId: "thread-A",
+          projectId: "proj-1",
+          delivery: "file",
+          summary: "Sudo password",
+          createdAt: "2026-11-22T17:00:00Z",
+          expiresAt: "2026-11-23T17:00:00Z",
+        },
+        nowMs,
+      ),
+    ).toBe("23h 0m left");
+    expect(
+      formatGrantBriefSummary({
+        kind: "secret_access",
+        grantId: "secret-ref:aaa",
+        threadId: "thread-A",
+        projectId: "proj-1",
+        delivery: "file",
+        summary: "Sudo password",
+        createdAt: "2026-11-22T17:00:00Z",
+        expiresAt: "2026-11-23T17:00:00Z",
+      }),
+    ).toBe("Sudo password");
   });
 });

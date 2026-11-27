@@ -4,10 +4,10 @@
 import { useSyncExternalStore } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
 
-import type { GuardBrokerEvent, PendingGuardRequest } from "./devtoolsClient";
+import type { GuardBrokerEvent, PendingGuardRequest, UnifiedActiveGrant } from "./devtoolsClient";
 import { readDefaultFleetConsoleTab } from "./devtoolsPreferences";
 
-export type { GuardBrokerEvent, PendingGuardRequest } from "./devtoolsClient";
+export type { GuardBrokerEvent, PendingGuardRequest, UnifiedActiveGrant } from "./devtoolsClient";
 
 export type FleetConsoleSection = "machines" | "reaper";
 
@@ -29,6 +29,7 @@ export interface DevtoolsState {
   readonly selectedJobId: string | null;
   readonly selectedEnvId: EnvironmentId | null;
   readonly pendingByEnv: ReadonlyMap<EnvironmentId, ReadonlyArray<FleetGuardRequest>>;
+  readonly activeGrantsByEnv: ReadonlyMap<EnvironmentId, ReadonlyArray<UnifiedActiveGrant>>;
   readonly totalPendingCount: number;
 }
 
@@ -39,6 +40,7 @@ let state: DevtoolsState = {
   selectedJobId: null,
   selectedEnvId: null,
   pendingByEnv: new Map(),
+  activeGrantsByEnv: new Map(),
   totalPendingCount: 0,
 };
 
@@ -126,11 +128,42 @@ export function setConsoleJobId(jobId: string | null): void {
   notify();
 }
 
+export function setActiveGrantsForEnv(
+  environmentId: EnvironmentId,
+  grants: ReadonlyArray<UnifiedActiveGrant>,
+): void {
+  const next = new Map(state.activeGrantsByEnv);
+  if (grants.length === 0) {
+    next.delete(environmentId);
+  } else {
+    next.set(environmentId, grants);
+  }
+  state = { ...state, activeGrantsByEnv: next };
+  notify();
+}
+
+export function removeActiveGrant(environmentId: EnvironmentId, grantId: string): void {
+  const existing = state.activeGrantsByEnv.get(environmentId);
+  if (!existing) return;
+  const remaining = existing.filter((g) => g.grantId !== grantId);
+  if (remaining.length === existing.length) return;
+  setActiveGrantsForEnv(environmentId, remaining);
+}
+
 export function clearPendingGuardsForEnv(environmentId: EnvironmentId): void {
-  if (!state.pendingByEnv.has(environmentId)) return;
+  const hadPending = state.pendingByEnv.has(environmentId);
+  const hadGrants = state.activeGrantsByEnv.has(environmentId);
+  if (!hadPending && !hadGrants) return;
   const next = new Map(state.pendingByEnv);
   next.delete(environmentId);
-  state = { ...state, pendingByEnv: next, totalPendingCount: countTotalPending(next) };
+  const nextGrants = new Map(state.activeGrantsByEnv);
+  nextGrants.delete(environmentId);
+  state = {
+    ...state,
+    pendingByEnv: next,
+    activeGrantsByEnv: nextGrants,
+    totalPendingCount: countTotalPending(next),
+  };
   notify();
 }
 
@@ -142,7 +175,15 @@ export function applyGuardBrokerEvent(
   const existing = state.pendingByEnv.get(environmentId) ?? [];
   const added: PendingGuardRequest[] = [];
 
+  if (event.type === "grants_changed") {
+    setActiveGrantsForEnv(environmentId, event.grants);
+    return added;
+  }
+
   if (event.type === "snapshot") {
+    if (event.grants !== undefined) {
+      setActiveGrantsForEnv(environmentId, event.grants);
+    }
     if (event.pending.length === 0 && existing.length === 0) {
       return added;
     }
