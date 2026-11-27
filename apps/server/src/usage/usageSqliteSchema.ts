@@ -25,6 +25,7 @@ export interface ArchiveRootState {
   readonly lastScannedMs: number;
   readonly complete: boolean;
   readonly liveRootsKey?: string;
+  readonly sidecarFingerprint?: string;
 }
 
 export interface ArchiveDirState {
@@ -83,6 +84,7 @@ CREATE TABLE IF NOT EXISTS usage_archive_roots (
   last_scanned_ms REAL NOT NULL,
   complete INTEGER NOT NULL,
   live_roots_key TEXT NOT NULL DEFAULT '',
+  sidecar_fingerprint TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (provider, root_dir)
 );
 
@@ -138,6 +140,11 @@ export function openUsageSqliteDatabase(dbPath: string): NodeSqlite.DatabaseSync
       if (!rootCols.some((col) => col.name === "live_roots_key")) {
         db.exec(
           "ALTER TABLE usage_archive_roots ADD COLUMN live_roots_key TEXT NOT NULL DEFAULT '';",
+        );
+      }
+      if (!rootCols.some((col) => col.name === "sidecar_fingerprint")) {
+        db.exec(
+          "ALTER TABLE usage_archive_roots ADD COLUMN sidecar_fingerprint TEXT NOT NULL DEFAULT '';",
         );
       }
       const dirCols = db.prepare("PRAGMA table_info(usage_archive_dirs)").all() as Array<{

@@ -297,13 +297,22 @@ export async function listArchiveTranscriptFiles(input: {
 
     const childSubdirs: string[] = [];
     const directCandidates: string[] = [];
+    const compressedBases = new Set<string>();
+    if (fileName === undefined) {
+      for (const entry of entries) {
+        if (!entry.isDirectory() && entry.name.endsWith(".jsonl.zst")) {
+          compressedBases.add(entry.name.slice(0, -4));
+        }
+      }
+    }
     for (const entry of entries) {
       if (entry.isDirectory()) {
         childSubdirs.push(entry.name);
       } else if (
         fileName !== undefined
           ? entry.name === fileName
-          : entry.name.endsWith(".jsonl") || entry.name.endsWith(".jsonl.zst")
+          : entry.name.endsWith(".jsonl.zst") ||
+            (entry.name.endsWith(".jsonl") && !compressedBases.has(entry.name))
       ) {
         directCandidates.push(NodePath.join(dir, entry.name));
       }

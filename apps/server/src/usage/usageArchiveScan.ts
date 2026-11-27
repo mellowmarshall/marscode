@@ -14,6 +14,7 @@ import {
   isArchivePathCachedOffline,
   markArchiveOffline,
 } from "./usageArchiveFsGuard.ts";
+import { ArchiveSidecarSession, loadArchiveSidecar } from "./usageArchiveSidecar.ts";
 import { listArchiveTranscriptFiles, probeArchiveRoot } from "./usageArchiveWalk.ts";
 import type { ArchiveDirState, ArchiveRootState, UsageSqliteIndex } from "./usageSqliteIndex.ts";
 import type { TranscriptFile } from "./usageTranscriptReader.ts";
@@ -139,6 +140,7 @@ export interface ArchiveScanContext {
   readonly fromMemory: boolean;
   readonly liveDuplicateIndex: LiveDuplicateIndex | undefined;
   readonly liveRootsKey: string;
+  readonly sidecarSession: ArchiveSidecarSession;
   readonly fileCache: ScanCache;
   readonly pendingArchiveDirs: Map<string, ArchiveDirState>;
   readonly pendingArchiveRoots: Map<string, ArchiveRootState>;
@@ -239,6 +241,108 @@ export const scanArchiveTranscriptDir = Effect.fn("UsageService.scanArchiveTrans
       rootState !== undefined
         ? Math.max(retentionCutoffMs, Math.min(effectiveSinceMs, rootState.coveredSinceMs))
         : effectiveSinceMs;
+
+    // Prefer a pre-built in-place SQLite sidecar on the archive host to avoid streaming raw JSONL over CIFS/SMB.
+    const sidecar = yield* Effect.promise(() =>
+      loadArchiveSidecar({
+        session: ctx.sidecarSession,
+        provider,
+        dir,
+        format,
+        minMtimeMs: walkSinceMs,
+        nowMs,
+        previousFingerprint: rootState?.sidecarFingerprint || undefined,
+        // Avoid re-copying an unchanged sidecar over SMB even if its previous import had failedCount > 0.
+        alreadyCoversWindow:
+          rootState !== undefined && rootState.coveredSinceMs <= effectiveSinceMs,
+      }),
+    );
+    if (sidecar.kind === "timeout") {
+      return {
+        ...identity,
+        files: [] as const,
+        status: "partial" as const,
+        message: "Archive directory timed out; showing cached usage.",
+      };
+    }
+    if (sidecar.kind === "unchanged" || sidecar.kind === "loaded") {
+      let imported = 0;
+      let prunedAny = false;
+      const sidecarFailed = sidecar.kind === "loaded" ? sidecar.failedCount : 0;
+      const isComplete =
+        sidecar.kind === "loaded" ? sidecarFailed === 0 : (rootState?.complete ?? true);
+      if (sidecar.kind === "loaded") {
+        // Only prune entries superseded by .zst or predating builtAtMs; keep files newer than the sidecar.
+        for (const [filePath, entry] of fileCache) {
+          if (
+            entry.provider === provider &&
+            ctx.isWithinDirectory(filePath, dir) &&
+            !sidecar.allPaths.has(filePath) &&
+            (sidecar.allPaths.has(`${filePath}.zst`) || entry.mtimeMs < sidecar.builtAtMs)
+          ) {
+            ctx.deleteCachedFile(filePath);
+            prunedAny = true;
+          }
+        }
+        if (prunedAny) {
+          for (const [key, state] of ctx.pendingArchiveDirs) {
+            if (state.provider === provider && state.rootDir === dir) {
+              ctx.pendingArchiveDirs.delete(key);
+            }
+          }
+          yield* Effect.try({
+            try: () => index?.clearArchiveDirStates(provider, dir),
+            catch: () => undefined,
+          }).pipe(Effect.ignore);
+        }
+        for (const { path: filePath, entry } of sidecar.files) {
+          const existing = fileCache.get(filePath);
+          if (
+            existing !== undefined &&
+            existing.provider === entry.provider &&
+            existing.size === entry.size &&
+            existing.mtimeMs === entry.mtimeMs
+          ) {
+            continue;
+          }
+          ctx.setCachedFile(filePath, {
+            ...entry,
+            records: ctx.correctedBatch(entry.records),
+            tailRecords: ctx.correctedBatch(entry.tailRecords),
+          });
+          imported += 1;
+        }
+      }
+      pendingArchiveRoots.set(`${provider}\0${dir}`, {
+        provider,
+        rootDir: dir,
+        coveredSinceMs: walkSinceMs,
+        lastScannedMs: nowMs,
+        complete: isComplete,
+        liveRootsKey,
+        sidecarFingerprint: sidecar.fingerprint,
+      });
+      ctx.markDirty();
+      if (isComplete) ctx.cover(walkSinceMs);
+      yield* Effect.annotateCurrentSpan({
+        "usage.archive_sidecar": sidecar.kind,
+        "usage.files_imported": imported,
+      });
+      return {
+        ...identity,
+        files: [] as const,
+        ...(!isComplete
+          ? {
+              status: "partial" as const,
+              message:
+                sidecarFailed > 0
+                  ? `${sidecarFailed} archived transcript path(s) could not be read when indexing; usage may be incomplete.`
+                  : "Some archived transcripts could not be read when indexing; usage may be incomplete.",
+            }
+          : {}),
+      };
+    }
+
     const storedDirs = yield* Effect.try({
       try: () => index?.loadArchiveDirStates(provider, dir) ?? new Map<string, ArchiveDirState>(),
       catch: () => new Map<string, ArchiveDirState>(),

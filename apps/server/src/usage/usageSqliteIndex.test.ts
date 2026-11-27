@@ -9,6 +9,7 @@ import * as NodeSqlite from "node:sqlite";
 import type { UsageProviderKind } from "@t3tools/contracts";
 import type { TranscriptUsageFormat } from "@t3tools/provider-core/server/usage";
 import { afterEach, assert, describe, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 
 import { claudeUsageFormat } from "../provider/Drivers/claudeUsage.ts";
 import { codexUsageFormat, initialCodexScanState } from "../provider/Drivers/codexUsage.ts";
@@ -18,13 +19,30 @@ import {
   isArchivePathCachedOffline,
   runArchiveFsOp,
 } from "./usageArchiveFsGuard.ts";
-import { buildLiveDuplicateIndex, isCoveredByLiveBackup } from "./usageArchiveScan.ts";
+import {
+  buildLiveDuplicateIndex,
+  isCoveredByLiveBackup,
+  scanArchiveTranscriptDir,
+} from "./usageArchiveScan.ts";
 import {
   boundedRealPath,
   listArchiveTranscriptFiles,
   probeArchiveRoot,
 } from "./usageArchiveWalk.ts";
-import { USAGE_SQLITE_INDEX_FILE, UsageSqliteIndex } from "./usageSqliteIndex.ts";
+import {
+  ARCHIVE_SIDECAR_FILE,
+  ArchiveSidecarSession,
+  SIDECAR_SCHEMA_SQL,
+  SIDECAR_SCHEMA_VERSION,
+  loadArchiveSidecar,
+} from "./usageArchiveSidecar.ts";
+import { encodeFilePayload } from "./usageSqliteCodec.ts";
+import {
+  USAGE_SQLITE_INDEX_FILE,
+  UsageSqliteIndex,
+  type ArchiveDirState,
+  type ArchiveRootState,
+} from "./usageSqliteIndex.ts";
 import { acquireUsageSqliteIndex } from "./usageSqlitePool.ts";
 
 const tempDirs: string[] = [];
@@ -538,4 +556,342 @@ describe("listArchiveTranscriptFiles & live backup deduplication", () => {
     assert.strictEqual(first.index.loadFilesRange(formats, 0, Infinity).length, 0);
     replacement.release();
   });
+
+  it("skips uncompressed .jsonl when sibling .jsonl.zst exists and loads validated archive SQLite sidecars", async () => {
+    const hostRoot = await makeTempDir("usage-archive-sidecar-host");
+    const codexDir = NodePath.join(hostRoot, "codex");
+    await NodeFSP.mkdir(NodePath.join(codexDir, "2026", "02"), { recursive: true });
+    await NodeFSP.writeFile(NodePath.join(codexDir, "2026", "02", "r1.jsonl"), "{}\n");
+    await NodeFSP.writeFile(NodePath.join(codexDir, "2026", "02", "r1.jsonl.zst"), "zst");
+    await NodeFSP.writeFile(NodePath.join(codexDir, "2026", "02", "r2.jsonl"), "{}\n");
+
+    const walk = await listArchiveTranscriptFiles({
+      provider: "codex",
+      root: codexDir,
+      sinceMs: 0,
+      knownDirs: new Map(),
+      nowMs: Date.parse("2026-06-01T00:00:00Z"),
+    });
+    assert.deepStrictEqual(walk.files.map((f) => NodePath.basename(f.path)).toSorted(), [
+      "r1.jsonl.zst",
+      "r2.jsonl",
+    ]);
+
+    // Build a sidecar DB in hostRoot with one valid codex row, one traversal row, and schema v1 metadata.
+    const sidecarPath = NodePath.join(hostRoot, ARCHIVE_SIDECAR_FILE);
+    const builtAtMs = Date.parse("2026-03-01T00:00:00Z");
+    const db = new NodeSqlite.DatabaseSync(sidecarPath);
+    try {
+      db.exec(`PRAGMA user_version = ${SIDECAR_SCHEMA_VERSION};`);
+      db.exec(SIDECAR_SCHEMA_SQL);
+      const insertMeta = db.prepare("INSERT INTO usage_meta (key, value_json) VALUES (?, ?)");
+      insertMeta.run("builtAtMs", JSON.stringify(builtAtMs));
+      insertMeta.run("coveredSubdirs", JSON.stringify(["codex"]));
+      insertMeta.run("coveredProviders", JSON.stringify(["codex"]));
+      insertMeta.run("failedBySubdir", JSON.stringify({ codex: 0 }));
+      insertMeta.run("failedByProvider", JSON.stringify({ codex: 0 }));
+      const entry: CachedFile = {
+        size: 123,
+        mtimeMs: Date.parse("2026-02-16T00:00:00Z"),
+        provider: "codex",
+        records: [
+          {
+            provider: "codex",
+            timestampMs: Date.parse("2026-02-16T00:00:00Z"),
+            model: "gpt-5.3-codex",
+            sessionId: "s-sidecar",
+            totals: {
+              uncachedInputTokens: 100,
+              cachedInputTokens: 200,
+              cacheCreationTokens: 0,
+              outputTokens: 50,
+              reasoningTokens: 10,
+            },
+            reportedCostUsd: null,
+            speed: "standard",
+            dedupeKey: null,
+          },
+        ],
+        tailRecords: [],
+        malformedRecords: [],
+        position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
+      };
+      const payload = encodeFilePayload(entry);
+      const insert = db.prepare(
+        "INSERT INTO usage_files (path, provider, size, mtime_ms, order_idx, payload) VALUES (?, ?, ?, ?, ?, ?)",
+      );
+      insert.run("codex/2026/02/r1.jsonl.zst", "codex", entry.size, entry.mtimeMs, 1, payload);
+      insert.run("codex/../escape.jsonl", "codex", entry.size, entry.mtimeMs, 2, payload);
+    } finally {
+      db.close();
+    }
+
+    const session = new ArchiveSidecarSession();
+    try {
+      // Uncovered sibling subdir must return absent so fallback raw walk runs instead of dropping history.
+      const uncoveredDir = NodePath.join(hostRoot, "codex-custom");
+      await NodeFSP.mkdir(uncoveredDir, { recursive: true });
+      const uncovered = await loadArchiveSidecar({
+        session,
+        provider: "codex",
+        dir: uncoveredDir,
+        format: codexUsageFormat,
+        minMtimeMs: 0,
+        nowMs: Date.parse("2026-06-01T00:00:00Z"),
+        previousFingerprint: undefined,
+        alreadyCoversWindow: false,
+      });
+      assert.strictEqual(uncovered.kind, "absent");
+
+      const first = await loadArchiveSidecar({
+        session,
+        provider: "codex",
+        dir: codexDir,
+        format: codexUsageFormat,
+        minMtimeMs: 0,
+        nowMs: Date.parse("2026-06-01T00:00:00Z"),
+        previousFingerprint: undefined,
+        alreadyCoversWindow: false,
+      });
+      assert.strictEqual(first.kind, "loaded");
+      if (first.kind === "loaded") {
+        assert.strictEqual(first.files.length, 1);
+        assert.strictEqual(
+          first.files[0]?.path,
+          NodePath.join(codexDir, "2026", "02", "r1.jsonl.zst"),
+        );
+        assert.isTrue(first.allPaths.has(NodePath.join(codexDir, "2026", "02", "r1.jsonl.zst")));
+        assert.strictEqual(first.failedCount, 0);
+        const second = await loadArchiveSidecar({
+          session,
+          provider: "codex",
+          dir: codexDir,
+          format: codexUsageFormat,
+          minMtimeMs: 0,
+          nowMs: Date.parse("2026-06-01T00:00:00Z"),
+          previousFingerprint: first.fingerprint,
+          alreadyCoversWindow: true,
+        });
+        assert.strictEqual(second.kind, "unchanged");
+      }
+
+      // Root-level sidecar covering only codex must return absent for claude (never wipe cache).
+      const rootClaude = await loadArchiveSidecar({
+        session,
+        provider: "claude",
+        dir: hostRoot,
+        format: claudeUsageFormat,
+        minMtimeMs: 0,
+        nowMs: Date.parse("2026-06-01T00:00:00Z"),
+        previousFingerprint: undefined,
+        alreadyCoversWindow: false,
+      });
+      assert.strictEqual(rootClaude.kind, "absent");
+    } finally {
+      await session.dispose();
+    }
+  });
+
+  it.effect(
+    "preserves newer cached files during sidecar pruning, clears dir state, and avoids re-copying unchanged partial sidecars",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* Effect.promise(() => makeTempDir("usage-archive-scan-state"));
+        const hostRoot = yield* Effect.promise(() => makeTempDir("usage-archive-scan-host"));
+        const codexDir = NodePath.join(hostRoot, "codex");
+        yield* Effect.promise(() =>
+          NodeFSP.mkdir(NodePath.join(codexDir, "2026", "02"), { recursive: true }),
+        );
+
+        const builtAtMs = Date.parse("2026-03-01T00:00:00Z");
+        const olderMs = Date.parse("2026-02-15T00:00:00Z");
+        const newerMs = Date.parse("2026-03-10T00:00:00Z");
+
+        const makeEntry = (mtimeMs: number, sessionId: string): CachedFile => ({
+          size: 100,
+          mtimeMs,
+          provider: "codex",
+          records: [
+            {
+              provider: "codex",
+              timestampMs: mtimeMs,
+              model: "gpt-5.3-codex",
+              sessionId,
+              totals: {
+                uncachedInputTokens: 10,
+                cachedInputTokens: 20,
+                cacheCreationTokens: 0,
+                outputTokens: 5,
+                reasoningTokens: 0,
+              },
+              reportedCostUsd: null,
+              speed: "standard",
+              dedupeKey: null,
+            },
+          ],
+          tailRecords: [],
+          malformedRecords: [],
+          position: { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
+        });
+
+        const sidecarPath = NodePath.join(hostRoot, ARCHIVE_SIDECAR_FILE);
+        const db = new NodeSqlite.DatabaseSync(sidecarPath);
+        try {
+          db.exec(`PRAGMA user_version = ${SIDECAR_SCHEMA_VERSION};`);
+          db.exec(SIDECAR_SCHEMA_SQL);
+          const insertMeta = db.prepare("INSERT INTO usage_meta (key, value_json) VALUES (?, ?)");
+          insertMeta.run("builtAtMs", JSON.stringify(builtAtMs));
+          insertMeta.run("coveredSubdirs", JSON.stringify(["codex"]));
+          insertMeta.run("coveredProviders", JSON.stringify(["codex"]));
+          insertMeta.run("failedBySubdir", JSON.stringify({ codex: 1 }));
+          insertMeta.run("failedByProvider", JSON.stringify({ codex: 1 }));
+          const zstEntry = makeEntry(olderMs, "s-zst");
+          db.prepare(
+            "INSERT INTO usage_files (path, provider, size, mtime_ms, order_idx, payload) VALUES (?, ?, ?, ?, ?, ?)",
+          ).run(
+            "codex/2026/02/r1.jsonl.zst",
+            "codex",
+            zstEntry.size,
+            zstEntry.mtimeMs,
+            1,
+            encodeFilePayload(zstEntry),
+          );
+        } finally {
+          db.close();
+        }
+
+        const index = new UsageSqliteIndex(stateDir);
+        const supersededPath = NodePath.join(codexDir, "2026", "02", "r1.jsonl");
+        const newerCachedPath = NodePath.join(codexDir, "2026", "02", "r-new.jsonl");
+        const zstPath = NodePath.join(codexDir, "2026", "02", "r1.jsonl.zst");
+
+        const fileCache = new Map<string, CachedFile>([
+          [supersededPath, makeEntry(olderMs, "s-old-raw")],
+          [newerCachedPath, makeEntry(newerMs, "s-newer-than-sidecar")],
+        ]);
+        index.flushTranscriptChanges({
+          upserts: new Map(),
+          deletes: new Set(),
+          archiveDirs: [
+            {
+              provider: "codex",
+              dirPath: NodePath.join(codexDir, "2026", "02"),
+              rootDir: codexDir,
+              dirMtimeMs: olderMs,
+              coveredSinceMs: 0,
+              childSubdirs: [],
+              complete: true,
+            },
+          ],
+          archiveRoots: [],
+          sources: {},
+          coveredSince: {},
+        });
+
+        const pendingArchiveDirs = new Map<string, ArchiveDirState>();
+        const pendingArchiveRoots = new Map<string, ArchiveRootState>();
+        const isWithinDirectory = (filePath: string, rootDir: string) =>
+          filePath.startsWith(`${rootDir}${NodePath.sep}`);
+        const session = new ArchiveSidecarSession();
+        const freshSession = new ArchiveSidecarSession();
+        yield* Effect.gen(function* () {
+          const first = yield* scanArchiveTranscriptDir({
+            provider: "codex",
+            format: codexUsageFormat,
+            dir: codexDir,
+            volumeId: "v1",
+            physicalSourceId: undefined,
+            fileName: undefined,
+            windowStartMs: 0,
+            retentionCutoffMs: 0,
+            fromMemory: false,
+            liveDuplicateIndex: undefined,
+            liveRootsKey: "",
+            sidecarSession: session,
+            fileCache,
+            pendingArchiveDirs,
+            pendingArchiveRoots,
+            getSqliteIndex: () => index,
+            isWithinDirectory,
+            isLaterRead: () => true,
+            correctedBatch: (records) => records,
+            setCachedFile: (path, entry) => {
+              fileCache.set(path, entry);
+            },
+            deleteCachedFile: (path) => fileCache.delete(path),
+            markDirty: () => undefined,
+            cover: () => undefined,
+            readFileRecords: () => Effect.die("raw read must not run when sidecar loads"),
+          });
+
+          // Superseded .jsonl is pruned, .jsonl.zst is imported, and file newer than builtAtMs survives!
+          assert.isFalse(fileCache.has(supersededPath));
+          assert.isTrue(fileCache.has(zstPath));
+          assert.isTrue(fileCache.has(newerCachedPath));
+          assert.strictEqual("status" in first ? first.status : undefined, "partial");
+          // Archive dir states were cleared when pruning so removing the sidecar triggers a fresh walk.
+          assert.strictEqual(index.loadArchiveDirStates("codex", codexDir).size, 0);
+
+          // Persist root state and run second scan with same fingerprint: hits unchanged (partial preserved) without re-copying.
+          const savedRoot = pendingArchiveRoots.get(`codex\0${codexDir}`)!;
+          assert.strictEqual(savedRoot.complete, false);
+          index.flushTranscriptChanges({
+            upserts: new Map(),
+            deletes: new Set(),
+            archiveDirs: [],
+            archiveRoots: [savedRoot],
+            sources: {},
+            coveredSince: {},
+          });
+
+          let secondCopyCalls = 0;
+          const noCopySession = {
+            getLocalCopy: (...args: Parameters<ArchiveSidecarSession["getLocalCopy"]>) => {
+              secondCopyCalls += 1;
+              return freshSession.getLocalCopy(...args);
+            },
+            dispose: () => freshSession.dispose(),
+          } as unknown as ArchiveSidecarSession;
+
+          const second = yield* scanArchiveTranscriptDir({
+            provider: "codex",
+            format: codexUsageFormat,
+            dir: codexDir,
+            volumeId: "v1",
+            physicalSourceId: undefined,
+            fileName: undefined,
+            windowStartMs: 0,
+            retentionCutoffMs: 0,
+            fromMemory: false,
+            liveDuplicateIndex: undefined,
+            liveRootsKey: "",
+            sidecarSession: noCopySession,
+            fileCache,
+            pendingArchiveDirs,
+            pendingArchiveRoots,
+            getSqliteIndex: () => index,
+            isWithinDirectory,
+            isLaterRead: () => true,
+            correctedBatch: (records) => records,
+            setCachedFile: (path, entry) => {
+              fileCache.set(path, entry);
+            },
+            deleteCachedFile: (path) => fileCache.delete(path),
+            markDirty: () => undefined,
+            cover: () => undefined,
+            readFileRecords: () => Effect.die("raw read must not run on unchanged sidecar"),
+          });
+          assert.strictEqual("status" in second ? second.status : undefined, "partial");
+          assert.strictEqual(secondCopyCalls, 0);
+        }).pipe(
+          Effect.ensuring(
+            Effect.promise(async () => {
+              await freshSession.dispose();
+              await session.dispose();
+              index.close();
+            }),
+          ),
+        );
+      }),
+  );
 });

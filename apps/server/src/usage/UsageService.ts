@@ -72,6 +72,7 @@ import {
   scanArchiveTranscriptDir,
   type LiveDuplicateIndex,
 } from "./usageArchiveScan.ts";
+import { ArchiveSidecarSession } from "./usageArchiveSidecar.ts";
 import {
   ARCHIVE_PROBE_TIMEOUT_MS,
   isArchivePathCachedOffline,
@@ -969,6 +970,7 @@ export const make = Effect.gen(function* () {
     _awaitRefresh: boolean,
     liveDuplicateIndex?: LiveDuplicateIndex,
     liveRootsKey?: string,
+    sidecarSession?: ArchiveSidecarSession,
   ) {
     const { provider, format, dir, volumeId, physicalSourceId, fileName, archive } = source;
     const identity = {
@@ -980,6 +982,7 @@ export const make = Effect.gen(function* () {
 
     // Cold archive roots skip re-walking while fresh and fall back cleanly to SQLite when offline.
     if (archive) {
+      const ownedSession = sidecarSession === undefined ? new ArchiveSidecarSession() : undefined;
       return yield* scanArchiveTranscriptDir({
         provider,
         format,
@@ -992,6 +995,7 @@ export const make = Effect.gen(function* () {
         fromMemory,
         liveDuplicateIndex,
         liveRootsKey: liveRootsKey ?? "",
+        sidecarSession: sidecarSession ?? ownedSession!,
         fileCache,
         pendingArchiveDirs,
         pendingArchiveRoots,
@@ -1006,7 +1010,11 @@ export const make = Effect.gen(function* () {
         },
         cover: (sinceMs) => cover(source, sinceMs),
         readFileRecords,
-      });
+      }).pipe(
+        Effect.ensuring(
+          ownedSession === undefined ? Effect.void : Effect.promise(() => ownedSession.dispose()),
+        ),
+      );
     }
 
     const exists = yield* fileSystem
@@ -1135,22 +1143,26 @@ export const make = Effect.gen(function* () {
       const liveDuplicateIndex = hasArchive
         ? buildLiveDuplicateIndex(fileCache, liveRootsByProvider)
         : undefined;
-      for (const [index, dir] of dirs.entries()) {
-        if (!dir.archive) continue;
-        const liveRootsKey = [...(liveRootsByProvider.get(dir.provider) ?? [])]
-          .toSorted()
-          .join("\0");
-        results[index] = yield* scanTranscriptDir(
-          dir,
-          windowStartMs,
-          retentionCutoffMs,
-          fromMemory,
-          awaitRefresh,
-          liveDuplicateIndex,
-          liveRootsKey,
-        );
-      }
-      return results;
+      const sidecarSession = new ArchiveSidecarSession();
+      return yield* Effect.gen(function* () {
+        for (const [index, dir] of dirs.entries()) {
+          if (!dir.archive) continue;
+          const liveRootsKey = [...(liveRootsByProvider.get(dir.provider) ?? [])]
+            .toSorted()
+            .join("\0");
+          results[index] = yield* scanTranscriptDir(
+            dir,
+            windowStartMs,
+            retentionCutoffMs,
+            fromMemory,
+            awaitRefresh,
+            liveDuplicateIndex,
+            liveRootsKey,
+            sidecarSession,
+          );
+        }
+        return results;
+      }).pipe(Effect.ensuring(Effect.promise(() => sidecarSession.dispose())));
     });
 
     // Scan independent sources together, directories sequentially to bound open files; keep order, since the first copy decides a duplicate's bucket.

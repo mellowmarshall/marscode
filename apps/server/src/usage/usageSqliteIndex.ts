@@ -258,8 +258,8 @@ export class UsageSqliteIndex {
          has_live_skips = excluded.has_live_skips`,
     );
     const upsertRootStmt = this.#db.prepare(
-      `INSERT INTO usage_archive_roots (provider, root_dir, covered_since_ms, last_scanned_ms, complete, live_roots_key)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO usage_archive_roots (provider, root_dir, covered_since_ms, last_scanned_ms, complete, live_roots_key, sidecar_fingerprint)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(provider, root_dir) DO UPDATE SET
          covered_since_ms = CASE
            WHEN excluded.complete = 1 THEN MIN(usage_archive_roots.covered_since_ms, excluded.covered_since_ms)
@@ -267,7 +267,8 @@ export class UsageSqliteIndex {
          END,
          last_scanned_ms = excluded.last_scanned_ms,
          complete = excluded.complete,
-         live_roots_key = excluded.live_roots_key`,
+         live_roots_key = excluded.live_roots_key,
+         sidecar_fingerprint = excluded.sidecar_fingerprint`,
     );
     const upsertMetaStmt = this.#db.prepare(
       "INSERT INTO usage_meta (key, value_json) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
@@ -312,6 +313,7 @@ export class UsageSqliteIndex {
           root.lastScannedMs,
           root.complete ? 1 : 0,
           root.liveRootsKey ?? "",
+          root.sidecarFingerprint ?? "",
         );
       }
       upsertMetaStmt.run("sources", JSON.stringify(input.sources));
@@ -358,7 +360,7 @@ export class UsageSqliteIndex {
     if (this.#closed) return undefined;
     const row = this.#db
       .prepare(
-        "SELECT covered_since_ms, last_scanned_ms, complete, live_roots_key FROM usage_archive_roots WHERE provider = ? AND root_dir = ?",
+        "SELECT covered_since_ms, last_scanned_ms, complete, live_roots_key, sidecar_fingerprint FROM usage_archive_roots WHERE provider = ? AND root_dir = ?",
       )
       .get(provider, rootDir) as
       | {
@@ -366,6 +368,7 @@ export class UsageSqliteIndex {
           last_scanned_ms: number;
           complete: number;
           live_roots_key: string;
+          sidecar_fingerprint: string;
         }
       | undefined;
     if (row === undefined) return undefined;
@@ -376,6 +379,7 @@ export class UsageSqliteIndex {
       lastScannedMs: row.last_scanned_ms,
       complete: row.complete === 1,
       liveRootsKey: row.live_roots_key,
+      sidecarFingerprint: row.sidecar_fingerprint,
     };
   }
 
@@ -416,6 +420,13 @@ export class UsageSqliteIndex {
       }
     }
     return out;
+  }
+
+  clearArchiveDirStates(provider: UsageProviderKind, rootDir: string): void {
+    if (this.#closed) return;
+    this.#db
+      .prepare("DELETE FROM usage_archive_dirs WHERE provider = ? AND root_dir = ?")
+      .run(provider, rootDir);
   }
 
   loadAntigravityCache(): Map<string, AntigravityCachedPayload> {
