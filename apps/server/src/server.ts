@@ -564,6 +564,7 @@ const layerDevice = DeviceService.layer.pipe(
   Layer.provide(layerServerSettings),
   Layer.provide(ProcessRunner.layer),
   Layer.provide(NetService.layer),
+  Layer.provide(Scheduler.layer),
 );
 
 const layerWorkspaceEntries = WorkspaceEntries.layer.pipe(Layer.provide(WorkspacePaths.layer));

@@ -36,6 +36,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as DeviceHost from "./DeviceHost.ts";
 import { makeDeviceHubOperations } from "./DeviceHubOperations.ts";
@@ -2535,5 +2536,250 @@ describe("exclusive device leases", () => {
       });
       expect((yield* open(service, waiting, "R52T10ABCDE")).deviceId).toBe("R52T10ABCDE");
     }),
+  );
+});
+
+describe("periodic expired lease reaper", () => {
+  const holder = ThreadId.make("holder");
+  const waiting = ThreadId.make("waiting");
+  const open = (
+    service: DeviceService.DeviceService["Service"],
+    threadId: ThreadId,
+    deviceId = "Pixel_API_35",
+  ) => service.open({ threadId, deviceId, platform: "android" });
+
+  it.effect(
+    "closes and shuts down expired idle emulator leases on schedule, freeing device and host slot",
+    () =>
+      Effect.gen(function* () {
+        const { service, devices, requests } = yield* fixture(
+          Effect.void,
+          undefined,
+          false,
+          undefined,
+          false,
+          undefined,
+          {
+            leaseOptions: { ttl: Duration.minutes(10), maxLocalEmulators: 1 },
+          },
+        );
+        devices.push(
+          {
+            id: "Pixel_API_36",
+            name: "Pixel_API_36",
+            platform: "android",
+            version: "Android 16",
+            booted: false,
+            physical: false,
+          },
+          {
+            id: "R52T10ABCDE",
+            name: "Galaxy",
+            platform: "android",
+            version: "Android 14",
+            booted: true,
+            physical: true,
+          },
+        );
+        yield* service.configure({ enabled: true });
+        const emuSession = yield* open(service, holder);
+        yield* open(service, holder, "R52T10ABCDE");
+
+        // Host slot is full before expiry.
+        expect(yield* open(service, waiting, "Pixel_API_36").pipe(Effect.flip)).toMatchObject({
+          _tag: "DeviceLeaseUnavailableError",
+          reason: "host_limit",
+          limit: 1,
+        });
+
+        const subscription = yield* service.subscribe;
+
+        // First 5-minute sweep runs before TTL expires: nothing is shut down.
+        yield* TestClock.adjust("5 minutes");
+        yield* Effect.yieldNow;
+        expect(requests.some((url) => url.endsWith("/shutdown"))).toBe(false);
+        expect((yield* service.state).sessions.map((entry) => entry.deviceId)).toContain(
+          emuSession.deviceId,
+        );
+
+        // At 10 minutes, the scheduled sweep reaps the expired idle emulator automatically.
+        yield* TestClock.adjust("5 minutes");
+        while (
+          (yield* service.state).sessions.some((entry) => entry.deviceId === emuSession.deviceId)
+        ) {
+          yield* PubSub.take(subscription);
+        }
+
+        expect(requests.filter((url) => url.endsWith("/shutdown"))).toHaveLength(1);
+        // Physical devices are never reaped by the emulator lease sweep.
+        expect((yield* service.state).sessions.map((entry) => entry.deviceId)).toEqual([
+          "R52T10ABCDE",
+        ]);
+        // Both the maxLocalEmulators slot and the device itself are now free without preemption.
+        const nextSession = yield* open(service, waiting, "Pixel_API_36");
+        expect(nextSession.threadId).toBe(waiting);
+        yield* service.close({ threadId: waiting, shutdown: true });
+        const reopened = yield* open(service, waiting, "Pixel_API_35");
+        expect(reopened.threadId).toBe(waiting);
+      }).pipe(Effect.provide(Scheduler.layer)),
+  );
+
+  it.effect("keeps active and recently renewed emulator leases open across scheduled sweeps", () =>
+    Effect.gen(function* () {
+      const { service, requests } = yield* fixture(
+        Effect.void,
+        undefined,
+        false,
+        undefined,
+        false,
+        undefined,
+        {
+          leaseOptions: { ttl: Duration.minutes(10), maxLocalEmulators: 1 },
+        },
+      );
+      yield* service.configure({ enabled: true, agentAccessEnabled: true });
+      const session = yield* open(service, holder);
+      const subscription = yield* service.subscribe;
+
+      // Renew via agentTarget at 6m (extends expiry to 16m), then advance past the original 10m TTL.
+      yield* TestClock.adjust("6 minutes");
+      yield* service.agentTarget({
+        threadId: holder,
+        hostId: LOCAL_DEVICE_HOST_ID,
+        deviceId: session.deviceId,
+      });
+      yield* TestClock.adjust("6 minutes");
+      yield* Effect.yieldNow;
+      expect(requests.some((url) => url.endsWith("/shutdown"))).toBe(false);
+      expect((yield* service.state).sessions.map((entry) => entry.deviceId)).toEqual([
+        session.deviceId,
+      ]);
+
+      // Renew via open heartbeat at 12m (extends expiry to 22m), then advance past 15m sweep.
+      yield* open(service, holder, session.deviceId);
+      yield* TestClock.adjust("6 minutes");
+      yield* Effect.yieldNow;
+      expect(requests.some((url) => url.endsWith("/shutdown"))).toBe(false);
+      expect(yield* open(service, waiting, session.deviceId).pipe(Effect.flip)).toMatchObject({
+        _tag: "DeviceLeaseUnavailableError",
+        reason: "held",
+        holders: [{ threadId: holder }],
+      });
+
+      // Once truly idle past the renewed TTL (22m), the next sweep (25m) reaps it.
+      yield* TestClock.adjust("7 minutes");
+      while ((yield* service.state).sessions.some((entry) => entry.deviceId === session.deviceId)) {
+        yield* PubSub.take(subscription);
+      }
+      expect(requests.filter((url) => url.endsWith("/shutdown"))).toHaveLength(1);
+    }).pipe(Effect.provide(Scheduler.layer)),
+  );
+
+  it.effect("serializes renewals with the sweep so a session is never left half torn down", () =>
+    Effect.gen(function* () {
+      const closeStarted = yield* Deferred.make<void>();
+      const allowClose = yield* Deferred.make<void>();
+      let gateClose = true;
+      let agentReleases = 0;
+      const { service, requests } = yield* fixture(
+        Effect.void,
+        undefined,
+        false,
+        undefined,
+        false,
+        undefined,
+        {
+          leaseOptions: { ttl: Duration.minutes(10), sweepInterval: Duration.minutes(5) },
+          onClose: Effect.gen(function* () {
+            agentReleases += 1;
+            if (gateClose) {
+              gateClose = false;
+              yield* Deferred.succeed(closeStarted, undefined);
+              yield* Deferred.await(allowClose);
+            }
+            return "ok" as const;
+          }),
+        },
+      );
+      yield* service.configure({ enabled: true, agentAccessEnabled: true });
+      const session = yield* open(service, holder);
+      yield* service.agentTarget({
+        threadId: holder,
+        hostId: LOCAL_DEVICE_HOST_ID,
+        deviceId: session.deviceId,
+      });
+
+      // Renew just before TTL: the 10-minute sweep must skip teardown completely (zero agent releases, zero shutdowns).
+      yield* TestClock.adjust("9 minutes");
+      yield* service.agentTarget({
+        threadId: holder,
+        hostId: LOCAL_DEVICE_HOST_ID,
+        deviceId: session.deviceId,
+      });
+      yield* TestClock.adjust("1 minute");
+      yield* Effect.yieldNow;
+      expect(agentReleases).toBe(0);
+      expect(requests.some((url) => url.endsWith("/shutdown"))).toBe(false);
+
+      // Advance past the renewed TTL (19m -> 20m sweep) so the sweep takes lifecycleLock and begins teardown.
+      yield* TestClock.adjust("10 minutes");
+      yield* Deferred.await(closeStarted);
+
+      // A concurrent open() must wait on lifecycleLock until the sweep completes its full teardown,
+      // then cleanly boot and hold a fresh session rather than leaving a half-torn-down one.
+      const renewingOpen = yield* Effect.forkChild(open(service, holder));
+      yield* Effect.yieldNow;
+      expect(requests.filter((url) => url.endsWith("/shutdown"))).toHaveLength(0);
+
+      yield* Deferred.succeed(allowClose, undefined);
+      const reopened = yield* Fiber.join(renewingOpen);
+      expect(reopened.deviceId).toBe(session.deviceId);
+      expect(agentReleases).toBe(1);
+      expect(requests.filter((url) => url.endsWith("/shutdown"))).toHaveLength(1);
+      expect((yield* service.state).sessions.map((entry) => entry.deviceId)).toEqual([
+        session.deviceId,
+      ]);
+      expect(yield* open(service, waiting, session.deviceId).pipe(Effect.flip)).toMatchObject({
+        _tag: "DeviceLeaseUnavailableError",
+        reason: "held",
+        holders: [{ threadId: holder }],
+      });
+    }).pipe(Effect.provide(Scheduler.layer)),
+  );
+
+  it.effect("retries reaping on the next scheduled sweep after a transient shutdown failure", () =>
+    Effect.gen(function* () {
+      const { service, connection, requests } = yield* fixture(
+        Effect.void,
+        undefined,
+        false,
+        undefined,
+        false,
+        undefined,
+        {
+          leaseOptions: { ttl: Duration.minutes(10), maxLocalEmulators: 1 },
+        },
+      );
+      yield* service.configure({ enabled: true });
+      const session = yield* open(service, holder);
+      const subscription = yield* service.subscribe;
+
+      // First sweep hits a shutdown failure: session and lease stay intact and scheduler keeps running.
+      connection.failShutdown = true;
+      yield* TestClock.adjust("10 minutes");
+      yield* Effect.yieldNow;
+      expect((yield* service.state).sessions.map((entry) => entry.deviceId)).toEqual([
+        session.deviceId,
+      ]);
+
+      // Once the host recovers, the next 5-minute sweep shuts down and frees the lease.
+      connection.failShutdown = false;
+      yield* TestClock.adjust("5 minutes");
+      while ((yield* service.state).sessions.some((entry) => entry.deviceId === session.deviceId)) {
+        yield* PubSub.take(subscription);
+      }
+      expect(requests.filter((url) => url.endsWith("/shutdown")).length).toBeGreaterThanOrEqual(2);
+      expect((yield* service.state).sessions).toEqual([]);
+    }).pipe(Effect.provide(Scheduler.layer)),
   );
 });

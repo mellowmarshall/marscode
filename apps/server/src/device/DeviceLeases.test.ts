@@ -203,4 +203,72 @@ describe("makeDeviceLeases", () => {
       expect((yield* leases.holders).map((holder) => holder.threadId)).toEqual([a]);
     }),
   );
+
+  it.effect("lists only active expired emulator leases and re-checks exact lease identity", () =>
+    Effect.gen(function* () {
+      const leases = makeDeviceLeases({ ttl: Duration.minutes(5) });
+      const older = yield* leases.acquire(request(a, serial));
+      leases.activate(older.lease);
+      yield* TestClock.adjust("1 minute");
+      const newer = yield* leases.acquire(request(b, DeviceId.make("emulator-5556")));
+      leases.activate(newer.lease);
+      const booting = yield* leases.acquire(request(a, DeviceId.make("Pixel_API_36")));
+      const physical = yield* leases.acquire({
+        ...request(b, DeviceId.make("R52T10ABCDE")),
+        emulator: false,
+      });
+      leases.activate(physical.lease);
+
+      // Before TTL, nothing is expired.
+      yield* TestClock.adjust("3 minutes");
+      expect(yield* leases.expiredLeases).toEqual([]);
+      expect(yield* leases.isExpired(older.lease)).toBe(false);
+
+      // At 5 minutes since `older` (4 minutes since `newer`), only `older` is expired.
+      yield* TestClock.adjust("1 minute");
+      expect((yield* leases.expiredLeases).map((lease) => lease.deviceId)).toEqual([serial]);
+      expect(yield* leases.isExpired(older.lease)).toBe(true);
+      expect(yield* leases.isExpired(newer.lease)).toBe(false);
+      expect(yield* leases.isExpired(booting.lease)).toBe(false);
+      expect(yield* leases.isExpired(physical.lease)).toBe(false);
+
+      // At 6 minutes, both active emulator leases are expired, ordered oldest renewal first.
+      yield* TestClock.adjust("1 minute");
+      expect((yield* leases.expiredLeases).map((lease) => lease.deviceId)).toEqual([
+        serial,
+        DeviceId.make("emulator-5556"),
+      ]);
+
+      // Renewing `older` immediately clears its expired status.
+      yield* leases.renew(older.lease);
+      expect(yield* leases.isExpired(older.lease)).toBe(false);
+      expect((yield* leases.expiredLeases).map((lease) => lease.deviceId)).toEqual([
+        DeviceId.make("emulator-5556"),
+      ]);
+
+      // Replacing a released lease with a new one invalidates the stale lease handle.
+      yield* leases.release(newer.lease);
+      const replacement = yield* leases.acquire(request(b, DeviceId.make("emulator-5556")));
+      leases.activate(replacement.lease);
+      yield* TestClock.adjust("5 minutes");
+      expect(yield* leases.isExpired(newer.lease)).toBe(false);
+      expect(yield* leases.isExpired(replacement.lease)).toBe(true);
+    }),
+  );
+
+  it.effect("renews a bound serial lease when called with the original AVD id", () =>
+    Effect.gen(function* () {
+      const leases = makeDeviceLeases({ ttl: Duration.minutes(5) });
+      const avd = DeviceId.make("Pixel_API_36");
+      const grant = yield* leases.acquire(request(a, avd));
+      yield* leases.bind(grant.lease, serial);
+      leases.activate(grant.lease);
+
+      yield* TestClock.adjust("4 minutes");
+      yield* leases.renew({ threadId: a, hostId: LOCAL_DEVICE_HOST_ID, deviceId: avd });
+      yield* TestClock.adjust("2 minutes");
+      expect(yield* leases.isExpired(grant.lease)).toBe(false);
+      expect(yield* leases.expiredLeases).toEqual([]);
+    }),
+  );
 });

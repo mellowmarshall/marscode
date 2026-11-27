@@ -11,15 +11,23 @@ import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
+
+import * as Scheduler from "../scheduling/Scheduler.ts";
 
 export interface DeviceLeaseOptions {
   /** A holder that does not renew for this long can be preempted by another thread. */
   readonly ttl: Duration.Duration;
   /** The most emulators and simulators leased at once on this machine; unset is no limit. */
   readonly maxLocalEmulators?: number | undefined;
+  /** Cadence for the periodic background sweep of expired idle emulator leases; defaults to 5 minutes. */
+  readonly sweepInterval?: Duration.Duration | undefined;
 }
 
 export const DEFAULT_DEVICE_LEASE_OPTIONS: DeviceLeaseOptions = { ttl: Duration.minutes(30) };
+const DEFAULT_DEVICE_LEASE_SWEEP_INTERVAL = Duration.minutes(5);
 
 // Ceilings keep `renewedAt + ttl` a valid date, so a refusal can always say when a lease expires.
 export const MAX_DEVICE_LEASE_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -60,10 +68,14 @@ export interface DeviceLeaseRequest {
 export interface DeviceLease extends Omit<DeviceLeaseRequest, "deviceId"> {
   /** Changes once, when booting names the device by its serial instead of its AVD. */
   deviceId: DeviceId;
+  /** Original device id at acquire (e.g. AVD name before `bind` moves to serial). */
+  readonly initialDeviceId?: DeviceId | undefined;
   readonly acquiredAt: number;
   renewedAt: number;
   /** False while the open that took it still boots the device; no session backs it yet. */
   active: boolean;
+  /** True while the periodic reaper holds `lifecycleLock` and is tearing this lease down. */
+  reaping: boolean;
 }
 
 export interface DeviceLeaseGrant {
@@ -103,6 +115,10 @@ export const makeDeviceLeases = (options: DeviceLeaseOptions = DEFAULT_DEVICE_LE
       holders: [holder(lease)],
     });
 
+  const isExpiredAt = (lease: DeviceLease, now: number) => now - lease.renewedAt >= ttl;
+  const isReapableAt = (lease: DeviceLease, now: number) =>
+    lease.active && lease.emulator && isExpiredAt(lease, now);
+
   /** What stands between a request and its lease, read synchronously after one clock read. */
   const contention = (request: DeviceLeaseRequest, now: number) => {
     const current = leases.get(leaseKey(request));
@@ -115,7 +131,7 @@ export const makeDeviceLeases = (options: DeviceLeaseOptions = DEFAULT_DEVICE_LE
           (lease) => lease !== current && lease.emulator && lease.hostId === LOCAL_DEVICE_HOST_ID,
         )
       : [];
-    const expired = (lease: DeviceLease) => now - lease.renewedAt >= ttl;
+    const expired = (lease: DeviceLease) => isExpiredAt(lease, now);
     const needed = capped ? running.length - limit + 1 : 0;
     const reclaimable = running
       .filter(expired)
@@ -123,6 +139,50 @@ export const makeDeviceLeases = (options: DeviceLeaseOptions = DEFAULT_DEVICE_LE
       .slice(0, Math.max(needed, 0));
     return { current, running, limit, needed, expired, reclaimable } as const;
   };
+
+  /** Currently active emulator leases whose idle time has reached the TTL, oldest first. */
+  const expiredLeases: Effect.Effect<ReadonlyArray<DeviceLease>> = Clock.currentTimeMillis.pipe(
+    Effect.map((now) =>
+      [...leases.values()]
+        .filter((lease) => isReapableAt(lease, now))
+        .toSorted((x, y) => x.renewedAt - y.renewedAt),
+    ),
+  );
+
+  /** True only while this exact lease is still held, active, an emulator, and expired right now. */
+  const isExpired = (lease: DeviceLease): Effect.Effect<boolean> =>
+    Clock.currentTimeMillis.pipe(
+      Effect.map((now) => leases.get(leaseKey(lease)) === lease && isReapableAt(lease, now)),
+    );
+
+  /** Atomically claims a still-expired lease for teardown so concurrent renewals cannot half-abort it. */
+  const beginReap = (lease: DeviceLease): Effect.Effect<boolean> =>
+    Clock.currentTimeMillis.pipe(
+      Effect.map((now) => {
+        if (leases.get(leaseKey(lease)) !== lease || !isReapableAt(lease, now)) return false;
+        lease.reaping = true;
+        return true;
+      }),
+    );
+
+  const endReap = (lease: DeviceLease): Effect.Effect<void> =>
+    Effect.sync(() => {
+      lease.reaping = false;
+    });
+
+  const findForTarget = (target: Pick<DeviceLease, "threadId" | "hostId" | "deviceId">) => {
+    const direct = leases.get(leaseKey(target));
+    if (direct && sameTarget(direct, target)) return direct;
+    return [...leases.values()].find(
+      (entry) =>
+        entry.threadId === target.threadId &&
+        entry.hostId === target.hostId &&
+        entry.initialDeviceId === target.deviceId,
+    );
+  };
+
+  const isReaping = (target: Pick<DeviceLease, "threadId" | "hostId" | "deviceId">) =>
+    Effect.sync(() => findForTarget(target)?.reaping === true);
 
   /**
    * Expired leases whose sessions must end before `request` can be granted, or none when it is
@@ -154,13 +214,25 @@ export const makeDeviceLeases = (options: DeviceLeaseOptions = DEFAULT_DEVICE_LE
         holders: found.running.map(holder),
         ...(found.limit === undefined ? {} : { limit: found.limit }),
       });
-    const lease: DeviceLease = { ...request, acquiredAt: now, renewedAt: now, active: false };
+    const lease: DeviceLease = {
+      ...request,
+      initialDeviceId: request.deviceId,
+      acquiredAt: now,
+      renewedAt: now,
+      active: false,
+      reaping: false,
+    };
     leases.set(leaseKey(request), lease);
     return { lease, fresh: true } satisfies DeviceLeaseGrant;
   });
 
   return {
     expiredBlockers,
+    expiredLeases,
+    isExpired,
+    beginReap,
+    endReap,
+    isReaping,
     /** Grants a free device; an expired holder still holds until `expiredBlockers` are ended. */
     acquire,
     /**
@@ -187,12 +259,12 @@ export const makeDeviceLeases = (options: DeviceLeaseOptions = DEFAULT_DEVICE_LE
       Effect.sync(() => {
         if (leases.get(leaseKey(lease)) === lease) leases.delete(leaseKey(lease));
       }),
-    /** Heartbeat: the holder is still using the device. */
+    /** Heartbeat: the holder is still using the device (skipped once reaper teardown has begun). */
     renew: Effect.fn("DeviceLeases.renew")(function* (
       target: Pick<DeviceLease, "threadId" | "hostId" | "deviceId">,
     ) {
-      const lease = leases.get(leaseKey(target));
-      if (lease && sameTarget(lease, target)) lease.renewedAt = yield* Clock.currentTimeMillis;
+      const lease = findForTarget(target);
+      if (lease && !lease.reaping) lease.renewedAt = yield* Clock.currentTimeMillis;
     }),
     /** Ends every active lease whose session is gone: closed, shut down, or its thread ended. */
     retain: (sessions: ReadonlyArray<DeviceSession>) => {
@@ -205,3 +277,49 @@ export const makeDeviceLeases = (options: DeviceLeaseOptions = DEFAULT_DEVICE_LE
 };
 
 export type DeviceLeases = ReturnType<typeof makeDeviceLeases>;
+
+/**
+ * Registers a periodic sweep on `Scheduler` (when `Scheduler` and `Scope` are in context)
+ * that reaps expired idle emulator leases at `sweepInterval` cadence.
+ */
+export const registerExpiredLeaseSweep = Effect.fn("DeviceLeases.registerExpiredLeaseSweep")(
+  function* <E>(input: {
+    readonly leases: DeviceLeases;
+    readonly sweepInterval?: Duration.Duration | undefined;
+    readonly reap: (lease: DeviceLease) => Effect.Effect<void, E>;
+  }) {
+    const scheduler = yield* Effect.serviceOption(Scheduler.Scheduler);
+    const scope = yield* Effect.serviceOption(Scope.Scope);
+    if (Option.isNone(scheduler) || Option.isNone(scope)) {
+      yield* Effect.logDebug(
+        "Skipping device lease reaper registration; Scheduler or Scope is unavailable.",
+      );
+      return;
+    }
+    const intervalMs = Math.max(
+      0,
+      Duration.toMillis(input.sweepInterval ?? DEFAULT_DEVICE_LEASE_SWEEP_INTERVAL),
+    );
+    const lastSweepAt = yield* Ref.make(yield* Clock.currentTimeMillis);
+    const sweep = Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      if (now - (yield* Ref.get(lastSweepAt)) < intervalMs) return;
+      yield* Ref.set(lastSweepAt, now);
+      for (const stale of yield* input.leases.expiredLeases) {
+        yield* input.reap(stale).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Failed to reap expired device lease", {
+              threadId: stale.threadId,
+              hostId: stale.hostId,
+              deviceId: stale.deviceId,
+              error,
+            }),
+          ),
+        );
+      }
+    });
+    yield* scheduler.value
+      .register("device-lease-reaper", sweep)
+      .pipe(Effect.provideService(Scope.Scope, scope.value));
+  },
+);
