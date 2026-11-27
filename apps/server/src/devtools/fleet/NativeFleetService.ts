@@ -40,7 +40,11 @@ export interface NativeFleetServiceDeps {
   readonly hostname?: string | undefined;
   readonly platform?: NodeJS.Platform | undefined;
   readonly stateDir?: string | undefined;
+  readonly queueRoot?: string | undefined;
   readonly manifestPath?: string | undefined;
+  readonly repoDirs?:
+    | ReadonlyArray<{ readonly repo?: string | undefined; readonly primary: string }>
+    | undefined;
   readonly enableBackgroundPolling?: boolean | undefined;
   readonly readHostResources?: (() => Promise<HostResourcesSnapshot | null>) | undefined;
   readonly readDesktopPower?: (() => Promise<HostPowerSnapshot | null>) | undefined;
@@ -64,6 +68,7 @@ export class NativeFleetService {
   private readonly ciHosts: NativeCiHosts;
   private readonly remoteProber: RemoteNodeProber;
   private readonly githubAuditPath: string;
+  private readonly now: () => number;
   private readonly worktrees: FleetCachedPanel<FleetWorktreesPanel | null>;
 
   private readonly activeListeners = new Set<FleetSseListener>();
@@ -101,13 +106,16 @@ export class NativeFleetService {
     this.sessionsScanner = new NativeSessionsScanner(platform);
     this.ciHosts = new NativeCiHosts({
       stateFile: NodePath.join(stateDir, "hosts-check.json"),
+      queueRoot: deps.queueRoot,
       manifestPath: this.manifestPath,
+      repoDirs: deps.repoDirs,
     });
     this.remoteProber = new RemoteNodeProber({
       listPeerLinks: deps.listPeerLinks,
     });
     this.actions = new FleetActionTracker((act) => this.emit("action", act));
     this.githubAuditPath = deps.githubAuditPath ?? defaultGitHubAuditPath();
+    this.now = deps.now ?? (() => Date.now());
     const readWorktrees = deps.readWorktrees ?? (async () => null);
     this.worktrees = new FleetCachedPanel({
       load: readWorktrees,
@@ -382,11 +390,13 @@ export class NativeFleetService {
   }
 
   getAlerts(): FleetAlertsPanel {
+    const nowMs = this.now();
     return buildFleetAlertsPanel({
       servers: this.serversScanner.getLatest(),
       portShadows: this.serversScanner.getPortShadows(),
       githubAuditPath: this.githubAuditPath,
-      nowMs: Date.now(),
+      nowMs,
+      toolDrift: this.ciHosts.getToolDriftReport(new Date(nowMs).toISOString()),
     });
   }
 
@@ -399,23 +409,26 @@ export class NativeFleetService {
     return this.actions.get(id);
   }
 
+  private emitHostsAndAlerts(): void {
+    this.emit("hosts", this.ciHosts.getPanel());
+    this.emit("alerts", this.getAlerts());
+  }
+
   triggerHostsCheck(host?: string): string {
     return this.actions.start("hosts.check", host ?? "all", async () => {
-      return this.ciHosts.check(host, () => this.emit("hosts", this.ciHosts.getPanel()));
+      return this.ciHosts.check(host, () => this.emitHostsAndAlerts());
     });
   }
 
   triggerHostCi(host: string, enabled: boolean): string {
     return this.actions.start("hosts.ci", host, async () => {
-      return this.ciHosts.setCi(host, enabled, () => this.emit("hosts", this.ciHosts.getPanel()));
+      return this.ciHosts.setCi(host, enabled, () => this.emitHostsAndAlerts());
     });
   }
 
   triggerHostProvision(host: string): string {
     return this.actions.start("hosts.provision", host, async (onProgress) => {
-      return this.ciHosts.provision(host, onProgress, () =>
-        this.emit("hosts", this.ciHosts.getPanel()),
-      );
+      return this.ciHosts.provision(host, onProgress, () => this.emitHostsAndAlerts());
     });
   }
 

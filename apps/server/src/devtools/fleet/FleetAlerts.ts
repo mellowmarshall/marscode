@@ -3,6 +3,9 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import type { ToolDriftReport } from "@t3tools/ship-queue/toolDrift";
+
+import { buildToolDriftAlerts } from "./FleetToolDriftAlerts.ts";
 import type {
   FleetAlertItem,
   FleetAlertState,
@@ -283,11 +286,13 @@ export function buildFleetAlertsPanel(input: {
   readonly portShadows: ReadonlyArray<FleetPortListener>;
   readonly githubAuditPath: string;
   readonly nowMs: number;
+  readonly toolDrift?: ToolDriftReport | null | undefined;
 }): FleetAlertsPanel {
   return {
     items: [
       ...detectPortCollisions(input.servers, input.portShadows),
       ...readGitHubAuditAlerts(input.githubAuditPath, input.nowMs),
+      ...(input.toolDrift ? buildToolDriftAlerts(input.toolDrift) : []),
     ],
   };
 }

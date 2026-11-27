@@ -5,9 +5,17 @@ import { loadCiHostsManifest } from "./ciHosts.ts";
 import { decideShipQueueDeps, listShipQueueDeps } from "./depsEngine.ts";
 import { rollbackShipQueueDepsAttempt } from "./depsRollback.ts";
 import { scanShipQueueDepsRepo } from "./depsScan.ts";
-import { checkCiHosts, setCiHostAvailability } from "./hostProbe.ts";
+import { checkCiHosts, setCiHostAvailability, type HostExecDeps } from "./hostProbe.ts";
 import { provisionCiHost, syncCiHostPayload } from "./hostProvision.ts";
 import { buildRenovateCustomManagers, extractPinVersions, loadPinsSpec } from "./pins.ts";
+import { collectRepoToolRequirements } from "./repoRequirements.ts";
+import {
+  checkHostsToolDrift,
+  evaluateToolDrift,
+  formatToolDriftReport,
+  readCachedProbesByHost,
+} from "./toolDrift.ts";
+import { reconcileToolDrift } from "./toolDriftReconcile.ts";
 
 export interface SubcommandIo {
   readonly stdout: (text: string) => void;
@@ -20,11 +28,12 @@ export async function runHostsSubcommand(
   root: string,
   args: ReadonlyArray<string>,
   io: SubcommandIo,
+  hostDeps?: HostExecDeps,
 ): Promise<number> {
   const [action, ...rest] = args;
   const manifestPath = io.env.SHIP_QUEUE_CI_HOSTS?.trim() || undefined;
   const usage =
-    "ship-queue hosts <check [--json] [HOST] | off NAME [--reason TEXT] | on NAME | provision HOST | sync HOST [--source DIR] [--ref REF]>\n";
+    "ship-queue hosts <check [--json] [--drift] [HOST] | drift [--json] [--reconcile] [--force] [--repo REPO] [--source DIR] [--ref REF] | off NAME [--reason TEXT] | on NAME | provision HOST | sync HOST [--source DIR] [--ref REF] [--reconcile-tools]>\n";
 
   if (!action || action === "--help" || action === "-h") {
     io.stdout(usage);
@@ -33,22 +42,103 @@ export async function runHostsSubcommand(
 
   if (action === "check") {
     const json = rest.includes("--json");
-    const targetHost = rest.find((a) => a !== "--json");
-    const res = await checkCiHosts({ queueRoot: root, manifestPath, targetHost });
+    const includeDrift = rest.includes("--drift");
+    const targetHost = rest.find((a) => a !== "--json" && a !== "--drift");
+    const res = await checkCiHosts({
+      queueRoot: root,
+      manifestPath,
+      targetHost,
+      deps: hostDeps,
+    });
     if (!res.ok || !res.report) {
       io.stderr(`ship-queue hosts check: ${res.error ?? "failed"}\n`);
       return 2;
     }
+    let driftReport = undefined;
+    if (includeDrift) {
+      const loaded = loadCiHostsManifest({ overridePath: manifestPath });
+      if (loaded.ok && loaded.manifest) {
+        const probes = readCachedProbesByHost(root, loaded.manifest);
+        const repos = collectRepoToolRequirements({ queueRoot: root });
+        driftReport = evaluateToolDrift({
+          queueRoot: root,
+          manifest: loaded.manifest,
+          probesByHost: probes,
+          repos,
+          at: res.report.at,
+        });
+      }
+    }
     if (json) {
-      io.stdout(`${JSON.stringify(res.report, null, 2)}\n`);
+      const payload = driftReport ? { ...res.report, tool_drift: driftReport } : res.report;
+      io.stdout(`${JSON.stringify(payload, null, 2)}\n`);
     } else {
       for (const h of res.report.hosts) {
         io.stdout(
           `${h.name} (${h.ssh ?? "this host"}): ${h.reached ? "reached" : "UNREACHABLE"}${h.ci_off ? " [OFF]" : ""}\n`,
         );
       }
+      if (driftReport) io.stdout(formatToolDriftReport(driftReport));
     }
-    return res.drift ? 1 : 0;
+    return res.drift || Boolean(driftReport?.hasDrift) ? 1 : 0;
+  }
+
+  if (action === "drift") {
+    const json = rest.includes("--json");
+    const reconcile = rest.includes("--reconcile");
+    const force = rest.includes("--force");
+    const repoIdx = rest.indexOf("--repo");
+    const targetRepo = repoIdx >= 0 ? rest[repoIdx + 1] : undefined;
+    const srcIdx = rest.indexOf("--source");
+    const refIdx = rest.indexOf("--ref");
+    const marscodeRoot =
+      (srcIdx >= 0 ? rest[srcIdx + 1] : undefined) || io.env.MARSCODE_ROOT?.trim() || undefined;
+    const sourceRef =
+      (refIdx >= 0 ? rest[refIdx + 1] : undefined) ||
+      io.env.SHIP_QUEUE_SOURCE_REF?.trim() ||
+      undefined;
+
+    if (reconcile) {
+      const rec = await reconcileToolDrift({
+        queueRoot: root,
+        manifestPath,
+        marscodeRoot,
+        sourceRef,
+        targetRepo,
+        force,
+        freshProbe: true,
+        onProgress: json ? undefined : (line) => io.stdout(`${line}\n`),
+        deps: hostDeps,
+      });
+      if (!rec.ok && !rec.after) {
+        io.stderr(`ship-queue hosts drift: ${rec.error ?? "failed"}\n`);
+        return 2;
+      }
+      if (json) {
+        io.stdout(`${JSON.stringify(rec, null, 2)}\n`);
+      } else if (rec.after) {
+        io.stdout(formatToolDriftReport(rec.after));
+      }
+      return rec.ok && !rec.after?.hasDrift ? 0 : 1;
+    }
+
+    const res = await checkHostsToolDrift({
+      queueRoot: root,
+      manifestPath,
+      targetRepo,
+      fresh: true,
+      deps: hostDeps,
+    });
+    if (!res.ok || !res.report) {
+      io.stderr(`ship-queue hosts drift: ${res.error ?? "failed"}\n`);
+      return 2;
+    }
+    if (json) {
+      io.stdout(`${JSON.stringify(res.report, null, 2)}\n`);
+    } else {
+      io.stdout(formatToolDriftReport(res.report));
+    }
+    return res.report.hasDrift ? 1 : 0;
   }
 
   if (action === "off" || action === "on") {
@@ -92,13 +182,14 @@ export async function runHostsSubcommand(
   }
 
   if (action === "sync") {
-    const hostName = rest[0] ?? "";
+    const hostName = rest.find((a) => !a.startsWith("--")) ?? "";
     if (!hostName) {
       io.stderr(usage);
       return 64;
     }
     const srcIdx = rest.indexOf("--source");
     const refIdx = rest.indexOf("--ref");
+    const reconcileTools = rest.includes("--reconcile-tools");
     const marscodeRoot =
       (srcIdx >= 0 ? rest[srcIdx + 1] : undefined) || io.env.MARSCODE_ROOT?.trim() || io.cwd;
     const sourceRef = (refIdx >= 0 ? rest[refIdx + 1] : undefined) || "HEAD";
@@ -112,12 +203,26 @@ export async function runHostsSubcommand(
       io.stderr(`ship-queue hosts sync: no CI host ${hostName}\n`);
       return 1;
     }
-    const res = await syncCiHostPayload({ host, marscodeRoot, sourceRef });
+    const res = await syncCiHostPayload({ host, marscodeRoot, sourceRef, deps: hostDeps });
     if (!res.ok) {
       io.stderr(`ship-queue hosts sync: ${res.error ?? "failed"}\n`);
       return 1;
     }
     io.stdout(`synced ${host.name}: ${res.paths.join(", ")}\n`);
+    if (reconcileTools) {
+      const prov = await provisionCiHost({
+        queueRoot: root,
+        hostName: host.name,
+        manifestPath,
+        allowRoot: false,
+        onProgress: (line) => io.stdout(`${line}\n`),
+        deps: hostDeps,
+      });
+      if (!prov.ok) {
+        io.stderr(`ship-queue hosts sync: ${prov.message}\n`);
+        return 1;
+      }
+    }
     return 0;
   }
 

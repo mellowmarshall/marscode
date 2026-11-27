@@ -84,16 +84,25 @@ export async function syncCiHostPayload(input: {
   return { ok: true, paths };
 }
 
-/** Provisions missing user-level tools (and WSL/passwordless-sudo root tools) on one CI host. */
+/** Provisions missing user-level tools (and optionally WSL/passwordless-sudo root tools) on one CI host. */
 export async function provisionCiHost(input: {
   readonly queueRoot: string;
   readonly hostName: string;
   readonly manifestPath?: string | undefined;
   readonly marscodeRoot?: string | undefined;
   readonly sourceRef?: string | undefined;
+  /** Restrict provisioning to this subset of tool names (used by automated drift convergence). */
+  readonly onlyTools?: ReadonlyArray<string> | undefined;
+  /** When false, never executes root/sudo/WSL-root commands; owner root-grant approval remains required. */
+  readonly allowRoot?: boolean | undefined;
   readonly onProgress?: ((line: string) => void) | undefined;
   readonly deps?: HostExecDeps | undefined;
-}): Promise<{ readonly ok: boolean; readonly message: string }> {
+}): Promise<{
+  readonly ok: boolean;
+  readonly message: string;
+  readonly installedTools?: ReadonlyArray<string> | undefined;
+  readonly skippedRootTools?: ReadonlyArray<string> | undefined;
+}> {
   const loaded = loadCiHostsManifest({ overridePath: input.manifestPath });
   if (!loaded.ok || !loaded.manifest) {
     return { ok: false, message: loaded.errors.join("; ") };
@@ -128,15 +137,32 @@ export async function provisionCiHost(input: {
     return { ok: false, message: `PROVISION host=${host.name} result=failed: host unreachable` };
   }
 
-  const lacks = computeHostLacks(loaded.manifest, probe, "all");
+  const onlySpecs = input.onlyTools ? [...input.onlyTools] : null;
+  const onlyNames = onlySpecs
+    ? new Set(onlySpecs.map((spec) => spec.split("@", 1)[0] ?? spec).filter(Boolean))
+    : null;
+  const lacks = onlySpecs
+    ? computeHostLacks(loaded.manifest, probe, "base", onlySpecs)
+    : computeHostLacks(loaded.manifest, probe, "all");
   const lackingNames = new Set(lacks.map((l) => l.split("@", 1)[0] ?? ""));
   const setup = buildToolchainShellSetup({ dataRootShell: formatDataRootShell(host.data_root) });
   const envPrefix = `${setup}; export CI_HOST_PAYLOAD=${REMOTE_PAYLOAD_DIR} CI_DEVTOOLS=${REMOTE_PAYLOAD_DIR}`;
+  const installedTools: string[] = [];
+  const skippedRootTools: string[] = [];
   let failed = "";
 
   for (const [toolName, spec] of Object.entries(loaded.manifest.toolchain)) {
-    if (!lackingNames.has(toolName) && !spec.refresh) continue;
-    if (!spec.install) continue;
+    if (onlyNames && !onlyNames.has(toolName)) continue;
+    if (!lackingNames.has(toolName) && (onlyNames || !spec.refresh)) continue;
+    if (!spec.install) {
+      if (lackingNames.has(toolName) && input.allowRoot === false) {
+        skippedRootTools.push(toolName);
+        input.onProgress?.(
+          `PROVISION host=${host.name} tool=${toolName} result=skipped_needs_root`,
+        );
+      }
+      continue;
+    }
     const res = await execOnHost(host, `${envPrefix}\n${spec.install}`, input.deps, {
       timeoutMs: 15 * 60_000,
     });
@@ -145,14 +171,17 @@ export async function provisionCiHost(input: {
         ? `PROVISION host=${host.name} tool=${toolName} result=installed`
         : `PROVISION host=${host.name} tool=${toolName} result=failed: ${res.stderr.trim() || `exit ${res.exitCode}`}`;
     input.onProgress?.(line);
-    if (res.exitCode !== 0 && !failed) failed = line;
+    if (res.exitCode === 0) installedTools.push(toolName);
+    else if (!failed) failed = line;
   }
 
-  const selfRootToken = host.wsl ?? (host.sudo ? SELF_SUDO_TOKEN : "");
+  const allowRoot = input.allowRoot !== false;
+  const selfRootToken = allowRoot ? (host.wsl ?? (host.sudo ? SELF_SUDO_TOKEN : "")) : "";
   if (selfRootToken && probe.__os && probe.__home) {
     const rootCmds: string[] = [];
     try {
       for (const toolName of lackingNames) {
+        if (onlyNames && !onlyNames.has(toolName)) continue;
         const rcmd = rootCommandOf(loaded.manifest.toolchain[toolName], probe.__os);
         if (rcmd) rootCmds.push(expandRootCommand(rcmd, probe.__home));
       }
@@ -174,7 +203,18 @@ export async function provisionCiHost(input: {
     }
   }
 
+  if (installedTools.length > 0) {
+    await probeCiHost({
+      queueRoot: input.queueRoot,
+      manifest: loaded.manifest,
+      manifestPath: loaded.path ?? undefined,
+      host,
+      fresh: true,
+      deps: input.deps,
+    });
+  }
+
   return failed
-    ? { ok: false, message: failed }
-    : { ok: true, message: `Provisioned ${host.name}` };
+    ? { ok: false, message: failed, installedTools, skippedRootTools }
+    : { ok: true, message: `Provisioned ${host.name}`, installedTools, skippedRootTools };
 }

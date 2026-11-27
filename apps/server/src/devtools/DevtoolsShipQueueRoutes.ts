@@ -3,6 +3,8 @@ import { resolveQueueRoot } from "@t3tools/ship-queue/cli";
 import { decideShipQueueDeps, listShipQueueDeps } from "@t3tools/ship-queue/depsEngine";
 import { scanDueDepsRepos, scanShipQueueDepsRepo } from "@t3tools/ship-queue/depsScan";
 import { DEP_REPORT_ID_RE, DEP_REPO_NAME_RE } from "@t3tools/ship-queue/depsTypes";
+import { reconcileDueToolDrift } from "@t3tools/ship-queue/toolDriftReconcile";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
@@ -136,7 +138,10 @@ export const handleShipQueueRoute = Effect.fn("DevtoolsShipQueueRoutes.handle")(
   return null;
 });
 
-/** Registers the periodic ship-queue dependency scan loop with MarsCode's `Scheduler` when present. */
+/**
+ * Registers the periodic ship-queue dependency scan and bounded CI host tool-drift
+ * convergence loops with MarsCode's `Scheduler` when present.
+ */
 export const registerShipQueueDepsScheduler = Effect.fn(
   "DevtoolsShipQueueRoutes.registerScheduler",
 )(function* (queueRootOverride?: string) {
@@ -146,5 +151,21 @@ export const registerShipQueueDepsScheduler = Effect.fn(
   yield* schedulerOpt.value.register(
     "ship-queue-deps-scan",
     Effect.promise(() => scanDueDepsRepos({ queueRoot })).pipe(Effect.asVoid),
+  );
+  const marscodeRootOpt = yield* Config.String("MARSCODE_ROOT").pipe(
+    Config.option,
+    Effect.orElseSucceed(() => Option.none<string>()),
+  );
+  const marscodeRoot = Option.isSome(marscodeRootOpt)
+    ? marscodeRootOpt.value.trim() || undefined
+    : undefined;
+  yield* schedulerOpt.value.register(
+    "ship-queue-tool-drift-reconcile",
+    Effect.promise(() =>
+      reconcileDueToolDrift({
+        queueRoot,
+        marscodeRoot,
+      }),
+    ).pipe(Effect.asVoid),
   );
 });

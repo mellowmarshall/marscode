@@ -12,12 +12,13 @@ import { isJobId, jobLogPath, listJobIds, readJob, readLog } from "./jobStore.ts
 import { lastMarker, SHIP_QUEUE_STAGE_AFTER, SHIP_QUEUE_STAGE_MARKERS } from "./markers.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
 import { currentProcessIdentity, isProcessAlive } from "./processIdentity.ts";
-import { claimLock, liveWorker, releaseLock, workerLockPath } from "./processLocks.ts";
+import { claimLock, releaseLock, versionWorkerLockPath, workerLockPath } from "./processLocks.ts";
 import { submitJob } from "./submit.ts";
 import type { ShipQueueDeps } from "./types.ts";
 import { fileChangeWaiter, watchJob } from "./watcher.ts";
-import { cancelJob, openJobsByRepo, runDueWork } from "./worker.ts";
-import { launchDetachedWorker } from "./workerLauncher.ts";
+import { cancelJob, hasOpenJobsForWorker, runDueWork } from "./worker.ts";
+import { hasLiveWorkerForJob, launchDetachedWorker } from "./workerLauncher.ts";
+import { readCurrentWorkerVersion, resolveCurrentWorkerVersion } from "./workerVersion.ts";
 
 const QUIET_MS = 300_000;
 const WATCHER_WAIT_MS = 300_000;
@@ -37,7 +38,7 @@ export interface CliOptions {
   readonly deps?: Partial<ShipQueueDeps> | undefined;
   readonly io?: Partial<CliIo> | undefined;
   /** Starts the detached worker after a submit or for a watched job with none; the default spawns `ship-queue work`. */
-  readonly startWorker?: ((root: string) => string) | undefined;
+  readonly startWorker?: ((root: string, jobId?: string) => string) | undefined;
   readonly waitForChange?: ((root: string, id: string) => () => Promise<void>) | undefined;
   readonly quietMs?: number | undefined;
 }
@@ -61,7 +62,7 @@ export function defaultDeps(root: string): ShipQueueDeps {
   };
 }
 
-function startDetachedWorker(root: string, env: CliIo["env"]): string {
+function startDetachedWorker(root: string, env: CliIo["env"], jobId?: string): string {
   const res = launchDetachedWorker({
     root,
     cliPath: NodeURL.fileURLToPath(import.meta.url),
@@ -69,6 +70,7 @@ function startDetachedWorker(root: string, env: CliIo["env"]): string {
     isAlive: isProcessAlive,
     // oxlint-disable-next-line t3code/no-global-process-runtime -- Standalone CLI has no Effect runtime.
     platform: NodeOS.platform(),
+    ...(jobId ? { jobId } : {}),
   });
   return res.kind === "spawned" ? `worker=${res.via}` : `worker=running pid=${res.pid}`;
 }
@@ -93,18 +95,27 @@ function watcherBlock(id: string): string {
   ].join("\n");
 }
 
-/** One worker per queue root, recorded with its start time so a restarted client reattaches to it. */
+/** One worker per pinned version (zero global drain lock across versions), recorded with its start time. */
 async function runWork(deps: ShipQueueDeps, io: CliIo, once: boolean): Promise<number> {
-  const lock = workerLockPath(deps.root);
-  if (!claimLock(lock, deps.self, deps.isProcessAlive)) {
+  const selfVersion = deps.workerVersion?.version;
+  const primaryLock = selfVersion
+    ? versionWorkerLockPath(deps.root, selfVersion)
+    : workerLockPath(deps.root);
+  if (!claimLock(primaryLock, deps.self, deps.isProcessAlive)) {
     io.stdout("ship-queue: a worker is already running\n");
     return 0;
+  }
+  const legacyLock = workerLockPath(deps.root);
+  if (selfVersion) {
+    // Best-effort legacy lock pointer; never blocks a newer version worker when an older one is draining.
+    claimLock(legacyLock, deps.self, deps.isProcessAlive);
   }
   try {
     for (;;) {
       const res = await runDueWork(deps);
       for (const id of res.ended) io.stdout(`ended job=${id}\n`);
-      if (once || openJobsByRepo(deps.root).size === 0) return 0;
+      const currentVersion = readCurrentWorkerVersion(deps.root)?.version;
+      if (once || !hasOpenJobsForWorker(deps.root, selfVersion, currentVersion)) return 0;
       await new Promise((resolve) => setTimeout(resolve, WORK_TICK_MS));
     }
   } catch (err) {
@@ -115,7 +126,8 @@ async function runWork(deps: ShipQueueDeps, io: CliIo, once: boolean): Promise<n
     );
     return 1;
   } finally {
-    releaseLock(lock, deps.self);
+    releaseLock(primaryLock, deps.self);
+    if (selfVersion) releaseLock(legacyLock, deps.self);
   }
 }
 
@@ -153,9 +165,17 @@ export async function runShipQueueCli(
   };
   const root = options.deps?.root ?? resolveQueueRoot(io.env);
   NodeFS.mkdirSync(root, { recursive: true });
-  const deps: ShipQueueDeps = { ...defaultDeps(root), ...options.deps, root };
+  const workerVersion =
+    options.deps?.workerVersion ??
+    resolveCurrentWorkerVersion({
+      root,
+      fallbackCliPath: NodeURL.fileURLToPath(import.meta.url),
+      env: io.env,
+    });
+  const deps: ShipQueueDeps = { ...defaultDeps(root), ...options.deps, root, workerVersion };
   const [sub, ...rest] = argv;
-  const startWorker = options.startWorker ?? ((r: string) => startDetachedWorker(r, io.env));
+  const startWorker =
+    options.startWorker ?? ((r: string, jobId?: string) => startDetachedWorker(r, io.env, jobId));
   const usage =
     "ship-queue <submit WORKTREE BRANCH TITLE BODY.md [--no-start] | watch JOB | status [--json] [JOB...] | cancel JOB | work [--once] | hosts ... | deps ... | pins ...>\n";
 
@@ -190,7 +210,7 @@ export async function runShipQueueCli(
     }
     for (const warning of res.warnings) io.stderr(`ship-queue: warning: ${warning}\n`);
     io.stdout(`job=${res.id} log=${jobLogPath(root, res.id)}\n${watcherBlock(res.id)}\n`);
-    if (!rest.includes("--no-start")) io.stdout(`${startWorker(root)}\n`);
+    if (!rest.includes("--no-start")) io.stdout(`${startWorker(root, res.id)}\n`);
     return 0;
   }
   if (sub === "watch" || sub === "cancel") {
@@ -205,14 +225,24 @@ export async function runShipQueueCli(
       return res.ok ? 0 : 1;
     }
     let launchedAt: string | null = null;
+    const cliEntry = NodeURL.fileURLToPath(import.meta.url);
     const ensureWorker = () => {
-      if (liveWorker(root, deps.isProcessAlive)) return;
+      if (
+        hasLiveWorkerForJob({
+          root,
+          jobId: id,
+          isAlive: deps.isProcessAlive,
+          fallbackCliPath: cliEntry,
+        })
+      ) {
+        return;
+      }
       const now = deps.clock.now();
       if (launchedAt !== null && Date.parse(now) - Date.parse(launchedAt) < WORKER_RELAUNCH_MS) {
         return;
       }
       launchedAt = now;
-      io.stderr(`ship-queue: job ${id} has no live worker; ${startWorker(root)}\n`);
+      io.stderr(`ship-queue: job ${id} has no live worker; ${startWorker(root, id)}\n`);
     };
     return watchJob({
       root,

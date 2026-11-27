@@ -1,6 +1,7 @@
 import type { WireGuardBundle } from "@t3tools/guard-protocol/bundle-inspect";
 
 import type { ProcessIdentity } from "./processIdentity.ts";
+import type { WorkerRuntimeVersion } from "./workerVersion.ts";
 
 /** The record states the server's `ShipQueueBridge` maps; a cancel ends as `failed reason=cancelled`. */
 export type JobState = "queued" | "running" | "waiting" | "done" | "failed";
@@ -34,6 +35,10 @@ export interface JobRecord {
   readonly ended_at?: string | undefined;
   /** The detached worker that last advanced the job, so a restarted client can tell it is still running. */
   readonly worker?: ProcessIdentity | undefined;
+  /** Pinned worker runtime version recorded at spawn/start time so upgrades never drain in-flight jobs. */
+  readonly worker_version?: string | undefined;
+  /** Canonical CLI entrypoint path for `worker_version`. */
+  readonly worker_entry?: string | undefined;
 }
 
 export interface ProcessResult {
@@ -142,6 +147,8 @@ export interface ShipQueueDeps {
   readonly isProcessAlive: (identity: ProcessIdentity) => boolean;
   readonly self: ProcessIdentity;
   readonly watcherWaitMs: number;
+  /** Runtime version identity of this worker, enabling version-pinned execution without global drain locks. */
+  readonly workerVersion?: WorkerRuntimeVersion | undefined;
   /** Post-merge subscribers (`subscribeMerges`); a throwing subscriber is logged, never fatal. */
   readonly onMerged?: ReadonlyArray<(merged: MergedJob) => Promise<void> | void> | undefined;
 }

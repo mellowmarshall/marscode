@@ -116,10 +116,63 @@ export const releaseRepoLock = (root: string, repo: string, self: ProcessIdentit
 
 export const repoLockHolder = (root: string, repo: string) => lockHolder(repoLockPath(root, repo));
 
+const SAFE_WORKER_VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
 export const workerLockPath = (root: string) => NodePath.join(root, "worker.json");
+
+export const versionsLockPath = (root: string) => NodePath.join(root, "versions", ".versions.lock");
+
+export const versionWorkersDir = (root: string) => NodePath.join(root, "workers");
+
+export function versionWorkerLockPath(root: string, version: string): string {
+  if (!SAFE_WORKER_VERSION_RE.test(version)) {
+    throw new Error(`Invalid worker version id: ${JSON.stringify(version)}`);
+  }
+  return NodePath.join(versionWorkersDir(root), `${version}.json`);
+}
+
+/** Live version-pinned workers (`<root>/workers/<version>.json`), pruning stale dead lock files on read. */
+export function liveVersionedWorkers(
+  root: string,
+  isAlive: IsAlive,
+): ReadonlyArray<{ readonly version: string; readonly identity: ProcessIdentity }> {
+  const dir = versionWorkersDir(root);
+  let names: string[];
+  try {
+    names = NodeFS.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const live: Array<{ readonly version: string; readonly identity: ProcessIdentity }> = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const version = name.slice(0, -".json".length);
+    if (!SAFE_WORKER_VERSION_RE.test(version)) continue;
+    const lockFile = NodePath.join(dir, name);
+    const current = readLock(lockFile);
+    if (current && isAlive(current.holder)) {
+      live.push({ version, identity: current.holder });
+    } else if (current) {
+      removeStaleLock(lockFile, current, NodeCrypto.randomUUID());
+    }
+  }
+  return live.toSorted((a, b) => a.version.localeCompare(b.version));
+}
+
+/** Returns the live worker pinned to `version`, if any, without blocking other versions. */
+export function liveWorkerForVersion(
+  root: string,
+  version: string,
+  isAlive: IsAlive,
+): ProcessIdentity | null {
+  if (!SAFE_WORKER_VERSION_RE.test(version)) return null;
+  const holder = lockHolder(versionWorkerLockPath(root, version));
+  return holder && isAlive(holder) ? holder : null;
+}
 
 /** The live queue worker, if any: what a restarted MarsCode reattaches to instead of starting another. */
 export function liveWorker(root: string, isAlive: IsAlive): ProcessIdentity | null {
   const holder = lockHolder(workerLockPath(root));
-  return holder && isAlive(holder) ? holder : null;
+  if (holder && isAlive(holder)) return holder;
+  return liveVersionedWorkers(root, isAlive)[0]?.identity ?? null;
 }

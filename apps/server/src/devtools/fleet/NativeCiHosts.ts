@@ -3,7 +3,11 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { isSafeHostName, readCiHostEntries } from "@t3tools/ship-queue/ciHosts";
+import {
+  isSafeHostName,
+  loadCiHostsManifest,
+  readCiHostEntries,
+} from "@t3tools/ship-queue/ciHosts";
 import { resolveQueueRoot } from "@t3tools/ship-queue/cli";
 import {
   checkCiHosts,
@@ -11,7 +15,20 @@ import {
   type HostExecDeps,
 } from "@t3tools/ship-queue/hostProbe";
 import { provisionCiHost } from "@t3tools/ship-queue/hostProvision";
+import { collectRepoToolRequirements } from "@t3tools/ship-queue/repoRequirements";
+import {
+  evaluateToolDrift,
+  readCachedProbesByHost,
+  type ToolDriftReport,
+} from "@t3tools/ship-queue/toolDrift";
+import {
+  reconcileToolDrift,
+  releaseInFlightHost,
+  tryClaimInFlightHost,
+  type ReconcileToolDriftResult,
+} from "@t3tools/ship-queue/toolDriftReconcile";
 
+import { probesFromHostsReport } from "./FleetToolDriftAlerts.ts";
 import type { CiHostManifestEntry, FleetHostsPanel, FleetHostsReport } from "./FleetTypes.ts";
 
 export function defaultT3StateDir(): string {
@@ -86,6 +103,9 @@ export class NativeCiHosts {
   private readonly queueRoot: string;
   private readonly manifestPath: string | undefined;
   private readonly hostExecDeps: HostExecDeps | undefined;
+  private readonly repoDirs:
+    | ReadonlyArray<{ readonly repo?: string | undefined; readonly primary: string }>
+    | undefined;
 
   private report: FleetHostsReport | null = null;
   private running = "";
@@ -97,11 +117,15 @@ export class NativeCiHosts {
     readonly queueRoot?: string | undefined;
     readonly manifestPath?: string | undefined;
     readonly hostExecDeps?: HostExecDeps | undefined;
+    readonly repoDirs?:
+      | ReadonlyArray<{ readonly repo?: string | undefined; readonly primary: string }>
+      | undefined;
   }) {
     this.stateFile = options?.stateFile ?? NodePath.join(defaultT3StateDir(), "hosts-check.json");
     this.queueRoot = options?.queueRoot ?? resolveQueueRoot(process.env);
     this.manifestPath = options?.manifestPath;
     this.hostExecDeps = options?.hostExecDeps;
+    this.repoDirs = options?.repoDirs;
     this.loadInitialReport();
   }
 
@@ -256,6 +280,12 @@ export class NativeCiHosts {
     if (this.running) {
       return { ok: false, message: "A hosts check or provision is already running" };
     }
+    if (!tryClaimInFlightHost(this.queueRoot, targetHost)) {
+      return {
+        ok: false,
+        message: `A provision or drift reconciliation is already running for ${targetHost}`,
+      };
+    }
     this.running = `provision ${targetHost}`;
     onChanged?.();
     try {
@@ -270,8 +300,67 @@ export class NativeCiHosts {
       await this.runCheckInternal(targetHost);
       return provRes;
     } finally {
+      releaseInFlightHost(this.queueRoot, targetHost);
       this.running = "";
       onChanged?.();
     }
+  }
+
+  /**
+   * Computes a fresh eligible-host tool-drift report using hot-reloaded `ci-hosts.json`,
+   * cached `<queueRoot>/hosts/*.probe` inventories (falling back to `hosts-check.json`),
+   * and freshly read repository tool declarations.
+   */
+  getToolDriftReport(nowIso?: string): ToolDriftReport | null {
+    const loaded = loadCiHostsManifest({ overridePath: this.manifestPath });
+    if (!loaded.ok || !loaded.manifest) return null;
+    const cachedProbes = readCachedProbesByHost(this.queueRoot, loaded.manifest);
+    const reportProbes = probesFromHostsReport(this.report);
+    const mergedProbes: Record<string, Readonly<Record<string, string>> | null> = {};
+    let anyProbe = false;
+    for (const host of loaded.manifest.hosts) {
+      const probe = cachedProbes[host.name] ?? reportProbes[host.name] ?? null;
+      mergedProbes[host.name] = probe;
+      if (probe) anyProbe = true;
+    }
+    if (!anyProbe) return null;
+    const repos = collectRepoToolRequirements({
+      queueRoot: this.queueRoot,
+      extraRepoDirs: this.repoDirs,
+    });
+    return evaluateToolDrift({
+      queueRoot: this.queueRoot,
+      manifest: loaded.manifest,
+      probesByHost: mergedProbes,
+      repos,
+      at: nowIso ?? this.hostExecDeps?.nowIso?.() ?? this.report?.at ?? new Date().toISOString(),
+    });
+  }
+
+  /** Bounded non-root convergence pass reusing `hostProvision.ts` with per-host backoff and dedup. */
+  async reconcileToolDrift(options?: {
+    readonly force?: boolean | undefined;
+    readonly onProgress?: ((line: string) => void) | undefined;
+    readonly onChanged?: (() => void) | undefined;
+  }): Promise<ReconcileToolDriftResult> {
+    const res = await reconcileToolDrift({
+      queueRoot: this.queueRoot,
+      manifestPath: this.manifestPath,
+      marscodeRoot: process.env.MARSCODE_ROOT?.trim() || undefined,
+      extraRepoDirs: this.repoDirs,
+      force: options?.force,
+      onProgress: options?.onProgress,
+      deps: this.hostExecDeps,
+    });
+    if (res.provisioned.length > 0 && !this.running) {
+      this.running = "check";
+      try {
+        await this.runCheckInternal("");
+      } finally {
+        this.running = "";
+      }
+      options?.onChanged?.();
+    }
+    return res;
   }
 }

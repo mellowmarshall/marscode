@@ -177,4 +177,103 @@ describe("NativeCiHosts direct @t3tools/ship-queue integration (zero shell-out)"
     expect(res2.idempotent).toBe(true);
     expect(brokerPreapprovals).toBe(1);
   });
+
+  it("detects and reconciles non-root tool drift natively via NativeCiHosts without bypassing root approval", async () => {
+    const dir = mkTempDir("t3-native-drift-");
+    const queueRoot = NodePath.join(dir, "sq");
+    const stateFile = NodePath.join(dir, "hosts-check.json");
+    const manifestPath = NodePath.join(dir, "ci-hosts.json");
+    const repoDir = NodePath.join(dir, "sample-repo");
+    NodeFS.mkdirSync(repoDir, { recursive: true });
+    NodeFS.writeFileSync(
+      NodePath.join(repoDir, ".tree-guard.conf"),
+      "ship_repo=acme-fixture/server-app\nship_ci_tool=vp@>=0.1\nship_ci_arch=x86_64\n",
+    );
+    NodeFS.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        schema: 1,
+        hosts: [
+          { name: "ci-x86-1", ssh: null, role: "ci", data_root: "~/data" },
+          { name: "ci-x86-2", ssh: "ci-x86-2", role: "ci", data_root: "~/data" },
+        ],
+        toolchain: {
+          git: { version: ">=2.0", probe: "git --version", install: null, base: true },
+          vp: { version: ">=0.1", probe: "vp --version", install: "ci-vp.sh", base: false },
+        },
+      }),
+    );
+
+    const state: Record<string, Record<string, string>> = {
+      "ci-x86-1": {
+        __os: "linux",
+        __arch: "x86_64",
+        __home: "/srv/ci",
+        git: "2.45.0",
+        vp: "0.1.18",
+      },
+      "ci-x86-2": {
+        __os: "linux",
+        __arch: "x86_64",
+        __home: "/srv/ci",
+        git: "2.45.0",
+        vp: "missing",
+      },
+    };
+    const exec = async (host: string, script: string) => {
+      if (script.includes('printf "__os\\t%s\\n"')) {
+        return {
+          exitCode: 0,
+          stdout: `${Object.entries(state[host]!)
+            .map(([k, v]) => `${k}\t${v}`)
+            .join("\n")}\n`,
+          stderr: "",
+        };
+      }
+      if (script.includes("ci-vp.sh")) {
+        state[host]!.vp = "0.1.18";
+        return { exitCode: 0, stdout: "installed vp\n", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    const ciHosts = new NativeCiHosts({
+      stateFile,
+      queueRoot,
+      manifestPath,
+      repoDirs: [{ repo: "acme-fixture/server-app", primary: repoDir }],
+      hostExecDeps: {
+        nowMs: () => 1_760_000_000_000,
+        nowIso: () => "2026-11-27T12:00:00.000Z",
+        runLocal: async (input) => exec("ci-x86-1", input.args[1] ?? ""),
+        runRemote: async (alias, script) => exec(alias, script),
+      },
+    });
+
+    await ciHosts.check();
+    // Verify HostCheckEntry records normalized arch so fallback to hosts-check.json preserves arch info.
+    const checkedHosts = ciHosts.getPanel().report?.hosts ?? [];
+    expect(checkedHosts.map((h) => h.arch)).toEqual(["x86_64", "x86_64"]);
+
+    const before = ciHosts.getToolDriftReport("2026-11-27T12:00:00.000Z");
+    expect(before?.hasSingleHostStranding).toBe(true);
+    expect(before?.hosts.map((h) => h.host)).toEqual(["ci-x86-2"]);
+
+    // Even if .probe files are removed, fallback to hosts-check.json still detects x86_64 stranding!
+    NodeFS.rmSync(NodePath.join(queueRoot, "hosts", "ci-x86-1.probe"), { force: true });
+    NodeFS.rmSync(NodePath.join(queueRoot, "hosts", "ci-x86-2.probe"), { force: true });
+    const fallbackDrift = ciHosts.getToolDriftReport("2026-11-27T12:00:00.000Z");
+    expect(fallbackDrift?.hasSingleHostStranding).toBe(true);
+    expect(fallbackDrift?.hosts[0]?.arch).toBe("x86_64");
+
+    let changedCount = 0;
+    const rec = await ciHosts.reconcileToolDrift({ onChanged: () => (changedCount += 1) });
+    expect(rec.ok).toBe(true);
+    expect(rec.provisioned).toEqual([{ host: "ci-x86-2", tools: ["vp"] }]);
+    expect(changedCount).toBe(1);
+
+    const after = ciHosts.getToolDriftReport("2026-11-27T12:05:00.000Z");
+    expect(after?.hasDrift).toBe(false);
+    expect(after?.hasSingleHostStranding).toBe(false);
+  });
 });

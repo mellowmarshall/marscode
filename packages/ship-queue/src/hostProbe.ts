@@ -9,6 +9,7 @@ import {
   expandDataRoot,
   isSafeHostName,
   loadCiHostsManifest,
+  normalizeArch,
   type CiHostEntry,
   type CiHostsManifest,
 } from "./ciHosts.ts";
@@ -48,6 +49,7 @@ export interface HostCheckEntry {
   readonly reached: boolean;
   readonly probed_at: string | null;
   readonly platform: string | null;
+  readonly arch: string | null;
   readonly tools: ReadonlyArray<HostCheckToolRow>;
   readonly drift: ReadonlyArray<HostCheckDriftRow>;
   readonly notes: ReadonlyArray<string>;
@@ -325,6 +327,7 @@ export async function checkCiHosts(input: {
         reached: false,
         probed_at: null,
         platform: null,
+        arch: null,
         tools: [],
         drift: [],
         notes: [],
@@ -400,6 +403,7 @@ export async function checkCiHosts(input: {
       reached: true,
       probed_at: at,
       platform,
+      arch: probe.__arch ? normalizeArch(probe.__arch) : null,
       tools,
       drift: [],
       notes: [],

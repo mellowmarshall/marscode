@@ -86,6 +86,14 @@
       "types": "./src/pins.ts",
       "import": "./src/pins.ts"
     },
+    "./policyReload": {
+      "types": "./src/policyReload.ts",
+      "import": "./src/policyReload.ts"
+    },
+    "./repoRequirements": {
+      "types": "./src/repoRequirements.ts",
+      "import": "./src/repoRequirements.ts"
+    },
     "./rootGrant": {
       "types": "./src/rootGrant.ts",
       "import": "./src/rootGrant.ts"
@@ -102,6 +110,14 @@
       "types": "./src/submit.ts",
       "import": "./src/submit.ts"
     },
+    "./toolDrift": {
+      "types": "./src/toolDrift.ts",
+      "import": "./src/toolDrift.ts"
+    },
+    "./toolDriftReconcile": {
+      "types": "./src/toolDriftReconcile.ts",
+      "import": "./src/toolDriftReconcile.ts"
+    },
     "./toolchainEnv": {
       "types": "./src/toolchainEnv.ts",
       "import": "./src/toolchainEnv.ts"
@@ -117,6 +133,10 @@
     "./worker": {
       "types": "./src/worker.ts",
       "import": "./src/worker.ts"
+    },
+    "./workerVersion": {
+      "types": "./src/workerVersion.ts",
+      "import": "./src/workerVersion.ts"
     }
   },
   "scripts": {

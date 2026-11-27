@@ -21,6 +21,7 @@ import { sameProcess } from "./processIdentity.ts";
 import { releaseRepoLock, repoLockHolder, tryAcquireRepoLock } from "./processLocks.ts";
 import { rebaseJob } from "./rebaseEngine.ts";
 import type { JobRecord, ShipQueueDeps } from "./types.ts";
+import { jobMatchesWorkerVersion, readCurrentWorkerVersion } from "./workerVersion.ts";
 
 export type JobStep = "ended" | "blocked";
 
@@ -46,6 +47,21 @@ export function openJobsByRepo(root: string): Map<string, JobRecord[]> {
     byRepo.set(job.repo, [...(byRepo.get(job.repo) ?? []), job]);
   }
   return byRepo;
+}
+
+/** Whether any open job in `root` is eligible to be advanced by a worker running `selfVersion`. */
+export function hasOpenJobsForWorker(
+  root: string,
+  selfVersion?: string | undefined,
+  currentVersion?: string | undefined,
+): boolean {
+  const effectiveCurrent = currentVersion ?? readCurrentWorkerVersion(root)?.version;
+  for (const jobs of openJobsByRepo(root).values()) {
+    for (const job of jobs) {
+      if (jobMatchesWorkerVersion(job, selfVersion, effectiveCurrent)) return true;
+    }
+  }
+  return false;
 }
 
 async function awaitWatcher(deps: ShipQueueDeps, job: JobRecord): Promise<JobStep | "go"> {
@@ -159,11 +175,19 @@ export async function runJob(deps: ShipQueueDeps, id: string): Promise<JobStep> 
   const watcher = await awaitWatcher(deps, job);
   if (watcher !== "go") return watcher;
   if (job.state === "queued") {
+    const versionPatch =
+      deps.workerVersion && (!job.worker_version || !job.worker_entry)
+        ? {
+            worker_version: deps.workerVersion.version,
+            worker_entry: deps.workerVersion.entryPath,
+          }
+        : {};
     job = updateJob(deps.root, id, {
       state: "running",
       waiting_for: undefined,
       waiting_since: undefined,
       worker: deps.self,
+      ...versionPatch,
     });
     mark(deps.root, id, `STARTED job=${id} branch=${job.branch} at=${deps.clock.now()}`);
   }
@@ -209,9 +233,12 @@ async function drainRepo(
   ended: string[],
   blocked: string[],
 ): Promise<void> {
+  const selfVersion = deps.workerVersion?.version;
   for (;;) {
     const head = openJobsByRepo(deps.root).get(repo)?.[0];
     if (!head) return;
+    const currentVersion = readCurrentWorkerVersion(deps.root)?.version;
+    if (!jobMatchesWorkerVersion(head, selfVersion, currentVersion)) return;
     let step: JobStep;
     try {
       step = await runJob(deps, head.id);
@@ -234,14 +261,21 @@ async function drainRepo(
 
 /**
  * One pass of due work, shaped for `Scheduler.register`: each repo's queue is drained in order
- * under its landing lock until it empties or its head job waits. Repos run concurrently.
+ * under its landing lock until it empties or its head job waits. Repos run concurrently, and
+ * version-pinned workers only advance jobs matching their pinned runtime version.
  */
 export async function runDueWork(deps: ShipQueueDeps): Promise<DueWorkResult> {
   const ended: string[] = [];
   const blocked: string[] = [];
   const busyRepos: string[] = [];
+  const selfVersion = deps.workerVersion?.version;
+  const currentVersion = readCurrentWorkerVersion(deps.root)?.version;
   await Promise.all(
-    [...openJobsByRepo(deps.root).keys()].map(async (repo) => {
+    [...openJobsByRepo(deps.root).entries()].map(async ([repo, jobs]) => {
+      const head = jobs[0];
+      if (!head || !jobMatchesWorkerVersion(head, selfVersion, currentVersion)) {
+        return;
+      }
       if (!tryAcquireRepoLock(deps.root, repo, deps.self, deps.isProcessAlive)) {
         busyRepos.push(repo);
         return;

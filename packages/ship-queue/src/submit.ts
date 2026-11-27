@@ -22,6 +22,7 @@ import {
   worktreeChanges,
 } from "./gitQueries.ts";
 import type { JobRecord, ShipQueueDeps } from "./types.ts";
+import { readCurrentWorkerVersion, withVersionsLock } from "./workerVersion.ts";
 
 // GitHub refuses bodies over 65,536 characters; the stamp's room is held back at submit.
 const BODY_LIMIT = 65_536;
@@ -192,22 +193,37 @@ export async function submitJob(deps: ShipQueueDeps, input: SubmitInput): Promis
     );
   }
   writeRegistration(deps.root, repo, { primary, remoteUrl: url });
-  const { id, record } = createJob(
+  const stampedBody = stampBody(input.body, input.identity);
+  const created = withVersionsLock(
     deps.root,
-    {
-      repo,
-      primary,
-      worktree,
-      branch: input.branch,
-      base_branch: baseBranch,
-      remote,
-      title: input.title.trim(),
-      head_sha: headSha,
-      ...(input.identity.thread?.trim() ? { thread_id: input.identity.thread.trim() } : {}),
+    { self: deps.self, isAlive: deps.isProcessAlive },
+    () => {
+      const pinnedVersion = deps.workerVersion ?? readCurrentWorkerVersion(deps.root);
+      return createJob(
+        deps.root,
+        {
+          repo,
+          primary,
+          worktree,
+          branch: input.branch,
+          base_branch: baseBranch,
+          remote,
+          title: input.title.trim(),
+          head_sha: headSha,
+          ...(input.identity.thread?.trim() ? { thread_id: input.identity.thread.trim() } : {}),
+          ...(pinnedVersion
+            ? { worker_version: pinnedVersion.version, worker_entry: pinnedVersion.entryPath }
+            : {}),
+        },
+        stampedBody,
+        deps.clock,
+      );
     },
-    stampBody(input.body, input.identity),
-    deps.clock,
   );
+  if (!created.acquired) {
+    return refuse("queue versions lock is held by another live process; retry submit");
+  }
+  const { id, record } = created.value;
   mark(
     deps.root,
     id,

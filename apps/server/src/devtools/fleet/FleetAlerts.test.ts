@@ -6,6 +6,9 @@ import * as NodePath from "node:path";
 
 import { afterEach, describe, expect, it } from "@effect/vitest";
 
+import { writeProbeFile } from "@t3tools/ship-queue/hostProbe";
+import { writeRegistration } from "@t3tools/ship-queue/jobStore";
+
 import { parseDockerPsLines, parseSsListeners } from "./DockerPsParser.ts";
 import {
   buildFleetAlertsPanel,
@@ -403,6 +406,101 @@ describe("NativeFleetService alerts + worktrees panels", () => {
       ctrl.abort();
       await reader.cancel().catch(() => undefined);
       await pump.catch(() => undefined);
+      fleet.close();
+    }
+  });
+
+  it("surfaces CI host tool-drift and single-host stranding in FleetAlerts and hot-reloads without restarting", () => {
+    const dir = mkTempDir("t3-fleet-tool-drift-");
+    const queueRoot = NodePath.join(dir, "sq");
+    const manifestPath = NodePath.join(dir, "ci-hosts.json");
+    const repoDir = NodePath.join(dir, "sample-repo");
+    NodeFS.mkdirSync(repoDir, { recursive: true });
+    NodeFS.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        schema: 1,
+        hosts: [
+          { name: "ci-x86-1", ssh: null, role: "ci", data_root: "~/data" },
+          { name: "ci-x86-2", ssh: "ci-x86-2", role: "ci", data_root: "~/data" },
+          { name: "ci-arm-1", ssh: "ci-arm-1", role: "ci", data_root: "~/data" },
+        ],
+        toolchain: {
+          git: { version: ">=2.0", probe: "git --version", install: null, base: true },
+          vp: { version: ">=0.1", probe: "vp --version", install: "ci-vp.sh", base: false },
+        },
+      }),
+    );
+    NodeFS.writeFileSync(
+      NodePath.join(repoDir, ".tree-guard.conf"),
+      "ship_repo=acme-fixture/sample-app\nship_ci_tool=vp@>=0.1\n",
+    );
+    writeRegistration(queueRoot, "acme-fixture/sample-app", {
+      primary: repoDir,
+      remoteUrl: "https://example.invalid/acme-fixture/sample-app.git",
+    });
+    writeProbeFile(NodePath.join(queueRoot, "hosts", "ci-x86-1.probe"), {
+      __os: "linux",
+      __arch: "x86_64",
+      git: "2.45.0",
+      vp: "0.1.18",
+    });
+    writeProbeFile(NodePath.join(queueRoot, "hosts", "ci-x86-2.probe"), {
+      __os: "linux",
+      __arch: "x86_64",
+      git: "2.45.0",
+      vp: "missing",
+    });
+    writeProbeFile(NodePath.join(queueRoot, "hosts", "ci-arm-1.probe"), {
+      __os: "linux",
+      __arch: "aarch64",
+      git: "2.45.0",
+      vp: "missing",
+    });
+
+    const fleet = new NativeFleetService({
+      hostname: "ci-x86-1",
+      stateDir: dir,
+      queueRoot,
+      manifestPath,
+      githubAuditPath: writeAudit(dir, HEALTHY_AUDIT),
+      enableBackgroundPolling: false,
+      now: () => AUDIT_AT_MS,
+    });
+    try {
+      const before = fleet.getAlerts().items.filter((i) => i.source === "CI toolchain");
+      expect(before).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            source: "CI toolchain",
+            name: "acme-fixture/sample-app (single-host stranding)",
+            state: "firing",
+          }),
+          expect.objectContaining({
+            source: "CI toolchain",
+            name: "tool drift: ci-x86-2",
+            state: "firing",
+          }),
+        ]),
+      );
+      expect(before.some((i) => i.name.includes("ci-arm-1"))).toBe(false);
+
+      // Update probe on ci-x86-2 -> alerts clear immediately with zero service restart!
+      writeProbeFile(NodePath.join(queueRoot, "hosts", "ci-x86-2.probe"), {
+        __os: "linux",
+        __arch: "x86_64",
+        git: "2.45.0",
+        vp: "0.1.18",
+      });
+      const after = fleet.getAlerts().items.filter((i) => i.source === "CI toolchain");
+      expect(after).toEqual([
+        expect.objectContaining({
+          source: "CI toolchain",
+          name: "CI host toolchain",
+          state: "ok",
+        }),
+      ]);
+    } finally {
       fleet.close();
     }
   });
