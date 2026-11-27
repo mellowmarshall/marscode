@@ -27,8 +27,10 @@ import {
   ArchiveChangedError,
   archiveDevice,
   ArchiveMount,
+  createArchiveRemoteShareCheck,
   updateRemoteLink,
   type ArchiveDeviceOf,
+  type ArchiveShareCheck,
 } from "./SessionArchiveMount.ts";
 
 const DAY_MS = 86_400_000;
@@ -64,6 +66,8 @@ export interface SessionArchivePassInput {
   readonly allowLocalArchiveRoot?: boolean;
   /** Device lookup for the archive mount guard; a bounded stat unless a test stands in. */
   readonly archiveDeviceOf?: ArchiveDeviceOf;
+  /** Filesystem-type check for the archive mount guard; bounded statfs/mount unless a test stands in. */
+  readonly archiveIsRemoteShare?: ArchiveShareCheck;
   /** Runs between the copy and the move phases; tests write to a session here. */
   readonly afterCopy?: () => Promise<void>;
 }
@@ -377,8 +381,11 @@ export async function runSessionArchivePass(
     ? await ArchiveMount.open({
         archiveRoot: settings.archiveRoot,
         host: input.host,
+        homeDir: input.homeDir,
+        platform: input.platform,
         allowLocal: input.allowLocalArchiveRoot === true,
         deviceOf: input.archiveDeviceOf ?? archiveDevice,
+        isRemoteShare: input.archiveIsRemoteShare ?? createArchiveRemoteShareCheck(input.platform),
       })
     : probe.reason;
   if (typeof mount === "string") {

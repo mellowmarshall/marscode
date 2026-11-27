@@ -220,14 +220,111 @@ describe.skipIf(platform !== "linux" && platform !== "darwin")("session archive 
     expect(entries.find((e) => e.path === hostDirOf(f))?.files).toBe(3);
   });
 
-  it("refuses an archive folder that is not a mounted share unless allowed", async () => {
+  it("refuses local folders on home, temp, or secondary local partitions using real stat and statfs", async () => {
     const f = fixture();
 
+    // Local temp directory refused with zero mocks
     const entries = await pass(f, settings(f.archiveRoot), { allowLocalArchiveRoot: false });
-
     expect(entries.at(-1)?.reason).toContain("not a mounted share");
     expect(NodeFS.existsSync(hostDirOf(f))).toBe(false);
     expect(NodeFS.lstatSync(f.claudeOld).isFile()).toBe(true);
+
+    // Local directory under the current workspace (e.g. a secondary local ext4 partition distinct from `/` and `$HOME`)
+    // is also refused with zero mocks because statfs reports a local filesystem, not a remote share.
+    const secondaryLocal = NodeFS.mkdtempSync(
+      NodePath.join(process.cwd(), ".tmp-archive-local-check-"),
+    );
+    cleanups.push(() => NodeFS.rmSync(secondaryLocal, { recursive: true, force: true }));
+    const secondaryEntries = await pass(f, settings(secondaryLocal), {
+      allowLocalArchiveRoot: false,
+    });
+    expect(secondaryEntries.at(-1)?.reason).toContain("not a mounted share");
+    expect(NodeFS.existsSync(NodePath.join(secondaryLocal, "testhost"))).toBe(false);
+  });
+
+  it("accepts a nested subdirectory under a mounted remote share", async () => {
+    const f = fixture();
+    const mountRoot = f.archiveRoot;
+    const nestedArchiveRoot = NodePath.join(mountRoot, "agent-sessions");
+    NodeFS.mkdirSync(nestedArchiveRoot, { recursive: true });
+    const mountDev = NodeFS.statSync(mountRoot).dev + 1000;
+    const deviceOf = async (target: string) => {
+      const st = NodeFS.statSync(target, { throwIfNoEntry: false });
+      if (!st) return null;
+      if (target === mountRoot || target.startsWith(`${mountRoot}${NodePath.sep}`)) {
+        return mountDev;
+      }
+      return st.dev;
+    };
+
+    const entries = await pass(f, settings(nestedArchiveRoot), {
+      allowLocalArchiveRoot: false,
+      archiveDeviceOf: deviceOf,
+      archiveIsRemoteShare: async (mp) => mp === mountRoot,
+    });
+
+    const nestedHostDir = NodePath.join(nestedArchiveRoot, "testhost");
+    expect(NodeFS.existsSync(NodePath.join(nestedHostDir, "claude", "-work", "old.jsonl"))).toBe(
+      true,
+    );
+    expect(NodeFS.existsSync(f.claudeOld)).toBe(false);
+    expect(entries.find((e) => e.path === nestedHostDir)?.outcome).toBe("removed");
+  });
+
+  it("refuses a symlink inside a remote share that escapes to local disk", async () => {
+    const f = fixture();
+    const mountRoot = f.archiveRoot;
+    const mountDev = NodeFS.statSync(mountRoot).dev + 1000;
+    const localTarget = NodeFS.mkdtempSync(NodePath.join(process.cwd(), ".tmp-archive-escape-"));
+    cleanups.push(() => NodeFS.rmSync(localTarget, { recursive: true, force: true }));
+    const escapeLink = NodePath.join(mountRoot, "escape-link");
+    NodeFS.symlinkSync(localTarget, escapeLink);
+    const deviceOf = async (target: string) => {
+      const st = NodeFS.statSync(target, { throwIfNoEntry: false });
+      if (!st) return null;
+      if (target === mountRoot || target.startsWith(`${mountRoot}${NodePath.sep}`)) {
+        return mountDev;
+      }
+      return st.dev;
+    };
+
+    const escapeEntries = await pass(f, settings(escapeLink), {
+      allowLocalArchiveRoot: false,
+      archiveDeviceOf: deviceOf,
+      archiveIsRemoteShare: async (mp) => mp === mountRoot,
+    });
+    expect(escapeEntries.at(-1)?.reason).toContain("not a mounted share");
+    expect(NodeFS.existsSync(NodePath.join(localTarget, "testhost"))).toBe(false);
+  });
+
+  it("stops before moving any session when a parent remote mount detaches mid-pass", async () => {
+    const f = fixture();
+    const mountRoot = f.archiveRoot;
+    const nestedRoot = NodePath.join(mountRoot, "agent-sessions");
+    NodeFS.mkdirSync(nestedRoot, { recursive: true });
+    const mountDev = NodeFS.statSync(mountRoot).dev + 1000;
+    let mounted = true;
+    const deviceOf = async (target: string) => {
+      const st = NodeFS.statSync(target, { throwIfNoEntry: false });
+      if (!st) return null;
+      if (mounted && (target === mountRoot || target.startsWith(`${mountRoot}${NodePath.sep}`))) {
+        return mountDev;
+      }
+      return st.dev;
+    };
+
+    const detachEntries = await pass(f, settings(nestedRoot), {
+      allowLocalArchiveRoot: false,
+      archiveDeviceOf: deviceOf,
+      archiveIsRemoteShare: async (mp) => mounted && mp === mountRoot,
+      afterCopy: async () => {
+        mounted = false;
+      },
+    });
+    expect(NodeFS.lstatSync(f.claudeOld).isFile()).toBe(true);
+    expect(detachEntries.find((e) => e.outcome === "failed")?.reason).toContain(
+      "changed or went away",
+    );
   });
 
   it("removes and archives nothing when the live-process scan failed or saw nothing", async () => {
