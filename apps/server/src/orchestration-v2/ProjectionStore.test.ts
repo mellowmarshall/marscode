@@ -9835,6 +9835,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         assert.equal(shell?.pendingRuntimeRequest?.id, "secret:b");
         assert.isTrue(shell?.pendingRuntimeRequest?.blocking);
         assert.isTrue(shell?.pendingRuntimeRequest?.userOnly);
+        // The card asks like an approval, so clients mark it as a secret.
+        assert.isTrue(shell?.pendingRuntimeRequest?.secret);
       }
 
       const requestId = RuntimeRequestId.make(`request:${suffix}:async`);
@@ -9928,6 +9930,10 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         );
         assert.deepEqual(
           [thread?.pendingRuntimeRequest?.userOnly, memoryShell.pendingRuntimeRequest?.userOnly],
+          terminal ? [undefined, undefined] : [true, true],
+        );
+        assert.deepEqual(
+          [thread?.pendingRuntimeRequest?.secret, memoryShell.pendingRuntimeRequest?.secret],
           terminal ? [undefined, undefined] : [true, true],
         );
       }

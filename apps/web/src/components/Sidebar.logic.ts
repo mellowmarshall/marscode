@@ -654,6 +654,7 @@ type ThreadStatusInput = Pick<
   | "hasActionableProposedPlan"
   | "hasPendingApprovals"
   | "hasPendingUserInput"
+  | "hasPendingSecretRequest"
   | "pendingSubagentRequest"
   | "pendingGuestMessageCount"
   | "interactionMode"
@@ -955,14 +956,29 @@ type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
   | "hasPendingApprovals"
   | "hasPendingUserInput"
+  | "hasPendingSecretRequest"
   | "pendingSubagentRequest"
   | "pendingGuestMessageCount"
   | "runtime"
   | "blockedOnThreadWait"
 >;
 
+/** An approval, a secret card, or either one asked by a subagent: each waits on the user alone. */
+function threadNeedsApproval(
+  thread: Pick<
+    SidebarThreadSummary,
+    "hasPendingApprovals" | "hasPendingSecretRequest" | "pendingSubagentRequest"
+  >,
+): boolean {
+  return (
+    thread.hasPendingApprovals ||
+    thread.hasPendingSecretRequest === true ||
+    thread.pendingSubagentRequest === "approval"
+  );
+}
+
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
-  if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
+  if (threadNeedsApproval(thread)) {
     return "approval";
   }
   if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") {
@@ -1235,7 +1251,7 @@ export function resolveThreadStatusPill(input: {
 }): ThreadStatusPill | null {
   const { thread } = input;
 
-  if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
+  if (threadNeedsApproval(thread)) {
     return {
       label: msg("Pending Approval"),
       colorClass: "text-amber-600 dark:text-amber-300/90",

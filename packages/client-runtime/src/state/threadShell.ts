@@ -17,7 +17,7 @@ import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
 
 import type { EnvironmentThreadShell, PendingSubagentRequest } from "./models.ts";
-import { presentThreadShell, threadRuntimeIsActive } from "./models.ts";
+import { isPendingSecretRequest, presentThreadShell, threadRuntimeIsActive } from "./models.ts";
 import { hiddenThreadKeys, NO_HIDDEN_THREADS } from "./threadTagFilter.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
 import {
@@ -124,7 +124,7 @@ function subagentRequest(thread: OrchestrationV2ThreadShell): PendingSubagentReq
   ) {
     return null;
   }
-  return kind === "user_input" ? "user_input" : "approval";
+  return kind === "user_input" && !isPendingSecretRequest(thread) ? "user_input" : "approval";
 }
 
 /** A user-only card keeps its mark through roll-ups; clients see it as user_input. */
@@ -144,7 +144,7 @@ function sideChatRequest(thread: OrchestrationV2ThreadShell): PendingSubagentReq
   if (kind === undefined || kind === "auth_refresh" || thread.lineage.sideChat !== true) {
     return null;
   }
-  return kind === "user_input" ? "user_input" : "approval";
+  return kind === "user_input" && !isPendingSecretRequest(thread) ? "user_input" : "approval";
 }
 
 const asksParent = (thread: OrchestrationV2ThreadShell) =>
@@ -600,6 +600,7 @@ export function createEnvironmentThreadShellAtoms(input: {
             thread.title === next[index]?.title &&
             thread.hasPendingApprovals === next[index]?.hasPendingApprovals &&
             thread.hasPendingUserInput === next[index]?.hasPendingUserInput &&
+            thread.hasPendingSecretRequest === next[index]?.hasPendingSecretRequest &&
             thread.pendingSubagentRequest === next[index]?.pendingSubagentRequest,
         )
       ) {

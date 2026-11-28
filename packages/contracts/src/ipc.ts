@@ -1113,6 +1113,8 @@ export interface DesktopBridge {
   restartAudioService?: () => Promise<boolean>;
   setNotificationBadge: (badge: { count: number; image: string | null }) => Promise<void>;
   onNotificationBadgeClear: (listener: () => void) => () => void;
+  /** Flashes the unfocused window while a thread waits on an approval; focus stops it. */
+  setWindowAttention?: (active: boolean) => Promise<void>;
   onTrackpadScrollBegin: (listener: () => void) => () => void;
   onTrackpadScrollEnd: (listener: () => void) => () => void;
   /**

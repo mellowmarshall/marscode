@@ -116,6 +116,7 @@ const thread = {
   archivedAt: null as string | null,
   hasPendingApprovals: false,
   hasPendingUserInput: false,
+  hasPendingSecretRequest: false,
   pendingRequestId: "request-1",
   session: null as { status: string } | null,
   latestTurn: { turnId: "turn", state: "running", completedAt: null as string | null },
@@ -154,11 +155,20 @@ function toV2ThreadShell(input: typeof thread) {
         : latestTurn.state === "error" || input.session?.status === "error"
           ? "failed"
           : "running",
-    pendingRuntimeRequest: input.hasPendingUserInput
-      ? { id: input.pendingRequestId, kind: "user_input", createdAt: SHELL_NOW }
-      : input.hasPendingApprovals
-        ? { id: input.pendingRequestId, kind: "command", createdAt: SHELL_NOW }
-        : null,
+    pendingRuntimeRequest: input.hasPendingSecretRequest
+      ? {
+          id: input.pendingRequestId,
+          kind: "user_input",
+          createdAt: SHELL_NOW,
+          blocking: true,
+          userOnly: true,
+          secret: true,
+        }
+      : input.hasPendingUserInput
+        ? { id: input.pendingRequestId, kind: "user_input", createdAt: SHELL_NOW }
+        : input.hasPendingApprovals
+          ? { id: input.pendingRequestId, kind: "command", createdAt: SHELL_NOW }
+          : null,
     latestVisibleMessage: null,
     latestUserMessageAt: null,
     hasActionableProposedPlan: false,
@@ -466,4 +476,48 @@ it("opening a thread or removing its environment closes only its in-app toasts, 
   state.inApp = false;
   app.changeSettings();
   expect(state.closeToast.mock.calls.slice(3)).toEqual([["one-other"]]);
+});
+
+it("announces a pending secret once as an approval, flashes the window, and clears on answer", async () => {
+  await using app = setup();
+  const attention = vi.fn(() => Promise.resolve());
+  using _bridge = stubGlobal("desktopBridge", {
+    setWindowAttention: attention,
+    onNotificationBadgeClear: () => () => undefined,
+  });
+  app.start();
+  const asking = shell({ hasPendingSecretRequest: true, pendingRequestId: "secret-1" });
+  state.shells.set("one", asking);
+  // A later shell update for the same card does not announce it again.
+  state.shells.set("one", shell({ hasPendingSecretRequest: true, pendingRequestId: "secret-1" }));
+  expect(TestNotification.sent.map(({ title }) => title)).toEqual(["Approval needed"]);
+  expect(state.badge).toHaveBeenLastCalledWith(1);
+  expect(attention.mock.calls).toEqual([[true]]);
+
+  // Saving or declining the secret ends the card, so the thread runs on without a request.
+  state.shells.set("one", shell());
+  expect(TestNotification.sent[0]!.close).toHaveBeenCalled();
+  expect(state.badge).toHaveBeenLastCalledWith(0);
+  expect(attention.mock.calls).toEqual([[true], [false]]);
+  expect(TestNotification.sent).toHaveLength(1);
+});
+
+it("closes an answered secret's notification but keeps the completion that follows", async () => {
+  await using app = setup();
+  app.start();
+  state.shells.set("one", shell({ hasPendingSecretRequest: true, pendingRequestId: "secret-2" }));
+  const secret = TestNotification.sent[0]!;
+  state.shells.set(
+    "one",
+    shell({
+      latestTurn: { turnId: "turn", state: "completed", completedAt: "2026-09-13T07:00:01.000Z" },
+    }),
+  );
+  expect(secret.close).toHaveBeenCalled();
+  expect(TestNotification.sent.map(({ title }) => title)).toEqual([
+    "Approval needed",
+    "Thread completed",
+  ]);
+  expect(TestNotification.sent[1]!.close).not.toHaveBeenCalled();
+  expect(state.badge).toHaveBeenLastCalledWith(1);
 });

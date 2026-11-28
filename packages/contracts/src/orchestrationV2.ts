@@ -2380,6 +2380,8 @@ export const OrchestrationV2PendingRuntimeRequestSummary = Schema.Struct({
   blocking: Schema.optional(Schema.Boolean),
   /** Secret and link cards: only the user can answer them, never a coordinating agent. */
   userOnly: Schema.optional(Schema.Boolean),
+  /** A secret card: its agent waits on the user, so it asks for attention like an approval. */
+  secret: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationV2PendingRuntimeRequestSummary =
   typeof OrchestrationV2PendingRuntimeRequestSummary.Type;

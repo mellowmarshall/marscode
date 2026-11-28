@@ -31,13 +31,19 @@ export interface BackgroundThreadSnapshot {
 export function resolveBackgroundThreadRequest(
   thread: Pick<
     SidebarThreadSummary,
-    "hasPendingApprovals" | "hasPendingUserInput" | "pendingSubagentRequest"
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "hasPendingSecretRequest"
+    | "pendingSubagentRequest"
   > & {
     readonly source: Pick<SidebarThreadSummary["source"], "pendingRuntimeRequest">;
   },
 ): Pick<BackgroundThreadSnapshot, "request" | "requestId"> {
   const ownRequestId = thread.source.pendingRuntimeRequest?.id ?? null;
-  if (thread.hasPendingApprovals) return { request: "approval", requestId: ownRequestId };
+  // A secret card holds its agent like an approval, so it is announced as one.
+  if (thread.hasPendingApprovals || thread.hasPendingSecretRequest === true) {
+    return { request: "approval", requestId: ownRequestId };
+  }
   if (thread.pendingSubagentRequest === "approval") return { request: "approval", requestId: null };
   if (thread.hasPendingUserInput) return { request: "input", requestId: ownRequestId };
   if (thread.pendingSubagentRequest === "user_input") return { request: "input", requestId: null };

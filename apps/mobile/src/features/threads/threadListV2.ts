@@ -276,13 +276,19 @@ export function resolveThreadListV2Status(
     EnvironmentThreadShell,
     | "hasPendingApprovals"
     | "hasPendingUserInput"
+    | "hasPendingSecretRequest"
     | "pendingSubagentRequest"
     | "pendingGuestMessageCount"
     | "runtime"
     | "blockedOnThreadWait"
   >,
 ): ThreadListV2Status {
-  if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
+  // A secret card holds its agent on the user, like an approval.
+  if (
+    thread.hasPendingApprovals ||
+    thread.hasPendingSecretRequest === true ||
+    thread.pendingSubagentRequest === "approval"
+  ) {
     return "approval";
   }
   if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") {

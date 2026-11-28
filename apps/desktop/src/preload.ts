@@ -125,6 +125,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.on(IpcChannels.SET_NOTIFICATION_BADGE_CHANNEL, handler);
     return () => ipcRenderer.removeListener(IpcChannels.SET_NOTIFICATION_BADGE_CHANNEL, handler);
   },
+  setWindowAttention: (active) =>
+    ipcRenderer.invoke(IpcChannels.SET_WINDOW_ATTENTION_CHANNEL, active),
   onTrackpadScrollBegin: (listener) => {
     const handler = () => listener();
     ipcRenderer.on(IpcChannels.TRACKPAD_SCROLL_BEGIN_CHANNEL, handler);

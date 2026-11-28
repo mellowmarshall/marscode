@@ -225,6 +225,54 @@ describe("v2 thread shell lists", () => {
     registry.dispose();
   });
 
+  it("raises a subagent's pending secret on itself and its parent like an approval", () => {
+    const { registry, threads, snapshotAtom } = makeHarness();
+    const root = v2ThreadShell;
+    const child = {
+      ...root,
+      id: ThreadId.make("child"),
+      creationSource: "mcp" as const,
+      status: "running" as const,
+      activityRunStatus: "running" as const,
+      lineage: {
+        ...root.lineage,
+        parentThreadId: root.id,
+        relationshipToParent: "subagent" as const,
+      },
+      pendingRuntimeRequest: {
+        id: RuntimeRequestId.make("secret-card"),
+        kind: "user_input" as const,
+        createdAt: v2Now,
+        blocking: true,
+        userOnly: true,
+        secret: true,
+      },
+    };
+    registry.set(snapshotAtom(environmentId), { ...v2ShellSnapshot, threads: [root, child] });
+    const childShell = registry.get(threads.threadShellAtom({ environmentId, threadId: child.id }));
+    expect(childShell?.hasPendingSecretRequest).toBe(true);
+    expect(childShell?.hasPendingUserInput).toBe(true);
+    expect(childShell?.hasPendingApprovals).toBe(false);
+    expect(
+      registry.get(threads.threadShellAtom({ environmentId, threadId: root.id }))
+        ?.pendingSubagentRequest,
+    ).toBe("approval");
+    // Saving or declining the card ends the request, and the parent's flag with it.
+    registry.set(snapshotAtom(environmentId), {
+      ...v2ShellSnapshot,
+      threads: [root, { ...child, pendingRuntimeRequest: null }],
+    });
+    expect(
+      registry.get(threads.threadShellAtom({ environmentId, threadId: child.id }))
+        ?.hasPendingSecretRequest,
+    ).toBe(false);
+    expect(
+      registry.get(threads.threadShellAtom({ environmentId, threadId: root.id }))
+        ?.pendingSubagentRequest,
+    ).toBeNull();
+    registry.dispose();
+  });
+
   it("rolls a side chat's questions and approvals up to its parent row", () => {
     const { registry, threads, snapshotAtom } = makeHarness();
     const root = v2ThreadShell;
