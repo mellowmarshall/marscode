@@ -268,28 +268,36 @@ export async function readRepoDependencyFilesAtRef(input: {
   if (emptyTree.exitCode !== 0) {
     throw new Error(emptyTree.stderr.trim() || "git hash-object failed");
   }
-  const ls = await run({
-    command: "git",
-    args: [
-      "-C",
-      input.repoDir,
-      "diff-tree",
-      "-r",
-      "-z",
-      "--name-only",
-      "--no-commit-id",
-      emptyTree.stdout.trim(),
-      commit,
-      "--",
-      ...DEP_PATHSPECS,
-    ],
-    cwd: input.repoDir,
-  });
-  if (ls.exitCode !== 0) {
-    throw new Error(ls.stderr.trim() || `git diff-tree failed at ${commit}`);
+  // The path list goes to a file, never through the runner's capped stdout, so a repository
+  // with megabytes of dependency paths is never read as a shorter list.
+  const listDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "sq-deps-paths-"));
+  let listing: string;
+  try {
+    const listFile = NodePath.join(listDir, "paths");
+    const ls = await run({
+      command: "bash",
+      args: [
+        "-c",
+        'r=$1; out=$2; shift 2; exec git -C "$r" diff-tree -r -z --name-only --no-commit-id "$@" > "$out"',
+        "--",
+        input.repoDir,
+        listFile,
+        emptyTree.stdout.trim(),
+        commit,
+        "--",
+        ...DEP_PATHSPECS,
+      ],
+      cwd: input.repoDir,
+    });
+    if (ls.exitCode !== 0) {
+      throw new Error(ls.stderr.trim() || `git diff-tree failed at ${commit}`);
+    }
+    listing = NodeFS.readFileSync(listFile, "utf8");
+  } finally {
+    NodeFS.rmSync(listDir, { recursive: true, force: true });
   }
 
-  const trackedPaths = ls.stdout
+  const trackedPaths = listing
     .split("\0")
     .filter((p) => p.length > 0 && isTrackedDepPath(p))
     .toSorted();

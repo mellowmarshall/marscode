@@ -98,6 +98,8 @@ const UNPARSED_MESSAGES: ReadonlySet<string> = new Set([
   "Failed to parse pnpm-workspace.yaml file",
   // An unreadable .yarnrc.yml is a warning: its catalog and registry are then dropped.
   "Failed to load yarnrc file",
+  // An empty manifest is dropped before parsing ("No content found", extract/index.js).
+  "No content found",
 ]);
 
 /**

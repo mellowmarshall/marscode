@@ -70,14 +70,21 @@ describe("Renovate lookup log", () => {
     });
     // Renovate 44.236.5 logs an unreadable .yarnrc.yml once per package file, with no file name.
     const yarnrc = JSON.stringify({ level: 40, msg: "Failed to load yarnrc file", yarnrcYml: "[" });
+    // An empty manifest is dropped before parsing, with this debug record.
+    const empty = JSON.stringify({
+      level: 20,
+      msg: "No content found",
+      packageFile: "packages/empty/package.json",
+    });
     const result = parseRenovateLookupLog(
-      `${unparsable}\n${dropped}\n${workspace}\n${yarnrc}\n${yarnrc}\n${JSON.stringify(record)}\n${finished}\n`,
+      `${unparsable}\n${dropped}\n${workspace}\n${yarnrc}\n${yarnrc}\n${empty}\n${JSON.stringify(record)}\n${finished}\n`,
     );
     expect(result.incomplete).toEqual([
       "packages/x/package.json: could not be parsed",
       "packages/y/package.json: could not be parsed",
       "pnpm-workspace.yaml: could not be parsed",
       ".yarnrc.yml: could not be parsed",
+      "packages/empty/package.json: could not be parsed",
       "package.json: knip (invalid-version)",
       "package.json: pnpm (unspecified-version)",
     ]);
