@@ -11,6 +11,7 @@ import {
 import { resolveQueueRoot } from "@t3tools/ship-queue/cli";
 import {
   checkCiHosts,
+  readHostOffState,
   setCiHostAvailability,
   type HostExecDeps,
 } from "@t3tools/ship-queue/hostProbe";
@@ -140,9 +141,37 @@ export class NativeCiHosts {
 
   getPanel(): FleetHostsPanel {
     return {
-      report: this.report,
+      report: this.reportWithManifestHosts(),
       ...(this.running ? { running: this.running } : {}),
       ...(this.lastError ? { error: this.lastError } : {}),
+    };
+  }
+
+  /**
+   * The Fleet console keys each host's CI switch off a report row. Until a hosts check has probed
+   * a manifest host, list it with only its name and live `.off` state so the switch still shows.
+   */
+  private reportWithManifestHosts(): FleetHostsReport | null {
+    const reported = new Set((this.report?.hosts ?? []).map((h) => h.name));
+    const unprobed = readCiHostsManifest(this.manifestPath).filter((h) => !reported.has(h.name));
+    if (unprobed.length === 0) return this.report;
+    const stubs = unprobed.map((h) => {
+      const off = readHostOffState(this.queueRoot, h.name);
+      return {
+        name: h.name,
+        ssh: h.ssh,
+        ci_off: off !== null,
+        ci_off_at: off?.at || null,
+        ci_off_by: off?.by || null,
+        ci_off_reason: off?.reason || null,
+      };
+    });
+    return {
+      schema: 1,
+      at: this.report?.at ?? "",
+      ...(this.report?.manifest ? { manifest: this.report.manifest } : {}),
+      hosts: [...(this.report?.hosts ?? []), ...stubs],
+      ...(this.report?.settings ? { settings: this.report.settings } : {}),
     };
   }
 

@@ -111,6 +111,41 @@ describe("NativeCiHosts direct @t3tools/ship-queue integration (zero shell-out)"
     expect(spawnedCommands.some((c) => c.includes("ship-queue"))).toBe(false);
   });
 
+  it("lists manifest hosts with their live CI state before any hosts check, so CI switches show", async () => {
+    const dir = mkTempDir("t3-native-cihosts-seed-");
+    const queueRoot = NodePath.join(dir, "sq");
+    const manifestPath = NodePath.join(dir, "ci-hosts.json");
+    NodeFS.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        schema: 1,
+        hosts: [
+          { name: "host-a", ssh: null },
+          { name: "host-b", ssh: "host-b" },
+        ],
+      }),
+    );
+    const ciHosts = new NativeCiHosts({
+      stateFile: NodePath.join(dir, "hosts-check.json"),
+      queueRoot,
+      manifestPath,
+    });
+
+    const before = ciHosts.getPanel().report?.hosts ?? [];
+    expect(before.map((h) => [h.name, h.ci_off])).toEqual([
+      ["host-a", false],
+      ["host-b", false],
+    ]);
+    expect(before.every((h) => h.reached === undefined)).toBe(true);
+
+    expect((await ciHosts.setCi("host-b", false)).ok).toBe(true);
+    const off = ciHosts.getPanel().report?.hosts.find((h) => h.name === "host-b");
+    expect(off).toMatchObject({ ci_off: true, ci_off_by: "t3code" });
+
+    expect((await ciHosts.setCi("host-b", true)).ok).toBe(true);
+    expect(ciHosts.getPanel().report?.hosts.find((h) => h.name === "host-b")?.ci_off).toBe(false);
+  });
+
   it("wires server SQLite deps reads and pre-approval validated idempotent decisions end-to-end", async () => {
     const queueRoot = mkTempDir("t3-native-deps-");
     const fixedNow = 1_700_000_000;

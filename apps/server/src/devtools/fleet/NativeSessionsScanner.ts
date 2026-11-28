@@ -122,6 +122,7 @@ export class NativeSessionsScanner {
     { readonly pid: number; readonly startTicks: string | null; readonly item: FleetSessionItem }
   >();
   private latestList: ReadonlyArray<FleetSessionItem> = [];
+  private latestProcessTable: ReadonlyArray<ParsedPsProcess> = [];
   private readonly systemd: SystemdUserServiceDeps;
 
   constructor(
@@ -141,6 +142,11 @@ export class NativeSessionsScanner {
     return this.latestList;
   }
 
+  /** Every process of this user from the last successful scan; a new array per scan. */
+  getLatestProcessTable(): ReadonlyArray<ParsedPsProcess> {
+    return this.latestProcessTable;
+  }
+
   async scan(): Promise<ReadonlyArray<FleetSessionItem>> {
     const [psOut, ancestorProtected] = await Promise.all([
       runUserPs(),
@@ -149,6 +155,7 @@ export class NativeSessionsScanner {
     if (!psOut) return this.latestList;
 
     const procs = parsePsOutput(psOut);
+    this.latestProcessTable = procs;
     // Protect T3 ancestors and named runtime/ACP helpers, while still surfacing runaway
     // child build/test processes (e.g. vitest, tsc, cargo) so users can inspect or stop them.
     const protectedPids = new Set<number>(ancestorProtected);

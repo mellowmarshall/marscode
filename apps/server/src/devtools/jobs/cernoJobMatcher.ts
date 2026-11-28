@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import { cernoIdStartTicks } from "./jobProcessLoad.ts";
 import { extractCommandLogPath } from "./commandJobParser.ts";
 import {
   isTerminalJobState,
@@ -233,6 +234,21 @@ export class CernoVisibilityCoordinator {
         if (this.cb.getBgSummary(bgId)) this.cb.markDirty(bgId, true);
       }
     }
+  }
+
+  /** Root PID of the live cerno process matched to a live background job, from the match cache. */
+  liveCernoRootForBg(
+    bgId: string,
+    candidates: ReadonlyArray<CernoJobMatchCandidate>,
+  ): { readonly pid: number; readonly startTicks: number | null } | undefined {
+    const bg = this.bgMatchCache.get(bgId);
+    if (!bg || isTerminalJobState(bg.state)) return undefined;
+    const matched = candidates.find(
+      (c) => !isTerminalJobState(c.state) && c.pidStats?.alive && cernoMatchesBackgroundJob(c, bg),
+    );
+    return matched?.pidStats
+      ? { pid: matched.pidStats.pid, startTicks: cernoIdStartTicks(matched.id) }
+      : undefined;
   }
 
   findLiveCernoForBg(

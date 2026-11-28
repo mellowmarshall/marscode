@@ -42,7 +42,7 @@ import { refreshSharedDevdeck, useSharedCapabilities, useSharedDevdeck } from ".
 import { FleetMachinesView } from "./FleetMachinesView";
 import { FleetReaperTab } from "./FleetReaperTab";
 import { useFleetHostJobs } from "./useFleetHostJobs";
-import { TallShipIcon } from "./TallShipIcon";
+import { FleetIcon } from "./FleetIcon";
 
 const OPEN_OVERLAY_SELECTOR =
   "[role='menu'], [data-slot='menu-popup'], [data-slot='popover-popup'], [data-slot='dialog-popup'], [role='dialog'], [role='alertdialog'], [data-slot='select-popup']";
@@ -71,7 +71,7 @@ export function DevtoolsSidebarItems() {
               onClick={handleToggle}
               size="icon"
             >
-              <TallShipIcon />
+              <FleetIcon />
             </SidebarMenuButton>
           }
         />
@@ -192,7 +192,7 @@ function FleetConsoleBody({ environmentId }: { readonly environmentId: Environme
       >
         <div className="flex min-w-0 items-center gap-3 [-webkit-app-region:no-drag]">
           <div className="flex items-center gap-2">
-            <TallShipIcon className="size-4 shrink-0 text-muted-foreground" />
+            <FleetIcon className="size-4 shrink-0 text-muted-foreground" />
             <h1 className="truncate text-sm font-semibold leading-none">
               <T>Fleet Console</T>
             </h1>
@@ -414,7 +414,7 @@ function FleetConsoleView() {
             className="relative justify-between border-b bg-background"
           >
             <div className="flex min-w-0 items-center gap-2 [-webkit-app-region:no-drag]">
-              <TallShipIcon className="size-4 shrink-0 text-muted-foreground" />
+              <FleetIcon className="size-4 shrink-0 text-muted-foreground" />
               <h1 className="truncate text-sm font-semibold leading-none">
                 <T>Fleet Console</T>
               </h1>

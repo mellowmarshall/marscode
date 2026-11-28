@@ -1,4 +1,4 @@
-/** Main `Machines` cockpit inside Fleet Console (host telemetry, threads, jobs/procs, localhosts). */
+/** Main `Machines` cockpit inside Fleet Console (host telemetry, host load, localhosts). */
 import { useEffect, useState } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
@@ -34,7 +34,6 @@ import {
 import { resolveFleetJobTarget, type FleetJobTarget } from "./fleetHostEnvironment";
 import { FleetJobsAndProcsPanel } from "./FleetJobsAndProcsPanel";
 import { FleetLocalhostsPanel, serverActionBody, serverActionPath } from "./FleetLocalhostsPanel";
-import { FleetThreadsPanel } from "./FleetThreadsPanel";
 import { cancelTrackedJob, refreshSharedJobs } from "./jobs/jobsStore";
 import { isJobLive, type JobSummary } from "./jobs/jobTypes";
 import { ManagedJobInspector } from "./jobs/ManagedJobInspector";
@@ -379,15 +378,16 @@ export function FleetMachinesView({
         onStartCleanupReview={(host) => void handleStartCleanupReview(host)}
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div
+        data-testid="fleet-machines-body"
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4 lg:overflow-hidden"
+      >
         {bannerStatus !== null ? (
-          <div className="mb-4">
-            <FleetOfflineBanner
-              environmentId={environmentId}
-              devdeckStatus={bannerStatus}
-              devdeckError={devdeckError}
-            />
-          </div>
+          <FleetOfflineBanner
+            environmentId={environmentId}
+            devdeckStatus={bannerStatus}
+            devdeckError={devdeckError}
+          />
         ) : null}
 
         {selectedHost ? (
@@ -404,28 +404,26 @@ export function FleetMachinesView({
         ) : null}
 
         {selectedHost ? (
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <div className="space-y-4">
-              <FleetThreadsPanel environmentId={environmentId} host={selectedHost} />
-              <FleetJobsAndProcsPanel
-                key={selectedHost.id}
-                host={selectedHost}
-                hostJobs={hostJobs}
-                selectedJobId={selectedJobId}
-                nowMs={nowMs}
-                busyKeys={busyKeys}
-                onInspectJob={(id) => setConsoleJobId(id)}
-                onCancelJob={(id) => void handleCancelJob(id)}
-                onCloseSession={(sess) => void handleCloseSession(sess)}
-              />
-            </div>
-            <div className="space-y-4">
-              <FleetLocalhostsPanel
-                host={selectedHost}
-                busyKeys={busyKeys}
-                onServerAction={(srv, verb) => void handleServerAction(srv, verb)}
-              />
-            </div>
+          <div
+            data-testid="fleet-machine-columns"
+            className="grid shrink-0 grid-cols-1 items-start gap-3 lg:min-h-0 lg:flex-1 lg:shrink lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] [&>*]:max-h-[32rem] lg:[&>*]:max-h-full"
+          >
+            <FleetJobsAndProcsPanel
+              key={selectedHost.id}
+              host={selectedHost}
+              hostJobs={hostJobs}
+              selectedJobId={selectedJobId}
+              nowMs={nowMs}
+              busyKeys={busyKeys}
+              onInspectJob={(id) => setConsoleJobId(id)}
+              onCancelJob={(id) => void handleCancelJob(id)}
+              onCloseSession={(sess) => void handleCloseSession(sess)}
+            />
+            <FleetLocalhostsPanel
+              host={selectedHost}
+              busyKeys={busyKeys}
+              onServerAction={(srv, verb) => void handleServerAction(srv, verb)}
+            />
           </div>
         ) : (
           <FleetOfflineJobsFallback

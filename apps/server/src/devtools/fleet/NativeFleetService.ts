@@ -25,7 +25,7 @@ import type {
 import { defaultT3StateDir, NativeCiHosts, readCiHostsManifest } from "./NativeCiHosts.ts";
 import { NativeHostSampler } from "./NativeHostSampler.ts";
 import { NativeServersScanner } from "./NativeServersScanner.ts";
-import { NativeSessionsScanner } from "./NativeSessionsScanner.ts";
+import { NativeSessionsScanner, type ParsedPsProcess } from "./NativeSessionsScanner.ts";
 import { type PeerLinkCandidate, RemoteNodeProber } from "./RemoteNodeProber.ts";
 
 const ACTIVE_HOST_INTERVAL_MS = 1_000;
@@ -51,6 +51,8 @@ export interface NativeFleetServiceDeps {
   readonly listPeerLinks?: (() => Promise<ReadonlyArray<PeerLinkCandidate>>) | undefined;
   readonly githubAuditPath?: string | undefined;
   readonly readWorktrees?: (() => Promise<FleetWorktreesPanel | null>) | undefined;
+  /** Receives each fresh process table from the sessions scan (live job loads). */
+  readonly onProcessTable?: ((rows: ReadonlyArray<ParsedPsProcess>) => void) | undefined;
   /** Test seams: the active workload scan cadence and the panel-cache clock. */
   readonly activeScansIntervalMs?: number | undefined;
   readonly now?: (() => number) | undefined;
@@ -70,6 +72,8 @@ export class NativeFleetService {
   private readonly githubAuditPath: string;
   private readonly now: () => number;
   private readonly worktrees: FleetCachedPanel<FleetWorktreesPanel | null>;
+  private readonly onProcessTable: NativeFleetServiceDeps["onProcessTable"];
+  private lastForwardedTable: ReadonlyArray<ParsedPsProcess> | null = null;
 
   private readonly activeListeners = new Set<FleetSseListener>();
   private readonly passiveListeners = new Set<FleetSseListener>();
@@ -116,6 +120,7 @@ export class NativeFleetService {
     this.actions = new FleetActionTracker((act) => this.emit("action", act));
     this.githubAuditPath = deps.githubAuditPath ?? defaultGitHubAuditPath();
     this.now = deps.now ?? (() => Date.now());
+    this.onProcessTable = deps.onProcessTable;
     const readWorktrees = deps.readWorktrees ?? (async () => null);
     this.worktrees = new FleetCachedPanel({
       load: readWorktrees,
@@ -245,6 +250,7 @@ export class NativeFleetService {
         this.sessionsScanner.scan(),
       ]);
       this.lastWorkloadScanAt = Date.now();
+      this.forwardProcessTable();
       this.emit("servers", servers);
       this.emit("sessions", sessions);
       this.emit("alerts", this.getAlerts());
@@ -253,6 +259,17 @@ export class NativeFleetService {
       // isolate workload scan failures
     } finally {
       this.scanningLocal = false;
+    }
+  }
+
+  private forwardProcessTable(): void {
+    const table = this.sessionsScanner.getLatestProcessTable();
+    if (table === this.lastForwardedTable) return;
+    this.lastForwardedTable = table;
+    try {
+      this.onProcessTable?.(table);
+    } catch {
+      // isolate subscriber errors
     }
   }
 

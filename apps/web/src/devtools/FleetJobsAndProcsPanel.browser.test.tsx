@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 import { render } from "../../test/render";
@@ -91,7 +92,7 @@ describe("FleetJobsAndProcsPanel remote host", () => {
       />,
     );
 
-    await expect.element(screen.getByText("1 jobs · 2 procs")).toBeVisible();
+    await expect.element(screen.getByText("1 live")).toBeVisible();
     await expect.element(screen.getByText("Remote distillation run")).toBeVisible();
     await expect.element(screen.getByText("cargo")).toBeVisible();
     await expect.element(screen.getByText("postgres")).toBeVisible();
@@ -116,7 +117,111 @@ describe("FleetJobsAndProcsPanel remote host", () => {
       />,
     );
 
-    await expect.element(screen.getByRole("button", { name: "Kill" })).toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "Kill cargo" })).toBeVisible();
     expect(screen.getByText("View only").elements()).toHaveLength(0);
+  });
+});
+
+const GiB = 1024 ** 3;
+
+function localJob(
+  id: string,
+  title: string,
+  state: JobSummary["state"],
+  extra: Partial<JobSummary> = {},
+): JobSummary {
+  return {
+    id,
+    revision: 1,
+    source: "background",
+    kind: "command",
+    title,
+    phaseLabel: state,
+    state,
+    binding: { host: "host-a" },
+    timing: { startedAt: "2026-11-25T07:00:00Z" },
+    cancellable: state === "running",
+    ...extra,
+  };
+}
+
+const busyHost = makeHost({
+  id: "host-a",
+  shortName: "host-a",
+  probeHostName: "host-a",
+  isLocal: true,
+  ssh: null,
+  telemetry: { name: "host-a", cpus: 16, mem: { used: 40 * GiB, total: 64 * GiB } },
+});
+
+describe("FleetJobsAndProcsPanel load and stop", () => {
+  it("shows each live job's CPU and memory as a share of the host, heaviest first, and hides finished jobs until asked", async () => {
+    await using screen = await render(
+      <FleetJobsAndProcsPanel
+        host={busyHost}
+        hostJobs={[
+          localJob("bg:light", "Light job", "running", {
+            load: { cpuPct: 80, memBytes: 1 * GiB, processCount: 1 },
+          }),
+          localJob("bg:heavy", "Heavy build", "running", {
+            load: { cpuPct: 1360, memBytes: 6 * GiB, processCount: 12 },
+          }),
+          localJob("bg:old", "Finished build", "done", {
+            timing: { startedAt: "2026-11-25T06:00:00Z", endedAt: "2026-11-25T06:30:00Z" },
+          }),
+        ]}
+        nowMs={NOW_MS}
+        busyKeys={new Set()}
+        onInspectJob={noop}
+        onCancelJob={noop}
+        onCloseSession={noop}
+      />,
+    );
+
+    await expect.element(screen.getByText("Heavy build")).toBeVisible();
+    const titles = () =>
+      Array.from(
+        screen.container.querySelectorAll(
+          '[data-testid="fleet-job-row"] button span span:first-child',
+        ),
+      ).map((el) => el.textContent);
+    expect(titles()).toEqual(["Heavy build", "Light job"]);
+    // 13.6 cores of 16 is 85% of the host; 6 GiB of 64 GiB is 9%.
+    await expect.element(screen.getByText("85%")).toBeVisible();
+    await expect.element(screen.getByText("6.0 GiB")).toBeVisible();
+    expect(screen.container.textContent).not.toContain("Finished build");
+
+    await userEvent.click(screen.getByRole("button", { name: "Show 1 finished" }));
+    await expect.element(screen.getByText("Finished build")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Hide 1 finished" }));
+    expect(screen.container.textContent).not.toContain("Finished build");
+  });
+
+  it("stops a job only after the owner confirms", async () => {
+    const onCancelJob = vi.fn();
+    await using screen = await render(
+      <FleetJobsAndProcsPanel
+        host={busyHost}
+        hostJobs={[
+          localJob("bg:heavy", "Heavy build", "running", {
+            load: { cpuPct: 1360, memBytes: 6 * GiB, processCount: 12 },
+          }),
+        ]}
+        nowMs={NOW_MS}
+        busyKeys={new Set()}
+        onInspectJob={noop}
+        onCancelJob={onCancelJob}
+        onCloseSession={noop}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Stop thread for Heavy build" }));
+    expect(onCancelJob).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: "Confirm stop" }).elements()).toHaveLength(0);
+
+    await userEvent.click(screen.getByRole("button", { name: "Stop thread for Heavy build" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm stop" }));
+    expect(onCancelJob).toHaveBeenCalledWith("bg:heavy");
   });
 });

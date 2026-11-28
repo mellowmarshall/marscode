@@ -687,6 +687,8 @@ export function mergeFleetHosts(input: {
   // 3. Any probe-only hosts not represented by a DevDeck node
   for (const [name, probe] of probeByName.entries()) {
     if (consumedProbes.has(name)) continue;
+    // A manifest row the server lists before any hosts check only carries CI state for a node.
+    if (probe.reached === undefined) continue;
     const shipHost = shipHostByName.get(name) ?? null;
     const driftEntries: ReadonlyArray<DevdeckDriftEntry> = [
       ...(probe.drift ?? []),

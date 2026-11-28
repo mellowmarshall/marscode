@@ -1,6 +1,7 @@
 /**
  * Frontend wire types, formatters, and legacy Ship Queue adapter for unified Bounded Jobs.
  */
+import type { DevtoolsJobLoad } from "@t3tools/contracts";
 import { msg } from "gt-react";
 
 import { m } from "~/i18n/messages";
@@ -142,6 +143,7 @@ export interface JobSummary {
   readonly kpis?: ReadonlyArray<JobKpi>;
   readonly sparkline?: JobSparklineSummary;
   readonly pidStats?: JobPidStats;
+  readonly load?: DevtoolsJobLoad;
   readonly hasMetrics?: boolean;
   readonly hasLog?: boolean;
   readonly logState?: JobLogState;

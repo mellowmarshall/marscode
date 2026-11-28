@@ -3,6 +3,7 @@
  * Ship Queue jobs and T3-tracked background commands share this contract across
  * `/api/devtools/jobs/*` and Fleet Console.
  */
+import type { DevtoolsJobLoad } from "@t3tools/contracts";
 
 export type TrackedJobState =
   | "queued"
@@ -145,6 +146,8 @@ export interface JobSummary {
   readonly kpis?: ReadonlyArray<JobKpi> | undefined;
   readonly sparkline?: JobSparklineSummary | undefined;
   readonly pidStats?: JobPidStats | undefined;
+  /** Live process-tree load; set only for live local jobs with a known root PID. */
+  readonly load?: DevtoolsJobLoad | undefined;
   readonly hasMetrics?: boolean | undefined;
   readonly hasLog?: boolean | undefined;
   readonly logState?: JobLogState | undefined;
