@@ -26,7 +26,10 @@ const LINUX_REMOTE_FUSE_TYPES = new Set([
   "fuse.smbnetfs",
   "fuse.cifs",
 ]);
-const DARWIN_REMOTE_FS_TYPES = new Set(["smbfs", "nfs", "afpfs", "webdav", "macfuse", "osxfuse"]);
+const DARWIN_REMOTE_FS_TYPES = new Set(["smbfs", "nfs", "afpfs", "webdav"]);
+const DARWIN_FUSE_FS_TYPES = new Set(["macfuse", "osxfuse"]);
+/** `host:path` (sshfs, rclone, URLs) or `//server/share`; local FUSE sources are `/dev/...`, a local path, or a bare name. */
+const DARWIN_FUSE_NETWORK_SOURCE = /^(?:[^/\s][^\s]*?:|\/\/)/;
 
 /** The device a path is on, or null when it is missing, offline or slow. */
 export type ArchiveDeviceOf = (target: string) => Promise<number | null>;
@@ -74,6 +77,23 @@ async function isLinuxRemoteFuseMount(mountPoint: string): Promise<boolean> {
   }
 }
 
+/**
+ * Whether macOS `mount` output lists `target` as a network share. macFUSE/osxfuse also back local
+ * volumes (NTFS disks, encrypted folders), so those count only when their source names a remote host.
+ */
+export function darwinMountIsRemote(mountOutput: string, target: string): boolean {
+  for (const line of mountOutput.split("\n")) {
+    const match = /^(.*?) on (.+) \(([^)]*)\)\s*$/.exec(line);
+    if (!match || match[2] !== target) continue;
+    const source = match[1] ?? "";
+    const type = (match[3] ?? "").split(",")[0]?.trim() ?? "";
+    if (DARWIN_REMOTE_FS_TYPES.has(type)) return true;
+    // `-o local` only changes how Finder lists the volume; the source decides where data lives.
+    if (DARWIN_FUSE_FS_TYPES.has(type) && DARWIN_FUSE_NETWORK_SOURCE.test(source)) return true;
+  }
+  return false;
+}
+
 async function isDarwinRemoteMount(mountPoint: string): Promise<boolean> {
   try {
     const target = NodePath.resolve(mountPoint);
@@ -93,13 +113,7 @@ async function isDarwinRemoteMount(mountPoint: string): Promise<boolean> {
       DEVICE_TIMEOUT_MS,
       "archive mount inspect",
     );
-    for (const line of stdout.split("\n")) {
-      const match = / on (.+) \(([^,)]+)/.exec(line);
-      if (match && match[1] === target && DARWIN_REMOTE_FS_TYPES.has(match[2] ?? "")) {
-        return true;
-      }
-    }
-    return false;
+    return darwinMountIsRemote(stdout, target);
   } catch {
     return false;
   }
@@ -267,9 +281,11 @@ export class ArchiveMount {
     let current = this.hostDir;
     for (const segment of relative.split(NodePath.sep).filter(Boolean)) {
       current = NodePath.join(current, segment);
-      await NodeFSP.mkdir(current).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== "EEXIST") throw error;
-      });
+      await runArchiveFsOp(() => NodeFSP.mkdir(current), DEVICE_TIMEOUT_MS, "archive mkdir").catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code !== "EEXIST") throw error;
+        },
+      );
     }
   }
 }
