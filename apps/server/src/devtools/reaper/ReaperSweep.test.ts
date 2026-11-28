@@ -30,6 +30,7 @@ import {
   tmpCandidateRoots,
   type SweepContext,
 } from "./ReaperTempSweep.ts";
+import { gitDataIn } from "./ReaperTreeOps.ts";
 
 const NOW_MS = Date.parse("2030-06-01T00:00:00.000Z");
 const HOUR = 3_600_000;
@@ -278,6 +279,25 @@ describe.skipIf(platform !== "linux" && platform !== "darwin")("reaper sweeps", 
     expect(logs).toContain(
       `  Skipped temp root ${bareTmp}: it holds bare git repository ${bareTmp}`,
     );
+  });
+
+  it("treats a bare repository with linked objects or refs as git data", async () => {
+    const devRoot = tempDir("t3-reaper-barelinks-");
+    const store = NodePath.join(devRoot, "store");
+    NodeChildProcess.execFileSync("git", ["init", "--bare", "-q", store]);
+    const linkedTmp = NodePath.join(devRoot, "mirrors", "tmp");
+    NodeFS.mkdirSync(linkedTmp, { recursive: true });
+    NodeFS.writeFileSync(NodePath.join(linkedTmp, "HEAD"), "ref: refs/heads/main\n");
+    NodeFS.symlinkSync(NodePath.join(store, "refs"), NodePath.join(linkedTmp, "refs"));
+    NodeFS.symlinkSync(NodePath.join(store, "objects"), NodePath.join(linkedTmp, "objects"));
+    ageTree(devRoot, 3 * DAY);
+    const before = NodeFS.readdirSync(linkedTmp).toSorted();
+    const sweep = { ...ctx(new PathGuard([])), log: () => undefined };
+
+    await sweepTmpRoots([linkedTmp], sweep);
+
+    expect(NodeFS.readdirSync(linkedTmp).toSorted()).toEqual(before);
+    expect(await gitDataIn(linkedTmp)).not.toBeNull();
   });
 
   it("skips exhaust roots that are themselves bare repositories", async () => {
