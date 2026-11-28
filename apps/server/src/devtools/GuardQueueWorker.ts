@@ -55,7 +55,10 @@ export function verifyQueueWorkerJob(
   }
   if (!isJobId(input.jobId)) return { ok: false, error: "invalid job_id" };
   const job = readJob(trust.queueRoot, input.jobId);
-  if (!job || isEnded(job)) return { ok: false, error: "job is not open" };
+  if (!job || isEnded(job)) {
+    bindings.release(input.jobId);
+    return { ok: false, error: "job is not open" };
+  }
   const binding = bindings.get(input.jobId);
   if (!binding) return { ok: false, error: "job is not bound to a verified thread" };
   if (input.guard !== SHIP_QUEUE_GUARD) {

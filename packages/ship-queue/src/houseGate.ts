@@ -194,7 +194,7 @@ export async function houseStages(
     mark(
       deps.root,
       job.id,
-      `ACTION_REQUIRED job=${job.id} gates=${gates} paths=${bundle.protected_paths.join(",")} digest=${digest}: the owner approves this protected diff (marscode-guard override ship-queue); the job resumes on its own once approved`,
+      `ACTION_REQUIRED job=${job.id} gates=${gates} paths=${bundle.protected_paths.join(",")} digest=${digest}: the owner approves this protected diff (marscode-guard override ship-queue); the job resumes on its own once approved. If MarsCode restarts before then, the job cannot resume: cancel it and resubmit`,
     );
   }
   return { kind: "action", digest };

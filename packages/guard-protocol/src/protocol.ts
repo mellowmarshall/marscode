@@ -1,5 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off - Shared wire schema, validation, and bundle eligibility rules for host-guard approvals.
-import { argvSha256, HEX_SHA256_RE, normalizeRepoSlug, normalizeSortedUnique } from "./digests.ts";
+import {
+  argvSha256,
+  HEX_SHA256_RE,
+  normalizeRepoSlug,
+  normalizeSortedUnique,
+  sha256Hex,
+} from "./digests.ts";
+import { redactGuardCommand } from "./commandRedact.ts";
 import { redactArgvCommand } from "./redaction.ts";
 
 export const GUARD_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
@@ -77,7 +84,10 @@ export interface GuardBundleSpec {
 export interface GuardPlanEntry {
   /** The host guard whose refusal this entry lifts; it matches no other guard. */
   readonly guard: string;
+  /** Redacted, as shown to the owner. */
   readonly command: ReadonlyArray<string>;
+  /** Digest of the exact argv, secrets included, so an approval covers only that argv. */
+  readonly argvSha256: string;
 }
 
 export interface PendingGuardRequest {
@@ -174,7 +184,12 @@ export function validateGuardAndCommand(
   | {
       readonly ok: true;
       readonly guard: string;
+      /** The argv as received (redacted by current clients). */
+      readonly command: ReadonlyArray<string>;
       readonly displayCommand: ReadonlyArray<string>;
+      /** Digest of the exact argv, secrets included. */
+      readonly argvSha256: string;
+      /** Grant key: binds the shown argv and the exact argv. */
       readonly digest: string;
     }
   | { readonly ok: false; readonly error: string } {
@@ -198,17 +213,38 @@ export function validateGuardAndCommand(
     command.push(item);
   }
   const computed = argvSha256(command);
+  let exact = computed;
   if (suppliedDigest !== undefined && suppliedDigest !== "") {
-    if (
-      typeof suppliedDigest !== "string" ||
-      !HEX_SHA256_RE.test(suppliedDigest) ||
-      suppliedDigest !== computed
-    ) {
+    if (typeof suppliedDigest !== "string" || !HEX_SHA256_RE.test(suppliedDigest)) {
       return { ok: false, error: "argv_sha256 mismatch" };
     }
+    // A redacted command carries the digest of the argv it was redacted from.
+    if (suppliedDigest !== computed && !command.some((w) => REDACTION_MARK_RE.test(w))) {
+      return { ok: false, error: "argv_sha256 mismatch" };
+    }
+    exact = suppliedDigest;
   }
-  const displayCommand = rawGuard === "argv" ? redactArgvCommand(command) : command;
-  return { ok: true, guard: rawGuard, displayCommand, digest: computed };
+  const displayCommand = guardDisplayCommand(rawGuard, command);
+  const digest = boundGuardDigest(argvSha256(displayCommand), exact);
+  return { ok: true, guard: rawGuard, command, displayCommand, argvSha256: exact, digest };
+}
+
+const REDACTION_MARK_RE = /<redacted/;
+
+/** What the owner sees and the broker stores: secrets redacted. Clients send only this. */
+export function guardDisplayCommand(
+  guard: string,
+  command: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  return guard === "argv" ? redactArgvCommand(command) : redactGuardCommand(command);
+}
+
+/**
+ * The grant key binds both what the owner saw and the exact argv: a different secret misses, and
+ * so does a request whose shown text is not the redaction of the argv that later runs.
+ */
+function boundGuardDigest(shownDigest: string, exactDigest: string): string {
+  return shownDigest === exactDigest ? exactDigest : sha256Hex(`${shownDigest}\0${exactDigest}`);
 }
 
 export function parseBundleSpec(

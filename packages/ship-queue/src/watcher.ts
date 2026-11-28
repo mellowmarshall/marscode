@@ -158,7 +158,7 @@ export async function watchJob(options: WatchOptions): Promise<number> {
         if (readSeen(actionSeenPath(root, id)) !== job.action_digest) {
           NodeFS.writeFileSync(actionSeenPath(root, id), job.action_digest);
           write(
-            `watch: job ${id} waits for the owner; once approved it resumes on its own and your thread is told. To follow it: ship-queue watch ${id}`,
+            `watch: job ${id} waits for the owner; once approved it resumes on its own and your thread is told (after a MarsCode restart, cancel and resubmit instead). To follow it: ship-queue watch ${id}`,
           );
           return WATCH_EXIT.actionRequired;
         }

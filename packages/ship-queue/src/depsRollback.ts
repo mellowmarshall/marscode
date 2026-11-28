@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off - Content-bound guard-protocol owner approval and atomic dependency attempt rollback.
-import { checkGuardGrant, requestGuardGrant } from "@t3tools/guard-protocol/client";
+import { requestGuardGrant, useGuardGrant } from "@t3tools/guard-protocol/client";
 
 import { computeReportDigest } from "./depsRepoFiles.ts";
 import { SqliteDepsStore } from "./depsStore.ts";
@@ -38,37 +38,47 @@ export interface DepsEngineOptions {
   readonly makeAttemptToken?: (() => string) | undefined;
 }
 
-/** Default owner approval wired directly to `@t3tools/guard-protocol` (`owner-check` content-bound command grant). */
-export const guardProtocolOwnerApproval: OwnerApprovalFn = async (input) => {
-  const checked = await checkGuardGrant({
-    guard: "owner-check",
-    command: input.command,
-    cwd: input.cwd,
-    threadId: input.threadId,
-  });
-  if (checked.ok) {
-    return { ok: true, approvedBy: checked.approvedBy ?? "human" };
-  }
-  const refusal =
-    input.action === "rollback"
-      ? `Owner approval required to rollback dependency attempt ${input.reportId}`
-      : `Owner approval required to ${input.decision ?? "decide"} dependency report ${input.reportId}`;
-  const requested = await requestGuardGrant({
-    guard: "owner-check",
-    command: input.command,
-    cwd: input.cwd,
-    refusal,
-    proposedReason: input.reason,
-    threadId: input.threadId,
-  });
-  if (requested.ok) {
-    return { ok: true, approvedBy: requested.approvedBy ?? "human" };
-  }
-  return {
-    ok: false,
-    error: requested.error ?? requested.reason ?? "owner approval denied or unavailable",
+/** Owner approval through `@t3tools/guard-protocol` (`owner-check` content-bound command grant). */
+export function makeGuardProtocolOwnerApproval(options?: {
+  readonly socketPath?: string | undefined;
+}): OwnerApprovalFn {
+  const socket = options?.socketPath ? { socketPath: options.socketPath } : {};
+  return async (input) => {
+    // The decision runs now, so a matching grant is spent here, never just read.
+    const used = await useGuardGrant({
+      guard: "owner-check",
+      command: input.command,
+      cwd: input.cwd,
+      threadId: input.threadId,
+      ...socket,
+    });
+    if (used.ok) {
+      return { ok: true, approvedBy: used.approvedBy ?? "human" };
+    }
+    const refusal =
+      input.action === "rollback"
+        ? `Owner approval required to rollback dependency attempt ${input.reportId}`
+        : `Owner approval required to ${input.decision ?? "decide"} dependency report ${input.reportId}`;
+    const requested = await requestGuardGrant({
+      guard: "owner-check",
+      command: input.command,
+      cwd: input.cwd,
+      refusal,
+      proposedReason: input.reason,
+      threadId: input.threadId,
+      ...socket,
+    });
+    if (requested.ok) {
+      return { ok: true, approvedBy: requested.approvedBy ?? "human" };
+    }
+    return {
+      ok: false,
+      error: requested.error ?? requested.reason ?? "owner approval denied or unavailable",
+    };
   };
-};
+}
+
+export const guardProtocolOwnerApproval: OwnerApprovalFn = makeGuardProtocolOwnerApproval();
 
 function nowSec(fn?: () => number): number {
   return fn ? fn() : Math.floor(Date.now() / 1000);

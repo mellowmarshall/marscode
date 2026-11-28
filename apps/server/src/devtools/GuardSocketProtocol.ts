@@ -3,8 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import type * as NodeNet from "node:net";
 import * as NodeStringDecoder from "node:string_decoder";
 
-import { argvSha256 } from "@t3tools/guard-protocol/digests";
-import { PLAN_GUARD, parsePlanEntries } from "@t3tools/guard-protocol/plan";
+import { PLAN_GUARD, parsePlanEntries, planEntryDigest } from "@t3tools/guard-protocol/plan";
 import {
   parseBundleSpec,
   sanitizeText,
@@ -203,7 +202,7 @@ async function handleGuardProtocolMessage(
     plan &&
     (op !== "request" ||
       validated.guard !== PLAN_GUARD ||
-      !plan.some((e) => argvSha256(e.command) === validated.digest))
+      !plan.some((e) => planEntryDigest(e) === validated.digest))
   ) {
     writeAndCloseSocket(socket, {
       ok: false,
@@ -231,7 +230,7 @@ async function handleGuardProtocolMessage(
       peerPid: peer.peerPid,
       jobId,
       guard: validated.guard,
-      command: validated.displayCommand,
+      command: validated.command,
       cwd,
       bundle: parsedBundle.bundle,
     });
@@ -246,12 +245,10 @@ async function handleGuardProtocolMessage(
     return;
   }
 
-  const matchedOnce = ctx.store.lookupOnce(
-    validated.guard,
-    validated.digest,
-    cwd,
-    effectiveThreadId,
-  );
+  // A job-bound worker check is satisfied only by the job's bundle grant, never a once grant.
+  const matchedOnce = jobId
+    ? null
+    : ctx.store.lookupOnce(validated.guard, validated.digest, cwd, effectiveThreadId);
   const matchedBundle =
     !matchedOnce && parsedBundle.bundleEligible && parsedBundle.bundle && effectiveThreadId
       ? await ctx.store.lookupBundle(validated.guard, parsedBundle.bundle, effectiveThreadId)

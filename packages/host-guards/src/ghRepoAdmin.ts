@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Deny-by-default repo administration in managed orgs: a short allowlist of gh repo subcommands and gh api write paths.
-import { GH_UNREADABLE_INPUT } from "./ghGraphqlGuard.ts";
+import { GH_UNREADABLE_INPUT } from "./ghApiArgs.ts";
 import { resolveEnvGhRepoSlug } from "./ghArgParse.ts";
 import type { HostGuardsConfig } from "./hostConfig.ts";
 import { ALLOW_VERDICT, type GuardVerdict } from "./pushGuard.ts";
@@ -9,6 +9,7 @@ import { inspectRepo, isSlugInScope, parseRepoSlugArg } from "./repoScope.ts";
 const GH_REPO_READ_SUBS: ReadonlySet<string> = new Set([
   "view",
   "list",
+  "ls",
   "clone",
   "set-default",
   "sync",
@@ -74,6 +75,36 @@ function bodyField(
   } catch {
     return null;
   }
+}
+
+/**
+ * `POST git/refs` creates the ref named in the body: only a new non-base branch is everyday.
+ * Returns why it is refused, or null.
+ */
+export function checkGitRefsCreate(
+  fields: Readonly<Record<string, string>>,
+  raw: string,
+  bases: ReadonlyArray<string>,
+): string | null {
+  const ref = bodyField(fields, raw, "ref");
+  if (ref === null) return "unreadable ref";
+  const branch = /^refs\/heads\/(.+)$/.exec(ref.trim())?.[1] ?? "";
+  if (!branch) return `ref ${ref || "(missing)"} is not a branch`;
+  if (bases.includes(branch) || /[{}]/.test(branch)) return `the base branch ${branch}`;
+  return null;
+}
+
+/**
+ * Writes that reach a repo through another resource (`teams/<id>/repos/<o>/<r>`,
+ * `user/installations/<id>/repositories/<id>`): owner-only when the repo is or may be managed.
+ */
+export function nestedRepoAdminWrite(path: string, config: HostGuardsConfig): boolean {
+  if (/^(?:repos|repositories)\//i.test(path)) return false;
+  if (/(?:^|\/)repositories\/\d+(?:\/|$)/i.test(path)) return true;
+  const nested = /\/repos\/([^/]+)\/([^/]+)(?:\/|$)/i.exec(path);
+  if (!nested) return false;
+  const owner = nested[1]!.toLowerCase();
+  return /^[{:]/.test(owner) || isSlugInScope(owner, config, nested[2]!.toLowerCase());
 }
 
 /**

@@ -4,8 +4,11 @@ import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { canonicalProtectedDiffSha256 } from "@t3tools/guard-protocol/digests";
+import { requestGuardGrant, useGuardGrant } from "@t3tools/guard-protocol/client";
+import { argvSha256, canonicalProtectedDiffSha256 } from "@t3tools/guard-protocol/digests";
+import { parsePlanEntries } from "@t3tools/guard-protocol/plan";
 import type { GuardBrokerEvent } from "@t3tools/guard-protocol/protocol";
+import { makeGuardProtocolOwnerApproval } from "@t3tools/ship-queue/depsRollback";
 import { protectedDiffDigest } from "@t3tools/ship-queue/houseGate";
 import { createJob } from "@t3tools/ship-queue/jobStore";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -142,7 +145,9 @@ describe("GuardGrantBroker owner approvals", () => {
     });
     const requestId = await pending;
     const listed = broker.listPending().find((r) => r.requestId === requestId);
-    expect(listed?.plan).toEqual(plan.map((command) => ({ guard: "gh", command })));
+    expect(listed?.plan).toEqual(
+      plan.map((command) => ({ guard: "gh", command, argvSha256: argvSha256(command) })),
+    );
     expect(listed?.bundleEligible).toBe(false);
     expect(broker.resolveRequest(requestId, { decision: "approve" }).found).toBe(true);
     const approved = await reply;
@@ -462,5 +467,186 @@ describe("GuardGrantBroker owner approvals", () => {
     for (let i = 1; i < 1024; i += 1) expect((await bind(newJob())).ok).toBe(true);
     expect(await bind(newJob())).toMatchObject({ ok: false, error: "too many job bindings" });
     expect(await bind(first)).toMatchObject({ ok: false, error: "job is already bound" });
+  });
+  it("binds approvals to the exact argv while only the redacted argv crosses the socket", async () => {
+    const { broker, socketPath, dir, nextPending } = await startBroker();
+    const withSecret = (secret: string, branch = "feat/x") => [
+      "git",
+      "push",
+      `https://bot:${secret}@github.com/example-org/example-repo.git`,
+      branch,
+    ];
+    const common = { cwd: dir, socketPath, threadId: "thread-a" };
+
+    // A plan approval covers the exact argv: the same command with another secret misses.
+    const parsed = parsePlanEntries([withSecret("s3cret-one")]);
+    if (!parsed.ok) throw new Error(parsed.error);
+    let pending = nextPending();
+    const planReply = requestGuardGrant({
+      ...common,
+      guard: "plan",
+      command: withSecret("s3cret-one"),
+      plan: parsed.entries,
+      refusal: "push with a credential",
+      proposedReason: "push the release branch once",
+    });
+    const planId = await pending;
+    const shown = JSON.stringify(broker.listPending().find((r) => r.requestId === planId));
+    expect(shown).toContain("<redacted>");
+    expect(shown).not.toContain("s3cret-one");
+    broker.resolveRequest(planId, { decision: "approve" });
+    expect((await planReply).ok).toBe(true);
+    expect(
+      (await useGuardGrant({ ...common, guard: "git", command: withSecret("s3cret-two") })).ok,
+    ).toBe(false);
+    expect(
+      (await useGuardGrant({ ...common, guard: "git", command: withSecret("s3cret-one") })).ok,
+    ).toBe(true);
+
+    // The same holds for a stored once grant.
+    pending = nextPending();
+    const onceReply = requestGuardGrant({
+      ...common,
+      guard: "git",
+      command: withSecret("s3cret-one"),
+      refusal: "push with a credential",
+      proposedReason: "push it once",
+      storeGrant: true,
+    });
+    broker.resolveRequest(await pending, { decision: "approve" });
+    expect((await onceReply).ok).toBe(true);
+    expect(
+      (await useGuardGrant({ ...common, guard: "git", command: withSecret("s3cret-two") })).ok,
+    ).toBe(false);
+    expect(
+      (await useGuardGrant({ ...common, guard: "git", command: withSecret("s3cret-one") })).ok,
+    ).toBe(true);
+
+    // Probe: a hand-made request cannot show one argv and carry another's digest.
+    const raw = (command: ReadonlyArray<string>, digest: string) =>
+      rpc(socketPath, {
+        v: 2,
+        op: "request",
+        wait: false,
+        store_grant: true,
+        guard: "git",
+        command,
+        argv_sha256: digest,
+        cwd: dir,
+        refusal: "x",
+        proposed_reason: "looks harmless",
+      });
+    expect(
+      await raw(["git", "push", "origin", "feat/x"], argvSha256(["git", "push", "origin", "main"])),
+    ).toMatchObject({ ok: false, error: "argv_sha256 mismatch" });
+    pending = nextPending();
+    const shownFeat = [
+      "git",
+      "push",
+      "https://<redacted>@github.com/example-org/example-repo.git",
+      "feat/x",
+    ];
+    expect(await raw(shownFeat, argvSha256(withSecret("s3cret-one", "main")))).toMatchObject({
+      ok: true,
+      queued: true,
+    });
+    broker.resolveRequest(await pending, { decision: "approve" });
+    expect(
+      (await useGuardGrant({ ...common, guard: "git", command: withSecret("s3cret-one", "main") }))
+        .ok,
+    ).toBe(false);
+  });
+
+  it("never lets a once grant satisfy a job-bound worker check", async () => {
+    freezeDate();
+    const queueRoot = tempDir("guard-approvals-once-");
+    const worktree = tempDir("guard-approvals-once-wt-");
+    const workerPid = 7300;
+    const { broker, socketPath, peer } = await startBroker({
+      queueRoot,
+      trustedPids: new Set([workerPid]),
+    });
+    const branch = "feat/once";
+    const bundle = {
+      repo: "example-org/example-repo",
+      branch,
+      pr_or_issue: "",
+      gates: [{ gate_id: "playbook", reason: "PLAYBOOK.md modified" }],
+      protected_paths: ["PLAYBOOK.md"],
+      protected_diff_sha256: canonicalProtectedDiffSha256("diff --git a/PLAYBOOK.md\n+rule"),
+      body_sha256: "",
+      commit_sha: "d".repeat(40),
+    };
+    const jobId = createJob(
+      queueRoot,
+      {
+        repo: "example-org/example-repo",
+        primary: worktree,
+        worktree,
+        branch,
+        base_branch: "main",
+        remote: "origin",
+        title: "once",
+        head_sha: "d".repeat(40),
+        action_digest: protectedDiffDigest(bundle),
+      },
+      "body\n",
+      nowClock,
+    ).id;
+    Object.assign(peer, { threadId: "thread-q", pid: SUBMIT_PID });
+    expect(
+      (await rpc(socketPath, { v: 2, op: "bind_job", job_id: jobId, cwd: worktree, branch })).ok,
+    ).toBe(true);
+    const command = ["ship-queue", "submit", worktree, branch];
+    expect(
+      broker.preapprove({ guard: "ship-queue", command, cwd: worktree, threadId: "thread-q" }).ok,
+    ).toBe(true);
+    const ask = (extra: Record<string, unknown>) =>
+      rpc(socketPath, {
+        v: 2,
+        op: "check",
+        guard: "ship-queue",
+        command,
+        cwd: worktree,
+        bundle,
+        ...extra,
+      });
+    // The submitting thread itself may see the once grant; the job's worker may not.
+    expect((await ask({})).ok).toBe(true);
+    Object.assign(peer, { threadId: "", pid: workerPid });
+    expect((await ask({ job_id: jobId })).ok).toBe(false);
+    expect((await ask({ job_id: jobId, op: "use" })).ok).toBe(false);
+  });
+  it("spends a dependency decision's owner approval instead of only reading it", async () => {
+    const { broker, socketPath, dir, nextPending } = await startBroker();
+    const approve = makeGuardProtocolOwnerApproval({ socketPath });
+    const command = [
+      "ship-queue",
+      "deps",
+      "decide",
+      "example-org/example-repo:1",
+      "approve",
+      "f".repeat(64),
+    ];
+    const input = {
+      action: "decide" as const,
+      reportId: "example-org/example-repo:1",
+      repo: "example-org/example-repo",
+      decision: "approve" as const,
+      reportDigest: "f".repeat(64),
+      command,
+      cwd: dir,
+      reason: "the owner approved this update",
+      threadId: "thread-a",
+    };
+    expect(
+      broker.preapprove({ guard: "owner-check", command, cwd: dir, threadId: "thread-a" }).ok,
+    ).toBe(true);
+    expect(await approve(input)).toMatchObject({ ok: true });
+    // The grant is spent: a second decision has to ask the owner again.
+    const pending = nextPending();
+    const second = approve(input);
+    broker.resolveRequest(await pending, { decision: "deny", reason: "already decided" });
+    expect((await second).ok).toBe(false);
   });
 });

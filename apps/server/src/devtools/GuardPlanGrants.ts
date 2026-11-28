@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off - In-memory batch (plan) grants: each approved command usable once, per thread and cwd.
-import { argvSha256 } from "@t3tools/guard-protocol/digests";
+import { planEntryDigest } from "@t3tools/guard-protocol/plan";
 import type { GuardPlanEntry } from "@t3tools/guard-protocol/protocol";
 
 import type { StoredOnceGrant } from "./GuardBrokerTypes.ts";
@@ -12,7 +12,7 @@ function planKey(guard: string, digest: string, cwd: string, threadId: string): 
 }
 
 /**
- * A plan entry matches one guard and one exact argv digest, in the thread and cwd that asked.
+ * A plan entry matches one guard and its grant key (shown and exact argv digests), in the thread and cwd that asked.
  * Bundle-gated guards never get plan entries (the plan parser refuses them).
  */
 export class GuardPlanGrants {
@@ -43,7 +43,8 @@ export class GuardPlanGrants {
   }): void {
     if (!input.threadId) return;
     for (const entry of input.entries) {
-      const digest = argvSha256(entry.command);
+      const digest = planEntryDigest(entry);
+      if (digest === null) continue;
       this.entries.set(planKey(entry.guard, digest, input.cwd, input.threadId), {
         grantId: input.grantId,
         guard: entry.guard,

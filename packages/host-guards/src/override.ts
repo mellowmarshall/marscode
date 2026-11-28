@@ -131,7 +131,7 @@ export async function peekPreapprovedGrant(
   });
   return peekGuardGrant({
     guard: input.guard,
-    command: safeCommand,
+    command: input.command,
     cwd: input.cwd,
     bundle,
     threadId,
@@ -201,9 +201,10 @@ export async function requestOverrideGrant(
       summary: why ?? undefined,
     });
     // The guarded command itself is running: this is the one place a once grant is consumed.
+    // The broker digests the exact argv and shows only its redacted form.
     const existing = await useGuardGrant({
       guard: input.guard,
-      command: safeCommand,
+      command: input.command,
       cwd: input.cwd,
       bundle,
       threadId,
@@ -264,7 +265,7 @@ export async function requestOverrideGrant(
       const allowBlocking = input.allowBlocking !== false;
       const reply = await requestGuardGrant({
         guard: input.guard,
-        command: safeCommand,
+        command: input.command,
         cwd: input.cwd,
         refusal: input.refusal.split(/\r?\n/, 1)[0] ?? "",
         proposedReason: why,
@@ -362,9 +363,7 @@ export async function ownerAllowed(
     allowEnvThreadId: runtime.allowEnvThreadId,
   });
   if (threadId && sock !== null) {
-    const cmd = redactGuardCommand(
-      options?.command && options.command.length > 0 ? options.command : [action],
-    );
+    const cmd = options?.command && options.command.length > 0 ? options.command : [action];
     const refusal = `human-only action: ${action}`;
     const existing = await useGuardGrant({
       guard: "owner-check",

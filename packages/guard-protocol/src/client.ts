@@ -6,7 +6,7 @@ import * as NodePath from "node:path";
 
 import type { WireGuardBundle } from "./bundleInspect.ts";
 import { argvSha256 } from "./digests.ts";
-import { GUARD_PROTOCOL_VERSION, type GuardPlanEntry } from "./protocol.ts";
+import { GUARD_PROTOCOL_VERSION, guardDisplayCommand, type GuardPlanEntry } from "./protocol.ts";
 
 const GUARD_SOCKET_ENV = "T3_GUARD_GRANT_SOCKET";
 const GUARD_TIMEOUT_ENV = "T3_GUARD_REQUEST_TIMEOUT";
@@ -355,7 +355,8 @@ function buildBasePayload(
     v: GUARD_PROTOCOL_VERSION,
     op: input.op,
     guard: input.guard,
-    command: input.command,
+    // Secrets stay local: the broker gets the redacted argv and the exact argv's digest.
+    command: guardDisplayCommand(input.guard, input.command),
     argv_sha256: argvSha256(input.command),
     cwd: input.cwd ? canonicalReal(input.cwd) : "",
     thread_id: input.threadId?.trim() || (input.jobId ? "" : env.T3CODE_THREAD_ID?.trim() || ""),
