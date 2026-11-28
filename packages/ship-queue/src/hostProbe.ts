@@ -92,17 +92,45 @@ export function hostOffFilePath(queueRoot: string, hostName: string): string {
 export function readHostOffState(queueRoot: string, hostName: string): HostOffState | null {
   const filePath = hostOffFilePath(queueRoot, hostName);
   if (!NodeFS.existsSync(filePath)) return null;
-  const text = NodeFS.readFileSync(filePath, "utf8");
+  return parseHostOffText(NodeFS.readFileSync(filePath, "utf8"));
+}
+
+/** Parses `at=`/`by=`/`reason=` lines. A hand-written marker with no fields keeps its text as the reason. */
+function parseHostOffText(text: string): HostOffState {
   const fields: Record<string, string> = {};
   for (const line of text.split(/\r?\n/)) {
     const eq = line.indexOf("=");
-    if (eq > 0) fields[line.slice(0, eq)] = line.slice(eq + 1);
+    if (eq > 0) fields[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
   }
+  const known = fields.at !== undefined || fields.by !== undefined || fields.reason !== undefined;
+  const loose = known ? "" : text.replace(/\s+/g, " ").trim().slice(0, 500);
   return {
     at: fields.at ?? "",
     by: fields.by ?? "",
-    reason: fields.reason ?? "",
+    reason: fields.reason || loose,
   };
+}
+
+/**
+ * Removes the marker only if it is still the one the caller checked (same `at`). The marker is
+ * renamed aside first, so a marker another process writes meanwhile is never removed unseen.
+ */
+function removeOffMarkerIfAt(filePath: string, expectAt: string): boolean {
+  const aside = `${filePath}.removing.${process.pid}`;
+  try {
+    NodeFS.renameSync(filePath, aside);
+  } catch {
+    return !NodeFS.existsSync(filePath);
+  }
+  const state = parseHostOffText(NodeFS.readFileSync(aside, "utf8"));
+  if (state.at === expectAt) {
+    NodeFS.rmSync(aside, { force: true });
+    return true;
+  }
+  // Put it back unless a newer marker has already taken its place.
+  if (NodeFS.existsSync(filePath)) NodeFS.rmSync(aside, { force: true });
+  else NodeFS.renameSync(aside, filePath);
+  return false;
 }
 
 export function isHostOff(queueRoot: string, hostName: string): boolean {
@@ -117,6 +145,8 @@ export function setCiHostAvailability(input: {
   readonly actor?: string | undefined;
   readonly manifestPath?: string | undefined;
   readonly nowIso?: (() => string) | undefined;
+  /** Turn on only while the marker is still the one written at this time. */
+  readonly expectOffAt?: string | undefined;
 }): { readonly ok: boolean; readonly message: string; readonly changed: boolean } {
   const name = input.hostName.trim();
   if (!isSafeHostName(name)) {
@@ -134,7 +164,15 @@ export function setCiHostAvailability(input: {
     if (!NodeFS.existsSync(filePath)) {
       return { ok: true, message: `ci host ${name} is already on for CI`, changed: false };
     }
-    NodeFS.rmSync(filePath, { force: true });
+    if (input.expectOffAt === undefined) {
+      NodeFS.rmSync(filePath, { force: true });
+    } else if (!removeOffMarkerIfAt(filePath, input.expectOffAt)) {
+      return {
+        ok: false,
+        message: `CI stays off on ${name}: its .off marker changed since it was checked`,
+        changed: false,
+      };
+    }
     return { ok: true, message: `CI enabled on ${name}`, changed: true };
   }
 

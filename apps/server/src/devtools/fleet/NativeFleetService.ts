@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 import type { HostPowerSnapshot, HostResourcesSnapshot } from "@t3tools/contracts";
 import type { FleetTelemetryProvider } from "@t3tools/ship-queue/ciRouter";
 
+import type { CiToggleRequest } from "./CiToggleAudit.ts";
 import { FleetActionTracker } from "./FleetActionTracker.ts";
 import { buildFleetAlertsPanel, defaultGitHubAuditPath } from "./FleetAlerts.ts";
 import { FleetCachedPanel } from "./FleetCachedPanel.ts";
@@ -437,9 +438,14 @@ export class NativeFleetService {
     });
   }
 
-  triggerHostCi(host: string, enabled: boolean): string {
+  /** The audited refusal when a turn-on lacks the confirmation its `.off` reason needs, else null. */
+  refuseHostCi(host: string, enabled: boolean, request: CiToggleRequest) {
+    return this.ciHosts.refuseUnconfirmedTurnOn(host, enabled, request);
+  }
+
+  triggerHostCi(host: string, enabled: boolean, request: CiToggleRequest = {}): string {
     return this.actions.start("hosts.ci", host, async () => {
-      return this.ciHosts.setCi(host, enabled, () => this.emitHostsAndAlerts());
+      return this.ciHosts.setCi(host, enabled, () => this.emitHostsAndAlerts(), request);
     });
   }
 
