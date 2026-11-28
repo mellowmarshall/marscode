@@ -11,6 +11,7 @@ import {
   contractsOf,
   contractSettings,
   evidenceDirOf,
+  isPlaybook7Declaration,
   loadDeclaration,
   optedOut,
   parseDeclarationText,
@@ -96,6 +97,24 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
   const ask = options.override ?? noOverride;
   const decl = loadDeclaration(root);
   if (decl.data === null || decl.errors.length > 0) {
+    // A repo still on a playbook 7 declaration ships until it migrates: the same declaration is
+    // on the base, so this change adds no retired setting. No playbook 8 contract is checked.
+    const headText = readWorktreeFile(root, "playbook.json");
+    const from = options.base ?? gateBase(root, options.env);
+    if (
+      headText !== null &&
+      from.sha &&
+      isPlaybook7Declaration(headText) &&
+      showFile(root, from.sha, "playbook.json") === headText
+    ) {
+      const unmigrated = [
+        passed(
+          "declaration",
+          "playbook 7 declaration, the same as the base: not migrated, so no playbook 8 contract is checked; migrate playbook.json",
+        ),
+      ];
+      return { repo, base: from.sha, results: unmigrated, reported: [], exitCode: 0 };
+    }
     const results = [failed("declaration", decl.errors[0] ?? "invalid", { errors: decl.errors })];
     return { repo, base: null, results, reported: [], exitCode: exitCodeFor(results) };
   }

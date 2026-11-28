@@ -187,6 +187,26 @@ function dropRetired(data: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
+/** Whether TEXT is a playbook 7 declaration: JSON that still has a retired key, contract or setting. */
+export function isPlaybook7Declaration(text: string): boolean {
+  let data: unknown;
+  try {
+    data = parseStrictJson(text);
+  } catch {
+    return false;
+  }
+  if (!isRecord(data)) return false;
+  if (Object.keys(RETIRED_KEYS).some((key) => key in (data as Record<string, unknown>)))
+    return true;
+  const contracts = data.contracts;
+  if (!isRecord(contracts)) return false;
+  return Object.entries(contracts).some(
+    ([name, body]) =>
+      name in RETIRED_CONTRACTS ||
+      (isRecord(body) && Object.entries(body).some(([k, v]) => isRetiredSetting(name, k, v))),
+  );
+}
+
 /** Every problem with DATA: retired keys and settings first, then the schema's. */
 export function validateDeclaration(data: unknown): ReadonlyArray<string> {
   const errors: string[] = [];
