@@ -306,15 +306,68 @@ const SECRET_FLAG_VALUE_RE =
 const SECRET_ENV_ASSIGN_RE =
   /^((?:[A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API[-_]?KEY|ACCESS[-_]?KEY|PRIVATE[-_]?KEY|CREDENTIALS?|AUTH|_KEY)|KEY)=)(.+)$/i;
 const REDACT_HEADER_SECRET_RE =
-  /(\b[A-Za-z0-9_-]*(?:authorization|api[_-]?key|token|secret|password|passwd|access[_-]?key|private[_-]?key|credentials?)["']?\s*[:=]\s*["']?(?:Bearer\s+)?)[^\s"',;}]+/gi;
+  /(\b[A-Za-z0-9_-]*(?:api[_-]?key|token|secret|password|passwd|access[_-]?key|private[_-]?key|credentials?)["']?\s*[:=]\s*["']?(?:Bearer\s+)?)[^\s"',;}]+/gi;
 const REDACT_BEARER_RE = /\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
 const REDACT_URL_CREDS_RE = /([a-z][a-z0-9+.-]*:\/\/[^/\s:@'"]+:)[^/\s@'"]+(@)/gi;
+// Provider token shapes: GitHub (classic gh[pousr]_ and fine-grained github_pat_), Hugging Face,
+// OpenAI-style sk-, Slack, Google, Doppler service/personal tokens, AWS access key ids, JWTs, npm
+// and GitLab. The trailing lookahead (not \b) also ends tokens whose last character is - or _.
 const REDACT_KNOWN_KEY_RE =
-  /\b(?:gh[pousr]_[A-Za-z0-9]{16,}|hf_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,})\b/g;
+  /\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|hf_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,}|dp\.(?:st|pt)\.[A-Za-z0-9._-]{16,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|npm_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,})(?![A-Za-z0-9_-])/g;
 const PASSWORD_FLAG_CMDS = new Set(["sshpass", "mysql", "mysqldump", "mariadb", "redis-cli"]);
 
+// An Authorization header name (Proxy-Authorization and other prefixes too), with the quote that may
+// open the header (`-H "Authorization:`) or close the name (`"Authorization": "…"`). These headers are
+// redacted here, so REDACT_HEADER_SECRET_RE leaves them out.
+const AUTH_HEADER_NAME_RE = /(["']?)\b([A-Za-z0-9_-]*authorization)(["']?)\s*[:=]\s*/gi;
+
+// The auth scheme word that opens a header value (`Basic`, `Digest`, `AWS4-HMAC-SHA256`, …).
+const AUTH_SCHEME_RE = /^[A-Za-z][A-Za-z0-9._~+-]*\s+(?=\S)/;
+
+/** The scheme name stays readable; every credential after it is replaced. */
+function redactedAuthValue(value: string): string {
+  return `${AUTH_SCHEME_RE.exec(value)?.[0] ?? ""}[REDACTED]`;
+}
+
+/**
+ * Replaces everything after the scheme in an Authorization header, whatever the scheme (Basic,
+ * Bearer, Token, Digest with its parameters, or any other): a quoted value up to its closing quote,
+ * a header quoted as a whole up to that quote, and otherwise the rest of the line.
+ */
+function closingQuoteIndex(line: string, quote: string, from: number): number {
+  for (let i = from; i < line.length; i += 1) {
+    if (line[i] === "\\") i += 1;
+    else if (line[i] === quote) return i;
+  }
+  return -1;
+}
+
+function redactAuthorizationValues(line: string): string {
+  let out = "";
+  let last = 0;
+  for (const match of line.matchAll(AUTH_HEADER_NAME_RE)) {
+    const start = match.index + match[0].length;
+    if (match.index < last) continue;
+    const valueQuote = line[start] === '"' || line[start] === "'" ? line[start]! : "";
+    if (valueQuote) {
+      const close = closingQuoteIndex(line, valueQuote, start + 1);
+      const end = close === -1 ? line.length : close;
+      const value = redactedAuthValue(line.slice(start + 1, end));
+      out += `${line.slice(last, start)}${valueQuote}${value}${valueQuote}`;
+      last = close === -1 ? line.length : close + 1;
+      continue;
+    }
+    const headerQuote = match[1] && !match[3] ? match[1] : "";
+    const close = headerQuote ? closingQuoteIndex(line, headerQuote, start) : -1;
+    const end = close === -1 ? line.length : close;
+    out += `${line.slice(last, start)}${redactedAuthValue(line.slice(start, end))}`;
+    last = end;
+  }
+  return out + line.slice(last);
+}
+
 export function redactLogLine(line: string): string {
-  const preRedacted = line
+  const preRedacted = redactAuthorizationValues(line)
     .replace(REDACT_URL_CREDS_RE, "$1[REDACTED]$2")
     .replace(REDACT_HEADER_SECRET_RE, "$1[REDACTED]")
     .replace(REDACT_BEARER_RE, "$1 [REDACTED]")

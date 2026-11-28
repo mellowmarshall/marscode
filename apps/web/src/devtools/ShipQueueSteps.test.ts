@@ -27,6 +27,97 @@ const LABELS = {
 } as const;
 
 describe("deriveShipJobSteps", () => {
+  it("places a failure after STARTED in CI even when only the log stage records the start", () => {
+    const steps = deriveShipJobSteps(
+      {
+        id: "300",
+        state: "failed",
+        reason: "rebase_conflict",
+        stage: "rebase",
+        last_marker: "FAILED reason=rebase_conflict",
+      },
+      LABELS,
+    );
+    expect(steps.find((s) => s.id === "queued")?.state).toBe("done");
+    expect(steps.find((s) => s.id === "ci")).toMatchObject({
+      state: "failed",
+      detail: "rebase_conflict",
+    });
+  });
+
+  it("shows a superseded or cancelled job whose recorded steps all passed as stopped, not failed", () => {
+    // Shaped like a job superseded while its CHALLENGED review waited: CI steps all passed.
+    const passedSteps = [
+      { name: "ship_body_check", host: "local", exit: 0, ms: 394 },
+      { name: "ship_install", host: "ci-host-a", exit: 0, ms: 2926 },
+      { name: "ship_ci", host: "ci-host-a", exit: 0, ms: 43_096 },
+    ];
+    const superseded = deriveShipJobSteps(
+      {
+        id: "1060",
+        state: "failed",
+        reason: "superseded",
+        stage: "ci",
+        last_marker: "FAILED reason=superseded",
+        challenged_tip: "e9a3801dda3cf35400be013578eb82773bf46cf1",
+        steps: passedSteps,
+      },
+      LABELS,
+    );
+    expect(superseded.map((s) => s.state)).toEqual([
+      "done",
+      "done",
+      "done",
+      "stopped",
+      "pending",
+      "pending",
+    ]);
+    expect(superseded.find((s) => s.id === "push")?.detail).toBe("superseded");
+    expect(superseded.some((s) => s.state === "failed")).toBe(false);
+
+    // Cancelled mid-CI before ship_ci recorded a result: stopped at CI.
+    const cancelledInCi = deriveShipJobSteps(
+      {
+        id: "1061",
+        state: "failed",
+        reason: "cancelled",
+        stage: "ci",
+        steps: passedSteps.slice(0, 2),
+      },
+      LABELS,
+    );
+    expect(cancelledInCi.find((s) => s.id === "ci")).toMatchObject({
+      state: "stopped",
+      detail: "cancelled",
+    });
+
+    // A recorded step that failed keeps the failure, whatever the final reason.
+    const failedStep = deriveShipJobSteps(
+      {
+        id: "1062",
+        state: "failed",
+        reason: "superseded",
+        stage: "ci",
+        steps: [{ name: "ship_ci", host: "ci-host-a", exit: 1, ms: 9000 }],
+      },
+      LABELS,
+    );
+    expect(failedStep.find((s) => s.id === "ci")?.state).toBe("failed");
+  });
+
+  it("times a finished job from its millisecond `at=` stamp or ended_at, keeping the zone", () => {
+    const base = { id: "301", state: "done", submitted_at: "2026-01-02T10:00:00.000Z" };
+    expect(
+      formatShipJobElapsed(
+        { ...base, last_marker: "DONE job=301 pr=63 at=2026-01-02T10:00:42.898Z" },
+        0,
+      ),
+    ).toBe("42s");
+    expect(formatShipJobElapsed({ ...base, ended_at: "2026-01-02T10:03:05.000Z" }, 0)).toBe(
+      "3m 05s",
+    );
+  });
+
   it("marks CI & Checks failed when ci_done=1 on a CI failure", () => {
     const steps = deriveShipJobSteps(
       {
@@ -233,7 +324,7 @@ describe("deriveShipJobSteps", () => {
     expect(steps.find((s) => s.id === "watcher")?.state).toBe("pending");
   });
 
-  it("marks Queued failed for pre-start cancellations/failures", () => {
+  it("marks Queued stopped for a pre-start cancellation, and failed for a pre-start failure", () => {
     const steps = deriveShipJobSteps(
       {
         id: "j8",
@@ -242,7 +333,12 @@ describe("deriveShipJobSteps", () => {
       },
       LABELS,
     );
-    expect(steps.find((s) => s.id === "queued")?.state).toBe("failed");
+    expect(steps.find((s) => s.id === "queued")?.state).toBe("stopped");
+    expect(
+      deriveShipJobSteps({ id: "j8f", state: "failed", reason: "lock_timeout" }, LABELS).find(
+        (s) => s.id === "queued",
+      )?.state,
+    ).toBe("failed");
     expect(steps.find((s) => s.id === "watcher")?.state).toBe("pending");
   });
 
@@ -264,6 +360,11 @@ describe("deriveShipJobSteps", () => {
       "https://github.com/example-org/example-repo/pull/108",
     );
     expect(buildSafePrUrl({ id: "bad", pr: 1, pr_repo: "../evil/repo" })).toBeNull();
+    // The queue keys jobs by `owner/name`, so a job without `pr_repo` still links its PR.
+    expect(buildSafePrUrl({ id: "63", pr: 63, repo: "example-org/example-repo" })).toBe(
+      "https://github.com/example-org/example-repo/pull/63",
+    );
+    expect(buildSafePrUrl({ id: "64", pr: 64, repo: "example-repo" })).toBeNull();
 
     // Exact job 10984 shape (tools): DONE with MERGE_EXIT=0 -> CLEANED -> DONE, NO POST_MERGE, NO sync_exit.
     const noDeployDone = {
@@ -350,7 +451,7 @@ describe("deriveShipJobSteps", () => {
       "failed",
     );
 
-    // Non-zero SYNC_EXIT must always mark Deploy failed even if stage is "deployed" and state is "done".
+    // A done job's non-zero SYNC_EXIT is a warning on Deploy (the PR stays merged), never done or failed.
     const failedSyncDone = {
       id: "206",
       state: "done",
@@ -362,9 +463,17 @@ describe("deriveShipJobSteps", () => {
       stage: "deployed",
       post_merge: true,
     };
-    expect(deriveShipJobSteps(failedSyncDone, LABELS).find((s) => s.id === "land")?.state).toBe(
-      "failed",
-    );
+    const failedSyncLand = deriveShipJobSteps(
+      { ...failedSyncDone, sync_reason: "install.sh: unknown argument" },
+      LABELS,
+    ).find((s) => s.id === "land");
+    expect(failedSyncLand?.state).toBe("warning");
+    expect(failedSyncLand?.detail).toBe("exit 1: install.sh: unknown argument");
+    expect(
+      deriveShipJobSteps({ ...failedSyncDone, state: "failed" }, LABELS).find(
+        (s) => s.id === "land",
+      )?.state,
+    ).toBe("failed");
 
     // M2: Post-merge failures on repos with NO Deploy step (remote_branch_left, pre_cleanup_failed, post-merge cancel)
     // must mark Merge failed instead of rendering 6 green done steps, and L5 must not misclassify pre_cleanup_failed as PR failure.
@@ -410,7 +519,8 @@ describe("deriveShipJobSteps", () => {
     };
     const camSteps = deriveShipJobSteps(cancelledAfterMerge, LABELS);
     expect(camSteps).toHaveLength(6);
-    expect(camSteps.find((s) => s.id === "merge")?.state).toBe("failed");
+    // A cancel never reads as a failure, and never as every step green either (M2).
+    expect(camSteps.find((s) => s.id === "merge")?.state).toBe("stopped");
   });
   it("cleans noisy REBASED and STARTED CI markers into concise details", () => {
     const rebasedSteps = deriveShipJobSteps(

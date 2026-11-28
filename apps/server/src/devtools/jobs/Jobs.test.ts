@@ -85,7 +85,8 @@ import {
   stripJobSummaryCmdline,
 } from "./managedJobHelpers.ts";
 import { extractGenericProgress } from "./progressExtractor.ts";
-import { adaptShipQueueJob } from "./ShipQueueBridge.ts";
+import { adaptShipQueueJob, readShipJobLogFacts } from "./ShipQueueBridge.ts";
+import { statShipJobLog } from "./shipQueueJobLogFile.ts";
 import {
   parseDevdeckLogStageInfo,
   parseDevdeckStageFromLogText,
@@ -990,28 +991,30 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
       "MERGE_EXIT=0\nCLEANED worktree=/tmp/wt\nDONE job=10984\n",
       "utf8",
     );
+    const doneNoDeployRaw = { id: "10984", repo: "tools", state: "done", merge_exit: "0" };
     const doneNoDeploy = adaptShipQueueJob(
-      { id: "10984", repo: "tools", state: "done", merge_exit: "0" },
+      doneNoDeployRaw,
       "host-a",
       1,
-      jobsRoot,
+      readShipJobLogFacts(doneNoDeployRaw, jobsRoot),
     );
     expect(
       (doneNoDeploy?.shipJob as { post_merge?: unknown } | undefined)?.post_merge,
     ).toBeUndefined();
 
+    const adaptedRaw = {
+      id: "10962",
+      repo: "devtools",
+      branch: "fix/sync",
+      state: "running",
+      stage: "ci",
+      title: "Fix host sync",
+    };
     const adapted = adaptShipQueueJob(
-      {
-        id: "10962",
-        repo: "devtools",
-        branch: "fix/sync",
-        state: "running",
-        stage: "ci",
-        title: "Fix host sync",
-      },
+      adaptedRaw,
       "host-a",
       1,
-      jobsRoot,
+      readShipJobLogFacts(adaptedRaw, jobsRoot),
     );
     expect(adapted?.source).toBe("ship-queue");
     expect(adapted?.phaseLabel).toBe("Shipping");
@@ -1057,7 +1060,9 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
     ).toBe(0);
     const status = JSON.parse(out.join("")) as { jobs: Array<Record<string, unknown>> };
     const jobsRoot = NodePath.join(root, "jobs");
-    const [a, b] = status.jobs.map((raw) => adaptShipQueueJob(raw, "fixture-host", 1, jobsRoot));
+    const [a, b] = status.jobs.map((raw) =>
+      adaptShipQueueJob(raw, "fixture-host", 1, readShipJobLogFacts(raw, jobsRoot)),
+    );
 
     expect(a).toMatchObject({
       id: `ship:${queued.id}`,
@@ -2030,7 +2035,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
           `QUEUED job=10999\nMERGE_EXIT=0\nCLEANED worktree=/tmp/wt\nPOST_MERGE job=10999\n${"  deploy line\n".repeat(200_000)}`,
           "utf8",
         );
-        expect(readShipJobLogInfo(bigLogRoot, "10999")).toEqual({
+        expect(readShipJobLogInfo(statShipJobLog(bigLogRoot, "10999"))).toEqual({
           stage: "deploy",
           hasPostMerge: true,
         });
@@ -2040,7 +2045,7 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
           `QUEUED job=10998\nCLEANED worktree=/tmp/wt\nPOST_MERGE job=10998 ${"x".repeat(400)}`,
           "utf8",
         );
-        expect(readShipJobLogInfo(bigLogRoot, "10998")).toEqual({
+        expect(readShipJobLogInfo(statShipJobLog(bigLogRoot, "10998"))).toEqual({
           stage: "deploy",
           hasPostMerge: true,
         });

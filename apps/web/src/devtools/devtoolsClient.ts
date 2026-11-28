@@ -134,8 +134,30 @@ export interface ShipQueueJob {
   readonly pr_repo?: string;
   readonly merge_exit?: number | string;
   readonly sync_exit?: number | string;
+  /** Server-read from the job log when `sync_exit` is non-zero: why the post-merge sync failed. */
+  readonly sync_reason?: string;
   readonly post_merge?: boolean;
   readonly watchers?: number;
+  readonly steps?: ReadonlyArray<ShipQueueStepTiming>;
+  readonly rebased_onto?: string;
+  readonly pushed_sha?: string;
+  readonly ended_at?: string;
+  readonly waiting_for?: string;
+  readonly ci_lease?: { readonly host?: string } | null;
+  readonly ci_wait?: { readonly reason?: string } | null;
+  readonly challenged_tip?: string;
+  readonly challenge_override?: {
+    readonly reason?: string;
+    readonly at?: string;
+  } | null;
+}
+
+/** One declared step's run as the queue records it in `job.json` (`steps`). */
+export interface ShipQueueStepTiming {
+  readonly name: string;
+  readonly host?: string;
+  readonly exit?: number;
+  readonly ms?: number;
 }
 
 export interface ShipQueueStatusPayload {

@@ -117,10 +117,15 @@
   width: 100%;
 }
 
+/* Name and CI switch share the first line; uptime and load get the chip's full width below. */
 [data-fd="host-badge"] {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "line right"
+    "meta meta";
   column-gap: 12px;
+  row-gap: 3px;
   align-items: center;
   min-width: 0;
   width: 100%;
@@ -139,9 +144,13 @@
 
 [data-fd="host-badge"][data-has-right="false"] {
   grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "line"
+    "meta";
 }
 
 [data-fd="host-right"] {
+  grid-area: right;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -160,7 +169,7 @@
 }
 
 [data-fd="host-line"] {
-  grid-column: 1;
+  grid-area: line;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -172,21 +181,21 @@
   font-weight: 600;
   line-height: 1.25;
   letter-spacing: -0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
+/* Each part stays whole; a narrow chip wraps between parts, never cutting a number. */
 [data-fd="host-meta"] {
-  grid-column: 1;
-  display: block;
-  margin-top: 3px;
+  grid-area: meta;
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 0.5ch;
+  min-width: 0;
   font-size: 12.5px;
   line-height: 1.25;
   color: var(--fd-dim);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 [data-fd="host-meta"] b {

@@ -51,8 +51,8 @@ import { mergeFleetHosts } from "./devdeckTypes";
 import { DevtoolsErrorBoundary } from "./DevtoolsErrorBoundary";
 import { FleetMachinesView } from "./FleetMachinesView";
 import { FleetReaperTab } from "./FleetReaperTab";
+import { ShipQueueJobDetails } from "./ShipQueueJobDetails";
 import { ShipQueuePanel } from "./ShipQueuePanel";
-import { ShipQueueVerticalTracker } from "./ShipQueueVerticalTracker";
 import { ThreadManagedJobCard } from "./jobs/ThreadManagedJobCard";
 import { UsageReviewsPanel } from "./UsageReviewsPanel";
 
@@ -513,20 +513,22 @@ describe("Devtools live browser UI", () => {
     await expect.element(page.getByRole("button", { name: "Provision host" })).toBeVisible();
   });
 
-  it("shows a tooltip with full text on mouseover when Ship Queue step detail is truncated, and hides it when text fits", async () => {
+  it("shows a tooltip with full text on mouseover when a Ship Queue job fact is truncated, and hides it when text fits", async () => {
     const fullWaiting =
       "a quiet host, or a CI host with room below 9 cores before starting heavy suite";
     await using _screen = await render(
       <TooltipProvider delay={0}>
         <div style={{ width: "200px" }}>
-          <ShipQueueVerticalTracker
-            compact
+          <ShipQueueJobDetails
+            environmentId={null}
+            revision={0}
             job={{
               id: "10962",
               state: "running",
               watchers: 1,
               waiting: fullWaiting,
               last_marker: "STARTED job=10962",
+              challenge_override: { reason: "false positive" },
             }}
           />
         </div>
@@ -544,8 +546,8 @@ describe("Devtools live browser UI", () => {
       .poll(() => document.querySelector('[data-slot="tooltip-positioner"]')?.textContent ?? "")
       .toContain(fullWaiting);
 
-    // Moving to non-truncated short detail ("1 active") closes tooltip and does not open a redundant one
-    const shortDetail = page.getByText("1 active", { exact: true });
+    // Moving to a fact that fits (the short override reason) closes the tooltip and opens no redundant one
+    const shortDetail = page.getByText("false positive", { exact: true });
     await shortDetail.hover();
     await expect.poll(() => document.querySelector('[data-slot="tooltip-positioner"]')).toBeNull();
 

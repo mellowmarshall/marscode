@@ -1,10 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - Incremental DevDeck-parity stage and POST_MERGE parser for ship-queue job logs.
 import * as NodeFS from "node:fs";
-import * as NodePath from "node:path";
 
 import { SHIP_QUEUE_STAGE_AFTER, SHIP_QUEUE_STAGE_MARKERS } from "@t3tools/ship-queue/markers";
 
-const SAFE_JOB_ID_RE = /^[0-9A-Za-z._-]{1,64}$/;
+import { openShipJobLog, type ShipJobLogStat } from "./shipQueueJobLogFile.ts";
 const STAGE_LOG_CHUNK_BYTES = 256 * 1024;
 const MAX_INCREMENTAL_SCAN_BYTES = 32 * 1024 * 1024;
 
@@ -56,11 +55,11 @@ export function parseDevdeckStageFromLogText(logText: string): string {
   return parseDevdeckLogStageInfo(logText).stage;
 }
 
-export function readShipJobLogInfo(jobsRootDir: string, jobId: string): DevdeckLogStageInfo {
-  if (!jobsRootDir || !SAFE_JOB_ID_RE.test(jobId)) return { stage: "", hasPostMerge: false };
-  const logPath = NodePath.join(jobsRootDir, jobId, "log");
+/** Stage info of a log `statShipJobLog` found; reads only what was appended since the last call. */
+export function readShipJobLogInfo(st: ShipJobLogStat | null): DevdeckLogStageInfo {
+  if (!st) return { stage: "", hasPostMerge: false };
+  const logPath = st.path;
   try {
-    const st = NodeFS.statSync(logPath);
     const cached = logStageCache.get(logPath);
     if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
       return cached.info;
@@ -75,7 +74,8 @@ export function readShipJobLogInfo(jobsRootDir: string, jobId: string): DevdeckL
     if (!incremental && st.size > MAX_INCREMENTAL_SCAN_BYTES) {
       offset = st.size - MAX_INCREMENTAL_SCAN_BYTES;
     }
-    const fd = NodeFS.openSync(logPath, "r");
+    const fd = openShipJobLog(st);
+    if (fd === null) return { stage: "", hasPostMerge: false };
     try {
       const buf = Buffer.alloc(Math.min(STAGE_LOG_CHUNK_BYTES, Math.max(1, st.size - offset)));
       while (offset < st.size) {

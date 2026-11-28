@@ -4,9 +4,12 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { getShipQueueStatus } from "../ShipQueueEventStream.ts";
+import { shipJobLogSignature, statShipJobLog } from "./shipQueueJobLogFile.ts";
 import { readShipJobLogInfo } from "./shipQueueLogParser.ts";
+import { postMergeSyncReason, readShipJobLogTail } from "./shipQueueLogTail.ts";
 import {
   sanitizeJobText,
+  type JobDetail,
   type JobSummary,
   type JobsQueueMeta,
   type TrackedJobState,
@@ -72,27 +75,74 @@ function resolveShipStartedAt(raw: Record<string, unknown>): string {
   return new Date().toISOString();
 }
 
-export function adaptShipQueueJob(
-  raw: Record<string, unknown>,
-  hostname: string,
-  revision: number,
-  jobsRootDir = "",
-): JobSummary | null {
+function shipSummaryId(raw: Record<string, unknown>): string {
   const rawId = typeof raw.id === "string" ? raw.id.trim() : "";
-  const fallbackId = `${String(raw.repo ?? "repo")}:${String(raw.branch ?? "job")}`;
-  const id = `ship:${rawId || fallbackId}`;
+  return `ship:${rawId || `${String(raw.repo ?? "repo")}:${String(raw.branch ?? "job")}`}`;
+}
+
+function isLiveShipState(state: TrackedJobState): boolean {
+  return state === "queued" || state === "running" || state === "waiting";
+}
+
+function hasFailedSync(raw: Record<string, unknown>): boolean {
+  if (raw.sync_exit === undefined || raw.sync_exit === null) return false;
+  if (String(raw.sync_exit).trim() === "") return false;
+  const exit = Number(raw.sync_exit);
+  return Number.isFinite(exit) && exit !== 0;
+}
+
+/** What a job's summary takes from its log; `signature` is set for live jobs only. */
+export interface ShipJobLogFacts {
+  readonly stage: string;
+  readonly hasPostMerge: boolean;
+  readonly syncReason?: string | undefined;
+  readonly signature: string;
+}
+
+const NO_LOG_FACTS: ShipJobLogFacts = { stage: "", hasPostMerge: false, signature: "" };
+
+/**
+ * Reads the log only for a job whose summary needs it (a live job's stage, a merged job's missing
+ * sync, a failed sync's reason), with one verified stat shared by every reader.
+ */
+export function readShipJobLogFacts(
+  raw: Record<string, unknown>,
+  jobsRootDir: string,
+): ShipJobLogFacts {
+  const rawId = typeof raw.id === "string" ? raw.id.trim() : "";
   const state = mapShipState(raw);
-  const live = state === "queued" || state === "running" || state === "waiting";
+  const live = isLiveShipState(state);
   const failedAfterMergeWithoutSync =
     state === "failed" &&
     (raw.merge_exit === 0 || raw.merge_exit === "0") &&
     (raw.sync_exit === undefined || raw.sync_exit === null || String(raw.sync_exit).trim() === "");
-  const logInfo =
-    rawId && (live || failedAfterMergeWithoutSync)
-      ? readShipJobLogInfo(jobsRootDir, rawId)
+  const syncFailed = hasFailedSync(raw);
+  if (!rawId || !(live || failedAfterMergeWithoutSync || syncFailed)) return NO_LOG_FACTS;
+  const log = statShipJobLog(jobsRootDir, rawId);
+  const info =
+    live || failedAfterMergeWithoutSync
+      ? readShipJobLogInfo(log)
       : { stage: "", hasPostMerge: false };
+  const tail = syncFailed ? readShipJobLogTail(log) : null;
+  return {
+    ...info,
+    syncReason: tail ? postMergeSyncReason(tail) : undefined,
+    signature: live ? shipJobLogSignature(log) : "",
+  };
+}
+
+export function adaptShipQueueJob(
+  raw: Record<string, unknown>,
+  hostname: string,
+  revision: number,
+  logFacts: ShipJobLogFacts = NO_LOG_FACTS,
+): JobSummary | null {
+  const rawId = typeof raw.id === "string" ? raw.id.trim() : "";
+  const id = shipSummaryId(raw);
+  const state = mapShipState(raw);
+  const live = isLiveShipState(state);
   const stage = live
-    ? logInfo.stage || String(raw.stage ?? "").trim()
+    ? logFacts.stage || String(raw.stage ?? "").trim()
     : String(raw.stage ?? "").trim();
   const repo = typeof raw.repo === "string" ? raw.repo.trim() : undefined;
   const branch = typeof raw.branch === "string" ? raw.branch.trim() : undefined;
@@ -106,12 +156,14 @@ export function adaptShipQueueJob(
     typeof (raw.route as { host?: unknown }).host === "string"
       ? String((raw.route as { host: string }).host).trim()
       : undefined;
+  const syncReason = logFacts.syncReason;
   const enrichedShipJob: Record<string, unknown> =
-    stage || logInfo.hasPostMerge
+    stage || logFacts.hasPostMerge || syncReason
       ? {
           ...raw,
           ...(stage ? { stage } : {}),
-          ...(logInfo.hasPostMerge ? { post_merge: true } : {}),
+          ...(logFacts.hasPostMerge ? { post_merge: true } : {}),
+          ...(syncReason ? { sync_reason: syncReason } : {}),
         }
       : raw;
 
@@ -157,7 +209,7 @@ export class ShipQueueBridge {
   private readonly watchers = new Map<string, NodeFS.FSWatcher>();
   private readonly current = new Map<
     string,
-    { readonly fp: string; readonly summary: JobSummary }
+    { readonly recordFp: string; readonly fp: string; readonly summary: JobSummary }
   >();
   private queueMeta: JobsQueueMeta = {};
   private queueMetaFp = "";
@@ -212,6 +264,19 @@ export class ShipQueueBridge {
     this.current.clear();
     this.queueMeta = {};
     this.queueMetaFp = "";
+  }
+
+  /** The job's redacted log tail for the Ship Queue row's log excerpt. */
+  getDetail(summary: JobSummary): JobDetail {
+    const rawId = summary.id.startsWith("ship:") ? summary.id.slice("ship:".length) : "";
+    const tail = readShipJobLogTail(statShipJobLog(this.jobsRootDir, rawId));
+    return {
+      id: summary.id,
+      revision: summary.revision,
+      logState: tail === null ? "unreadable" : tail.length > 0 ? "attached" : "no_output",
+      series: [],
+      logTail: tail ?? [],
+    };
   }
 
   getSnapshot(): {
@@ -280,15 +345,27 @@ export class ShipQueueBridge {
     for (const item of rawJobs) {
       if (!item || typeof item !== "object" || Array.isArray(item)) continue;
       const rec = item as Record<string, unknown>;
-      const probe = adaptShipQueueJob(rec, this.hostname, 1, this.jobsRootDir);
+      const recordFp = JSON.stringify(rec);
+      const knownId = shipSummaryId(rec);
+      const known = this.current.get(knownId);
+      // An ended job whose record has not changed needs no log reads at all.
+      if (known && known.recordFp === recordFp && !isLiveShipState(known.summary.state)) {
+        seen.add(knownId);
+        continue;
+      }
+      // One verified stat per job feeds the stage, the sync reason and the log signature; a live
+      // job's log grows between markers, and its size and mtime bump the revision so the row's log
+      // excerpt refreshes.
+      const facts = readShipJobLogFacts(rec, this.jobsRootDir);
+      const probe = adaptShipQueueJob(rec, this.hostname, 1, facts);
       if (!probe) continue;
-      const fp = `${JSON.stringify(rec)}\0${probe.phaseLabel}\0${String((probe.shipJob as { stage?: unknown } | undefined)?.stage ?? "")}`;
+      const fp = `${recordFp}\0${probe.phaseLabel}\0${String((probe.shipJob as { stage?: unknown } | undefined)?.stage ?? "")}\0${facts.signature}`;
       seen.add(probe.id);
       const existing = this.current.get(probe.id);
       if (existing && existing.fp === fp) continue;
       const nextRev = existing ? existing.summary.revision + 1 : 1;
       const summary = { ...probe, revision: nextRev };
-      this.current.set(probe.id, { fp, summary });
+      this.current.set(probe.id, { recordFp, fp, summary });
       changedIds.push(probe.id);
     }
 
