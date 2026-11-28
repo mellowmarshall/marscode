@@ -171,6 +171,10 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
       })
     : null;
 
+  // A live background job that hides its cerno process shows that process's health.
+  const formatBgSummary = (summary: JobSummary, includeCmdline: boolean): JobSummary =>
+    formatSummaryForScope(visibility?.withLiveCerno(summary) ?? summary, includeCmdline);
+
   const readVisibleCernoSummaries = (includeCmdline: boolean): JobSummary[] => {
     if (!cernoBridge || !visibility) return [];
     const out: JobSummary[] = [];
@@ -202,7 +206,7 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
             ? backgroundBridge
                 .listSummaries()
                 .filter((s) => !visibility?.suppressedBgIds.has(s.id))
-                .map((s) => formatSummaryForScope(s, includeCmdline))
+                .map((s) => formatBgSummary(s, includeCmdline))
             : []),
           ...readVisibleCernoSummaries(includeCmdline),
           ...shipJobs.values(),
@@ -213,7 +217,7 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
     getSummaryById: (id, includeCmdline) => {
       if (visibility?.suppressedBgIds.has(id)) return undefined;
       const bg = backgroundBridge?.getSummary(id);
-      if (bg) return formatSummaryForScope(bg, includeCmdline);
+      if (bg) return formatBgSummary(bg, includeCmdline);
       if (id.startsWith("cerno:") && cernoBridge && visibility?.visibleCernoIds.has(id)) {
         const cerno = cernoBridge.getSummary(id);
         return cerno ? formatSummaryForScope(cerno, includeCmdline) : undefined;
@@ -262,7 +266,7 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
         for (const summary of backgroundBridge.listSummaries()) {
           if (visibility?.suppressedBgIds.has(summary.id)) continue;
           if (filter?.threadId && summary.binding.threadId !== filter.threadId) continue;
-          out.push(formatSummaryForScope(summary, includeCmdline));
+          out.push(formatBgSummary(summary, includeCmdline));
         }
       }
       for (const summary of readVisibleCernoSummaries(includeCmdline)) {
@@ -298,11 +302,9 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
       if (visibility?.suppressedBgIds.has(id)) return null;
       const bgDetail = backgroundBridge?.getDetail(id) ?? null;
       if (bgDetail) {
-        if (visibility && backgroundBridge) {
-          const bgSummary = backgroundBridge.getSummary(id);
-          const matched = bgSummary
-            ? visibility.findLiveCernoForBg(bgSummary, bgDetail)
-            : undefined;
+        if (visibility) {
+          // The same one-to-one pairing the summaries use, so the detail shows the same run.
+          const matched = visibility.liveCernoForBg(id);
           if (matched) {
             return {
               ...bgDetail,
@@ -358,14 +360,16 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
       await cernoBridge.ensureObservedTicksFresh();
       // A newer table supersedes this one while the cerno scan ran.
       if (seq !== processTableSeq) return;
-      const candidates = indexCernoCandidates(cernoBridge.listMatchCandidates());
+      const roots = visibility?.liveCernoRootsByBg(
+        indexCernoCandidates(cernoBridge.listMatchCandidates()),
+      );
       const targets = collectJobLoadTargets({
         localHostname: cernoHostname,
         cernoSummaries: readVisibleCernoSummaries(true),
         backgroundSummaries: (backgroundBridge?.listSummaries() ?? []).filter(
           (s) => !visibility?.suppressedBgIds.has(s.id),
         ),
-        rootForBackgroundJob: (id) => visibility?.liveCernoRootForBg(id, candidates),
+        rootForBackgroundJob: (id) => roots?.get(id),
       });
       const live = await keepUnreusedRoots(targets, (pid) => cernoBridge.observedStartTicks(pid));
       if (seq !== processTableSeq) return;

@@ -118,6 +118,8 @@ export function upsertCernoRecord(
     cerno.tone ?? "",
     cerno.pips ?? 0,
     cerno.label ?? "",
+    cerno.confidence !== undefined ? Math.round(cerno.confidence * 100) : -1,
+    cerno.summary ?? "",
     buildRecentTail(tailLines) ?? [],
   ]);
   const pidStats: JobPidStats = {
