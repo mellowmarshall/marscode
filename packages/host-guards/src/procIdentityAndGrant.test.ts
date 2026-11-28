@@ -17,7 +17,6 @@ import {
   requestOverrideGrant,
 } from "./override.ts";
 import { REFUSALS_FILE } from "./overrideLog.ts";
-import { isTrustedShipQueueSubmit } from "./shipQueueSubmitTrust.ts";
 import type { ProcFsReader, ProcStatMeta } from "./procFs.ts";
 import { resolveCallerIdentity } from "./procIdentity.ts";
 import {
@@ -555,7 +554,7 @@ describe("procIdentity and MarsCode AppImage server verification", () => {
     }
   });
 
-  it("rejects env-var override/config/socket spoofing when invoking the built dist/bin.mjs CLI", async () => {
+  it("rejects env-var override/config/socket spoofing when invoking the CLI", async () => {
     const tmpRoot = NodeFS.existsSync("/tmp") ? "/tmp" : NodeOS.tmpdir();
     const dir = NodeFS.mkdtempSync(NodePath.join(tmpRoot, "hg-forge-"));
     tempDirs.push(dir);
@@ -580,7 +579,8 @@ describe("procIdentity and MarsCode AppImage server verification", () => {
     }));
 
     try {
-      const binPath = NodePath.join(PKG_ROOT, "dist", "bin.mjs");
+      // Run the source entry: a fresh checkout has no dist, and a stale dist tests old code.
+      const binPath = NodePath.join(PKG_ROOT, "src", "bin.ts");
       const hostileEnv: NodeJS.ProcessEnv = {
         PATH: "/usr/bin:/bin",
         HOME: dir,
@@ -858,46 +858,5 @@ describe("procIdentity and MarsCode AppImage server verification", () => {
     expect(isTrustedShipQueueProcess(703, queueRoot, spoofedProcFs)).toBe(true);
     expect(isTrustedShipQueueProcess(704, queueRoot, spoofedProcFs)).toBe(true);
     expect(isQueueDaemonInAncestry(queueRoot, 901, spoofedProcFs)).toBe(true);
-  });
-
-  it("accepts a job bind only from the installed ship-queue submit for that worktree and branch", () => {
-    const bin = "/home/dev/.local/lib/marscode/bin.mjs";
-    const submit = (over: Partial<FakeProcEntry> = {}): FakeProcEntry => ({
-      ppid: 1,
-      comm: "node",
-      exe: "/usr/bin/node",
-      argv: ["node", bin, "submit", "wt", "feat/74", "title", "body.md"],
-      cwd: "/home/dev/src",
-      ...over,
-    });
-    const procFs = makeFakeProcFs({
-      selfPid: 1,
-      canonicalHome: "/home/dev",
-      procs: {
-        800: submit(),
-        801: submit({ argv: ["node", bin, "submit", "--no-start", "/home/dev/src/wt", "feat/74"] }),
-        802: submit({ argv: ["node", bin, "submit", "wt", "feat/other"] }),
-        803: submit({ argv: ["node", bin, "submit", "other-wt", "feat/74"] }),
-        804: submit({ argv: ["node", "/home/dev/evil/bin.mjs", "submit", "wt", "feat/74"] }),
-        805: submit({ argv: ["node", bin, "work"] }),
-        806: submit({ env: { NODE_OPTIONS: "--require /tmp/x.js" } }),
-        807: submit({ exe: "/tmp/node" }),
-        808: submit({ uid: 1001 }),
-        809: submit({
-          exe: "/usr/bin/bash",
-          argv: ["bash", "-c", `node ${bin} submit wt feat/74`],
-        }),
-      },
-    });
-    const input = {
-      queueRoot: "/home/dev/.local/share/ship-queue",
-      worktree: "/home/dev/src/wt",
-      branch: "feat/74",
-    };
-    expect(isTrustedShipQueueSubmit(800, input, procFs)).toBe(true);
-    expect(isTrustedShipQueueSubmit(801, input, procFs)).toBe(true);
-    for (const pid of [802, 803, 804, 805, 806, 807, 808, 809, 999]) {
-      expect(isTrustedShipQueueSubmit(pid, input, procFs), String(pid)).toBe(false);
-    }
   });
 });

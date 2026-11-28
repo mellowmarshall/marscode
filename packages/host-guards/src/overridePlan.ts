@@ -6,8 +6,6 @@ import {
 } from "@t3tools/guard-protocol/client";
 import { PLAN_GUARD, planContains, readPlanFile } from "@t3tools/guard-protocol/plan";
 
-import { redactGuardCommand } from "@t3tools/guard-protocol/command-redact";
-
 const OVERRIDE_PLAN_ENV = "HOST_GUARD_OVERRIDE_PLAN";
 
 export function overridePlanFile(env: NodeJS.ProcessEnv): string | null {
@@ -37,15 +35,14 @@ export async function requestPlanGrant(input: {
     input.writeErr(`host-guard: refusing ${input.guard}: ${OVERRIDE_PLAN_ENV}: ${plan.error}.`);
     return null;
   }
-  const safeCommand = redactGuardCommand(input.command);
-  if (!planContains(plan.entries, input.guard, safeCommand)) {
+  if (!planContains(plan.entries, input.guard, input.command)) {
     input.writeErr(
       `host-guard: refusing ${input.guard}: this exact command is not listed for the ${input.guard} guard in ${OVERRIDE_PLAN_ENV}.`,
     );
     return null;
   }
   const common = {
-    command: safeCommand,
+    command: input.command,
     cwd: input.cwd,
     threadId: input.threadId,
     session: input.session,

@@ -118,9 +118,9 @@ function watcherBlock(id: string): string {
     `  ship-queue watch ${id}`,
     "The watch prints each marker as it lands and exits on DONE job= (0) or FAILED reason= (1).",
     "It exits 2 on QUIET job= (the job keeps running; look, then re-arm or cancel), 3 on",
-    "ACTION_REQUIRED job= (the owner approves the protected diff; the job then resumes on its own),",
-    "and 4 on CHALLENGED job= (the playbook review challenged it: fix and submit again, or",
-    `ship-queue override ${id} --reason "<why>"; then watch again).`,
+    "ACTION_REQUIRED job= (the owner approves the protected diff; the job then resumes on its own;",
+    "if MarsCode restarts first, it cannot resume: cancel it and resubmit), and 4 on CHALLENGED job=",
+    `(the playbook review challenged it: fix and submit again, or ship-queue override ${id} --reason "<why>"; then watch again).`,
     "Outcome lines: REBASED, STEP name=, PUSH_EXIT=, PR=, MERGE_EXIT=, CLEANED, then DONE or FAILED reason=.",
   ].join("\n");
 }

@@ -111,10 +111,15 @@ describe("threadApprovals unified approval subroutine", () => {
 
   it("shows every command of a batch plan and one approve action for the whole list", () => {
     const plan = [
-      { guard: "gh", command: ["gh", "repo", "rename", "next", "-R", "example-org/example-repo"] },
+      {
+        guard: "gh",
+        command: ["gh", "repo", "rename", "next", "-R", "example-org/example-repo"],
+        argvSha256: "a".repeat(64),
+      },
       {
         guard: "gh",
         command: ["gh", "repo", "edit", "example-org/next", "--description", "new words"],
+        argvSha256: "b".repeat(64),
       },
     ];
     const [entry] = deriveThreadDevtoolsApprovals({

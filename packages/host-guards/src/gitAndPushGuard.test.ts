@@ -339,4 +339,66 @@ describe("gitGuard and pushGuard against real git repos", () => {
       ).verdict,
     ).toBe("deny");
   });
+  it("parses git config options the way git does: abbreviated and bundled section edits are owner-only", () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "hg-git-cfg-"));
+    tempDirs.push(root);
+    const { config, worktreeDir } = setupRepoFixture(root);
+    const verdict = (args: ReadonlyArray<string>) =>
+      decideGit(["config", ...args], {}, worktreeDir, config).verdict;
+
+    // Probe: real git takes the two-step through an abbreviated --rename-section.
+    const scratch = NodePath.join(root, "scratch");
+    NodeFS.mkdirSync(scratch);
+    runGit(scratch, ["init", "-q"]);
+    runGit(scratch, ["config", "x.hooksPath", "/dev/null"]);
+    runGit(scratch, ["config", "--rename-sec", "x", "core"]);
+    expect(runGit(scratch, ["config", "--get", "core.hooksPath"])).toBe("/dev/null");
+
+    // Step one is not a guarded key; step two is, in every spelling git accepts.
+    expect(verdict(["x.hooksPath", "/dev/null"])).toBe("allow");
+    expect(verdict(["y.path", "/tmp/evil.cfg"])).toBe("allow");
+    for (const args of [
+      ["--rename-sec", "x", "core"],
+      ["--rename-s", "x", "core"],
+      ["--rename-section=x", "core"],
+      ["--rename-sec", "y", "include"],
+      ["--local", "--rename-sec", "y", "include"],
+      ["--remove-sec", "core"],
+      ["--remove-s", "include"],
+      ["--ed"],
+      ["--edi"],
+      ["-ze"],
+      ["-ez"],
+      ["-le"],
+      ["--local", "-ze"],
+      ["x", "core", "--rename-sec"],
+      // Ambiguous or unknown options never pass as reads.
+      ["--re", "x", "core"],
+      ["--fi", ".gitmodules", "--get", "core.hooksPath"],
+      ["--unknown", "core.hooksPath"],
+      ["--unset-a", "core.hooksPath"],
+      ["--repl", "core.hooksPath", "/dev/null"],
+      ["--no-local", "core.hooksPath", "/dev/null"],
+      ["--file=x", "--add", "include.path", "/tmp/evil.cfg"],
+      ["-f", "x", "--add", "include.path", "/tmp/evil.cfg"],
+      ["-fx", "--add", "include.path", "/tmp/evil.cfg"],
+      ["--add", "includeIf.gitdir:/.path", "/tmp/evil.cfg"],
+    ]) {
+      expect(verdict(args), args.join(" ")).toBe("deny");
+    }
+    // Unique prefixes of read options stay reads; -z bundles without a section edit are fine.
+    for (const args of [
+      ["--get", "core.hooksPath"],
+      ["--get-a", "core.hooksPath"],
+      ["--show-o", "--get", "core.hooksPath"],
+      ["-z", "--get", "core.hooksPath"],
+      ["-zl"],
+      ["--fil", ".gitmodules", "--get", "core.hooksPath"],
+      ["-f.gitmodules", "--get", "core.hooksPath"],
+      ["--type=path", "core.hooksPath"],
+      ["--name-o", "-l"],
+    ]) {
+      expect(verdict(args), args.join(" ")).toBe("allow");
+    }
+  });
 });

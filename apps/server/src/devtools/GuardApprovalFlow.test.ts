@@ -6,7 +6,12 @@ import * as NodePath from "node:path";
 
 import { canonicalProtectedDiffSha256 } from "@t3tools/guard-protocol/digests";
 import { runGuardCli } from "@t3tools/guard-protocol/cli";
-import { bindGuardJob, identifyGuardThread } from "@t3tools/guard-protocol/client";
+import {
+  bindGuardJob,
+  identifyGuardThread,
+  requestGuardGrant,
+  useGuardGrant,
+} from "@t3tools/guard-protocol/client";
 import { runHostGuardCli } from "@t3tools/host-guards/cli";
 import { makeGuardProtocolGuard, protectedDiffDigest } from "@t3tools/ship-queue/houseGate";
 import { runShipQueueCli } from "@t3tools/ship-queue/cli";
@@ -286,14 +291,46 @@ describe("owner approval flows against a real broker", () => {
     expect((await bindGuardJob({ jobId: id, worktree, branch, socketPath })).threadId).toBe(
       "thread-q",
     );
-    // The CLI's inspector found no git worktree, so this approval is a once grant for the command.
+    // The CLI's inspector found no git worktree, so this approval is a once grant for the
+    // command: a job-bound worker check never accepts one.
     peer.threadId = "";
     peer.pid = 9200;
     const input = { worktree, branch, bundle, jobId: id };
-    expect(await guard.check({ ...input, consume: false })).toMatchObject({ ok: true });
+    expect(await guard.check({ ...input, consume: false })).toMatchObject({ ok: false });
+
+    // The thread itself may still spend its once grant.
+    Object.assign(peer, { threadId: "thread-q", pid: 9100 });
+    const submitCommand = ["ship-queue", "submit", worktree, branch];
+    expect(
+      (
+        await useGuardGrant({
+          guard: "ship-queue",
+          command: submitCommand,
+          cwd: worktree,
+          socketPath,
+        })
+      ).scope,
+    ).toBe("once");
+
+    // The owner approves the protected diff itself (a bundle grant) for the requesting thread.
+    const bundlePending = new Promise<string>((resolve) => pendingWaiters.push(resolve));
+    const bundleReply = requestGuardGrant({
+      guard: "ship-queue",
+      command: submitCommand,
+      cwd: worktree,
+      bundle,
+      refusal: "protected diff",
+      socketPath,
+    });
+    const approved = broker.resolveRequest(await bundlePending, {
+      decision: "approve",
+      scope: "bundle",
+    });
+    expect(await approved.persisted).toBe(true);
+    expect((await bundleReply).scope).toBe("bundle");
+    Object.assign(peer, { threadId: "", pid: 9200 });
     expect(await guard.check({ ...input, consume: false })).toMatchObject({ ok: true });
     expect(await guard.check({ ...input, consume: true })).toMatchObject({ ok: true });
-    expect(await guard.check({ ...input, consume: false })).toMatchObject({ ok: false });
 
     peer.pid = 9300;
     expect(await guard.check({ ...input, consume: false })).toMatchObject({

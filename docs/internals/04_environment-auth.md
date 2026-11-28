@@ -59,7 +59,13 @@ model.
   ([GuardJobBindings](../../apps/server/src/devtools/GuardJobBindings.ts)); the agent-writable job
   file never decides it. Workers may check grants, never request
   them. `check` and `peek` never consume a grant; only `use`, sent by the guarded command itself,
-  does.
+  does. A job check accepts only the job's bundle grant, and approvals bind the digest of the exact
+  argv while showing a redacted copy.
+- **Same-uid host guards are a safety net, not a boundary.** Host guards, the broker's process
+  checks, and the installed tools they trust all run as, or are writable by, the agents' own uid.
+  They stop agent mistakes and stray processes from other threads; a hostile same-uid process can
+  rewrite the tools or the guard config. The real boundary for repo administration is GitHub-side:
+  branch protection or rulesets on the base branches, and an agent token without admin rights.
 
 ### Reusable dev credential
 

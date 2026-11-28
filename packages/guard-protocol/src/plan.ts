@@ -2,9 +2,14 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import { redactGuardCommand } from "./commandRedact.ts";
 import { argvSha256 } from "./digests.ts";
-import { GUARD_NAME_RE, MAX_GUARD_ARGS, sanitizeText, type GuardPlanEntry } from "./protocol.ts";
+import {
+  GUARD_NAME_RE,
+  MAX_GUARD_ARGS,
+  sanitizeText,
+  validateGuardAndCommand,
+  type GuardPlanEntry,
+} from "./protocol.ts";
 
 export const PLAN_GUARD = "plan";
 export const MAX_PLAN_COMMANDS = 32;
@@ -18,6 +23,8 @@ const DEFAULT_GUARD_BY_PROGRAM: Readonly<Record<string, string>> = { git: "git",
 export interface GuardPlan {
   readonly reason: string;
   readonly entries: ReadonlyArray<GuardPlanEntry>;
+  /** The exact argv of each entry, in order; it stays local and never goes on the wire. */
+  readonly commands: ReadonlyArray<ReadonlyArray<string>>;
 }
 
 type Parsed<T> = ({ readonly ok: true } & T) | { readonly ok: false; readonly error: string };
@@ -33,16 +40,19 @@ function parseArgv(raw: unknown): ReadonlyArray<string> | null {
 }
 
 /**
- * Entries are `[argv...]` (git and gh only, by program name) or `{ guard, command }`. Commands
- * are redacted exactly as host guards redact what they send, so the digests match.
+ * Entries are `[argv...]` (git and gh only, by program name), `{ guard, command }`, or the wire
+ * form `{ guard, command, argvSha256 }` (redacted command, digest of the exact argv). Each entry
+ * keeps the redacted command and the exact digest.
  */
-export function parsePlanEntries(
-  raw: unknown,
-): Parsed<{ readonly entries: ReadonlyArray<GuardPlanEntry> }> {
+export function parsePlanEntries(raw: unknown): Parsed<{
+  readonly entries: ReadonlyArray<GuardPlanEntry>;
+  readonly commands: ReadonlyArray<ReadonlyArray<string>>;
+}> {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_PLAN_COMMANDS) {
     return { ok: false, error: `plan needs 1..${MAX_PLAN_COMMANDS} commands` };
   }
   const entries: GuardPlanEntry[] = [];
+  const commands: Array<ReadonlyArray<string>> = [];
   const seen = new Set<string>();
   for (const item of raw) {
     const obj =
@@ -62,15 +72,19 @@ export function parsePlanEntries(
     if (PLAN_FORBIDDEN_GUARDS.has(guard)) {
       return { ok: false, error: `a plan cannot approve ${guard}; it needs its own approval` };
     }
-    // Commands that differ only in redacted secrets share a digest; accepted as visibility-only,
-    // since the owner approved the shape shown and the secret never reaches the broker.
-    const command = redactGuardCommand(argv);
-    const key = `${guard}\0${argvSha256(command)}`;
+    const validated = validateGuardAndCommand(guard, argv, obj?.argvSha256);
+    if (!validated.ok) return { ok: false, error: `plan entry: ${validated.error}` };
+    const key = `${guard}\0${validated.digest}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    entries.push({ guard, command });
+    entries.push({
+      guard,
+      command: validated.displayCommand,
+      argvSha256: validated.argvSha256,
+    });
+    commands.push(argv);
   }
-  return { ok: true, entries };
+  return { ok: true, entries, commands };
 }
 
 export function parsePlan(raw: unknown): Parsed<GuardPlan> {
@@ -84,7 +98,7 @@ export function parsePlan(raw: unknown): Parsed<GuardPlan> {
   }
   const parsed = parsePlanEntries(obj.commands);
   if (!parsed.ok) return parsed;
-  return { ok: true, reason, entries: parsed.entries };
+  return { ok: true, reason, entries: parsed.entries, commands: parsed.commands };
 }
 
 /** Reads a plan file (`{"reason": "...", "commands": [["gh", "repo", "edit", ...], ...]}`). */
@@ -104,11 +118,18 @@ export function readPlanFile(filePath: string, cwd: string): Parsed<GuardPlan> {
   }
 }
 
+/** The grant key of one plan entry, as the broker matches it against `use`. */
+export function planEntryDigest(entry: GuardPlanEntry): string | null {
+  const validated = validateGuardAndCommand(entry.guard, entry.command, entry.argvSha256);
+  return validated.ok ? validated.digest : null;
+}
+
+/** Whether the plan lists this exact argv (not merely its redacted form) for `guard`. */
 export function planContains(
   entries: ReadonlyArray<GuardPlanEntry>,
   guard: string,
   command: ReadonlyArray<string>,
 ): boolean {
   const digest = argvSha256(command);
-  return entries.some((e) => e.guard === guard && argvSha256(e.command) === digest);
+  return entries.some((e) => e.guard === guard && e.argvSha256 === digest);
 }

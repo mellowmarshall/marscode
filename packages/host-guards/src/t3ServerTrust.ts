@@ -35,7 +35,7 @@ const WORKER_EXTRA_UNSAFE_ENV_PREFIXES: ReadonlyArray<string> = ["BASH_FUNC_"];
 const T3_CODEX_SCOPE_RE =
   /\/app-t3code-agents(?:-[0-9a-f]+)?\.slice\/t3code-codex-[A-Za-z0-9_.-]+\.scope(?:\s|$)/;
 const UNTRUSTED_EXE_PREFIXES = [...TEST_TMP_PREFIXES, "/dev/shm/"];
-export const TRUSTED_QUEUE_SCRIPT_BASENAMES: ReadonlySet<string> = new Set([
+const TRUSTED_QUEUE_SCRIPT_BASENAMES: ReadonlySet<string> = new Set([
   "bin.mjs",
   "cli.mjs",
   "ship-queue.mjs",
@@ -243,10 +243,7 @@ export function resolveT3ThreadId(
 // Trust boundary: the installed ship-queue roots and server binaries run as the same uid as
 // agents and are often owner-writable. These checks stop spoofed PIDs, preload env, and tmp
 // executables; they do not stop a same-uid agent that rewrites the installed tools in place.
-export function buildTrustedQueueRoots(
-  queueRoot: string,
-  procFs: ProcFsReader,
-): ReadonlyArray<string> {
+function buildTrustedQueueRoots(queueRoot: string, procFs: ProcFsReader): ReadonlyArray<string> {
   const roots: string[] = ["/usr/local/lib/marscode", "/opt/marscode"];
   const canonHome = procFs.canonicalHome();
   if (canonHome) {
@@ -297,10 +294,7 @@ export function hasUnsafeWorkerEnv(pid: number, procFs: ProcFsReader): boolean {
   return false;
 }
 
-export function isUnderTrustedRoot(
-  targetPath: string,
-  trustedRoots: ReadonlyArray<string>,
-): boolean {
+function isUnderTrustedRoot(targetPath: string, trustedRoots: ReadonlyArray<string>): boolean {
   if (!targetPath || isUntrustedPath(targetPath)) return false;
   return trustedRoots.some((root) => targetPath === root || targetPath.startsWith(`${root}/`));
 }

@@ -4,13 +4,13 @@ import * as NodePath from "node:path";
 import { AGENT_THREAD_ENV } from "@t3tools/shared/procIdentity";
 
 import {
-  checkGitConfigWrite,
   hasNoVerifyFlag,
   isBranchCreation,
   isCheckoutBranchOp,
   splitGitGlobals,
   splitSimpleAliasArgs,
 } from "./gitArgParse.ts";
+import { checkGitConfigWrite } from "./gitConfigGuard.ts";
 import { safeRealpath, type HostGuardsConfig } from "./hostConfig.ts";
 import {
   defaultProcFs,
