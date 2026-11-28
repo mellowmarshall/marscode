@@ -6,6 +6,7 @@ import { inside, type PathGuard } from "./ReaperPathGuard.ts";
 import {
   diskBytes,
   forceRemove,
+  gitDataAtRoot,
   gitDataIn,
   hasRecentEntry,
   lstatDevice,
@@ -127,6 +128,11 @@ export async function sweepTmpRoots(
     const realRoot = await NodeFSP.realpath(root).catch(() => null);
     if (realRoot === null || seen.has(realRoot) || !(await isPlainDir(realRoot))) continue;
     seen.add(realRoot);
+    const rootGit = await gitDataAtRoot(realRoot);
+    if (rootGit !== null) {
+      ctx.log(`  Skipped temp root ${realRoot}: it holds ${rootGit}`);
+      continue;
+    }
     scanned.push(realRoot);
     for (const name of await listSorted(realRoot)) {
       const target = NodePath.join(realRoot, name);
@@ -196,6 +202,12 @@ export async function sweepDevExhaust(
     tmp: ctx.nowMs - (options.maxAgeHours ?? 24) * HOUR_MS,
     exhaust: ctx.nowMs - (options.exhaustDays ?? 7) * DAY_MS,
   };
+  const skipRoot = async (root: string) => {
+    const rootGit = await gitDataAtRoot(root);
+    if (rootGit !== null) ctx.log(`  Skipped exhaust root ${root}: it holds ${rootGit}`);
+    return rootGit !== null;
+  };
+  if (await skipRoot(devRoot)) return 0;
   let reaped = 0;
   const remove = async (target: string, label: string) => {
     if (ctx.dryRun || (await forceRemove(target))) {
@@ -206,12 +218,12 @@ export async function sweepDevExhaust(
   for (const repo of await listSorted(devRoot)) {
     if (repo.startsWith(".") || SKIPPED_REPOS.has(repo)) continue;
     const repoDir = NodePath.join(devRoot, repo);
-    if (!(await isPlainDir(repoDir)) || (await lexists(NodePath.join(repoDir, ".git")))) continue;
+    if (!(await isPlainDir(repoDir)) || (await skipRoot(repoDir))) continue;
     for (const name of await listSorted(repoDir)) {
       if (name.startsWith(".") || SHARED_KEEP.has(name)) continue;
       const target = NodePath.join(repoDir, name);
       if (CONTAINER_DIRS.has(name)) {
-        if (!(await isPlainDir(target)) || (await lexists(NodePath.join(target, ".git")))) continue;
+        if (!(await isPlainDir(target)) || (await skipRoot(target))) continue;
         for (const child of await listSorted(target)) {
           if (child.startsWith(".") || SHARED_KEEP.has(child)) continue;
           const run = NodePath.join(target, child);
