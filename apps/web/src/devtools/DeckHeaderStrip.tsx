@@ -1,11 +1,11 @@
 /**
  * DevDeck-style top instrument strip for Fleet Console:
  *   - 4-host top strip (status dot, uptime/load, devtools state, clickable CI on/off switch)
- *   - Selected-host single-row telemetry gauges (CPU 5m graph, Mem, GPU 5m graph + VRAM on every GPU host, disks, Check hosts)
- *   - Disk-pressure action bar directly below the selected host (Run storage report / Agent cleanup review)
+ *   - Selected-host single-row telemetry gauges (CPU 5m graph, Mem, GPU 5m graph + VRAM on every GPU host, disks)
+ *     with the host and storage actions at the row's end
  */
-import { T, Var, useGT } from "gt-react";
-import { BotIcon, FileSearchIcon, HardDriveIcon, RefreshCwIcon } from "lucide-react";
+import { T, useGT } from "gt-react";
+import { BotIcon, FileSearchIcon, RefreshCwIcon } from "lucide-react";
 
 import { Button } from "../components/ui/button";
 import type { MergedFleetHost } from "./devdeckTypes";
@@ -129,21 +129,11 @@ export function DeckHeaderStrip({
         : undefined;
 
   const disks = (tel?.disks ?? []).slice(0, 3);
-  const hotDisks = disks
-    .map((d) => {
-      const pct = d.total && d.total > 0 ? Math.round(((d.used ?? 0) / d.total) * 100) : 0;
-      return { mount: d.mount || d.label || "/", pct };
-    })
-    .filter((d) => d.pct >= 80);
-  const maxDiskPct = disks.reduce((m, d) => {
-    const pct = d.total && d.total > 0 ? Math.round(((d.used ?? 0) / d.total) * 100) : 0;
-    return Math.max(m, pct);
-  }, 0);
+  const hotDisk = disks.some((d) => d.total && d.total > 0 && (d.used ?? 0) / d.total >= 0.8);
 
   return (
     <div className="border-b border-border bg-background">
-      {/* Row 1: Full-width balanced machine cards with clear uptime/load and problem badges only when action is needed */}
-      <div className="px-4 py-3">
+      <div className="px-4 py-2.5">
         <div data-fd="host-grid" role="tablist" aria-label={gt("Fleet machines")}>
           {hosts.map((host) => {
             const active = selectedHost?.id === host.id;
@@ -252,9 +242,8 @@ export function DeckHeaderStrip({
         </div>
       </div>
 
-      {/* Row 2: Full-width balanced telemetry monitor cards spanning edge-to-edge */}
       {selectedHost ? (
-        <div className="border-t border-border/60 px-4 py-2.5">
+        <div className="flex items-stretch gap-3 border-t border-border/60 px-4 py-2.5">
           <div data-fd="gauges">
             <div data-fd="gauge" data-tone={cpuTone}>
               <div data-fd="gauge-head">
@@ -365,61 +354,23 @@ export function DeckHeaderStrip({
               );
             })}
           </div>
-        </div>
-      ) : null}
-
-      {/* Row 3: Per-machine storage hygiene & fleet host actions */}
-      {selectedHost ? (
-        <div
-          className={
-            maxDiskPct >= 80
-              ? "flex flex-wrap items-center justify-between gap-2 border-t border-warning/35 bg-warning/8 px-4 py-1.5 text-xs"
-              : "flex flex-wrap items-center justify-between gap-2 border-t border-border/50 bg-muted/15 px-4 py-1.5 text-xs"
-          }
-        >
-          <div className="flex min-w-0 items-center gap-2">
-            <HardDriveIcon
-              className={
-                maxDiskPct >= 95
-                  ? "size-3.5 shrink-0 text-destructive"
-                  : maxDiskPct >= 80
-                    ? "size-3.5 shrink-0 text-warning"
-                    : "size-3.5 shrink-0 text-muted-foreground"
-              }
-            />
-            {hotDisks.length > 0 ? (
-              <span className="truncate font-medium text-foreground">
-                <T>
-                  Storage getting full on <Var>{selectedHost.shortName}</Var>:{" "}
-                  <Var>{hotDisks.map((d) => `${d.mount} ${d.pct}%`).join(" · ")}</Var>
-                </T>
-              </span>
-            ) : (
-              <span className="truncate text-muted-foreground">
-                <T>
-                  Storage hygiene for <Var>{selectedHost.shortName}</Var>
-                  {maxDiskPct > 0 ? ` (peak ${maxDiskPct}%)` : ""}
-                </T>
-              </span>
-            )}
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 flex-col justify-center gap-1.5">
             <Button
               size="xs"
               variant="outline"
               disabled={busyKeys.has("hosts-check")}
               onClick={onCheckHosts}
             >
-              <RefreshCwIcon className="mr-1 size-3" />
+              <RefreshCwIcon />
               <T>Check hosts</T>
             </Button>
             <Button
               size="xs"
-              variant="outline"
+              variant={hotDisk ? "warning-outline" : "outline"}
               disabled={busyKeys.has(`storage-report:${selectedHost.id}`)}
               onClick={() => onRunStorageReport(selectedHost)}
             >
-              <FileSearchIcon className="mr-1 size-3" />
+              <FileSearchIcon />
               <T>Storage report</T>
             </Button>
             <Button
@@ -428,7 +379,7 @@ export function DeckHeaderStrip({
               disabled={busyKeys.has(`storage-review:${selectedHost.id}`)}
               onClick={() => onStartCleanupReview(selectedHost)}
             >
-              <BotIcon className="mr-1 size-3" />
+              <BotIcon />
               <T>Agent cleanup review</T>
             </Button>
           </div>

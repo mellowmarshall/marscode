@@ -1,6 +1,6 @@
 /**
  * Per-host Localhosts & Containers panel inside Fleet Console -> Machines.
- * Folded Compose groups, Service · Port · CPU · Mem · Up, open link, Start/Stop, stopped hidden toggle.
+ * Folded Compose groups, Service · Port · CPU · Memory · Up, open link, Start/Stop, stopped hidden toggle.
  */
 import { useState } from "react";
 import { T, Var, useGT } from "gt-react";
@@ -17,6 +17,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import type { DevdeckServerItem } from "./devtoolsClient";
 import type { MergedFleetHost } from "./devdeckTypes";
+import { FleetPanel } from "./FleetPanel";
 
 function formatBytesShort(bytes: number | undefined): string {
   if (!bytes || !Number.isFinite(bytes) || bytes <= 0) return "-";
@@ -74,6 +75,12 @@ function serverRowKey(srv: DevdeckServerItem, idx: number): string {
   return srv.id || srv.container || `${srv.project ?? "p"}:${srv.service ?? idx}:${srv.port ?? ""}`;
 }
 
+// Below a 32rem panel the port and uptime columns drop so the name keeps room.
+const COLS =
+  "grid-cols-[minmax(6rem,1fr)_3.5rem_4rem_3.5rem] @lg:grid-cols-[minmax(0,1fr)_3.5rem_3.5rem_4rem_3rem_3.5rem]";
+const WIDE = "hidden @lg:block";
+const ROW = `grid ${COLS} items-center gap-x-3 py-2 pr-3`;
+
 export function FleetLocalhostsPanel({
   host,
   busyKeys,
@@ -114,6 +121,8 @@ export function FleetLocalhostsPanel({
     });
   };
 
+  const metric = "text-right font-mono text-sm text-muted-foreground tabular-nums";
+
   const renderServerRow = (srv: DevdeckServerItem, idx: number, indented: boolean) => {
     const key = serverRowKey(srv, idx);
     const up = isServerUp(srv);
@@ -121,24 +130,18 @@ export function FleetLocalhostsPanel({
     const verb: "start" | "stop" = up ? "stop" : "start";
     const canAct = host.isLocal && serverActionPath(srv, verb) !== null;
     const isBusy = busyKeys.has(`srv:${key}:${verb}`);
-    const portText = srv.port ? `:${srv.port}` : "-";
+    const name = srv.service || srv.container || srv.id || key;
     const cpuText =
       typeof srv.cpu_pct === "number" && Number.isFinite(srv.cpu_pct)
         ? `${srv.cpu_pct.toFixed(srv.cpu_pct >= 10 ? 0 : 1)}%`
         : "-";
-    const memText = formatBytesShort(srv.mem_bytes);
-    const upText = up ? formatUptimeShort(srv.uptime_s) : gt("stopped");
 
     return (
       <div
         key={key}
-        className={
-          indented
-            ? "flex items-center justify-between gap-2 bg-muted/10 py-1.5 pr-3 pl-8 text-xs hover:bg-muted/20"
-            : "flex items-center justify-between gap-2 px-3 py-2 text-xs hover:bg-muted/20"
-        }
+        className={`${ROW} hover:bg-muted/20 ${indented ? "bg-muted/10 pl-9" : "pl-3"}`}
       >
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2.5">
           <span
             className={
               up
@@ -146,99 +149,97 @@ export function FleetLocalhostsPanel({
                 : "size-2 shrink-0 rounded-full bg-muted-foreground/35"
             }
           />
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <span className="truncate font-medium text-foreground">
-                {srv.service || srv.container || srv.id || key}
-              </span>
-              {srv.kind === "dev" && !srv.managed ? (
-                <Badge size="sm" variant="outline">
-                  <T>dev</T>
-                </Badge>
-              ) : null}
-            </div>
-          </div>
+          <span className="truncate text-sm font-medium text-foreground">{name}</span>
+          {srv.kind === "dev" && !srv.managed ? (
+            <Badge size="sm" variant="outline">
+              <T>dev</T>
+            </Badge>
+          ) : null}
         </div>
-
-        <div className="flex shrink-0 items-center gap-3 font-mono text-3xs text-muted-foreground tabular-nums">
-          <span>{portText}</span>
-          <span className="w-10 text-right">{cpuText}</span>
-          <span className="w-11 text-right">{memText}</span>
-          <span className="w-10 text-right">{upText}</span>
-          <div className="flex w-12 items-center justify-end gap-0.5">
-            {openUrl ? (
-              <a
-                href={openUrl}
-                target="_blank"
-                rel="noreferrer"
-                aria-label={gt("Open {name}", {
-                  name: srv.service || srv.container || srv.id || "service",
-                })}
-                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-info-foreground"
-              >
-                <ExternalLinkIcon className="size-3" />
-              </a>
-            ) : null}
-            {canAct ? (
-              <Button
-                size="xs"
-                variant="ghost"
-                disabled={isBusy}
-                aria-label={
-                  up
-                    ? gt("Stop {name}", {
-                        name: srv.service || srv.container || srv.id || "service",
-                      })
-                    : gt("Start {name}", {
-                        name: srv.service || srv.container || srv.id || "service",
-                      })
-                }
-                onClick={() => onServerAction(srv, verb)}
-              >
-                {up ? (
-                  <SquareIcon className="size-3 text-destructive" />
-                ) : (
-                  <PlayIcon className="size-3 text-success" />
-                )}
-              </Button>
-            ) : null}
-          </div>
+        <span className={`${WIDE} ${metric}`}>{srv.port ? `:${srv.port}` : "-"}</span>
+        <span className={metric}>{cpuText}</span>
+        <span className={metric}>{formatBytesShort(srv.mem_bytes)}</span>
+        <span className={`${WIDE} ${metric}`}>
+          {up ? formatUptimeShort(srv.uptime_s) : gt("stopped")}
+        </span>
+        <div className="flex items-center justify-end gap-0.5">
+          {openUrl ? (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              render={<a href={openUrl} target="_blank" rel="noreferrer" />}
+              aria-label={gt("Open {name}", { name })}
+            >
+              <ExternalLinkIcon />
+            </Button>
+          ) : null}
+          {canAct ? (
+            <Button
+              size="icon-xs"
+              variant={up ? "ghost-destructive" : "ghost"}
+              disabled={isBusy}
+              aria-label={up ? gt("Stop {name}", { name }) : gt("Start {name}", { name })}
+              onClick={() => onServerAction(srv, verb)}
+            >
+              {up ? (
+                <SquareIcon className="size-3 fill-current" />
+              ) : (
+                <PlayIcon className="size-3.5 fill-current text-success" />
+              )}
+            </Button>
+          ) : null}
         </div>
       </div>
     );
   };
 
   return (
-    <section className="overflow-hidden rounded-lg border border-border/70 bg-card/40">
-      <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-muted/20 px-3 py-2">
-        <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
-          <GlobeIcon className="size-3.5 text-muted-foreground" />
-          <T>Localhosts & Containers</T>
-          <Badge size="sm" variant="secondary">
+    <FleetPanel.Root data-testid="fleet-localhosts-panel">
+      <FleetPanel.Header>
+        <FleetPanel.Title>
+          <GlobeIcon />
+          <T>Localhosts & containers</T>
+          <Badge variant="secondary">
             <T>
               <Var>{upServers.length}</Var> up
             </T>
           </Badge>
-        </div>
+        </FleetPanel.Title>
         {stoppedServers.length > 0 ? (
-          <button
-            type="button"
-            className="font-mono text-3xs text-muted-foreground hover:text-foreground"
-            onClick={() => setShowStopped((v) => !v)}
-          >
+          <Button size="xs" variant="ghost" onClick={() => setShowStopped((v) => !v)}>
             {showStopped
               ? gt("Hide {n} stopped", { n: stoppedServers.length })
-              : gt("{n} stopped hidden", { n: stoppedServers.length })}
-          </button>
+              : gt("Show {n} stopped", { n: stoppedServers.length })}
+          </Button>
         ) : null}
-      </div>
+      </FleetPanel.Header>
+      {visibleServers.length === 0 ? null : (
+        <FleetPanel.Columns className={COLS}>
+          <span>
+            <T>Service</T>
+          </span>
+          <span className={WIDE}>
+            <T>Port</T>
+          </span>
+          <span>
+            <T>CPU</T>
+          </span>
+          <span>
+            <T>Memory</T>
+          </span>
+          <span className={WIDE}>
+            <T>Uptime</T>
+          </span>
+          <span />
+        </FleetPanel.Columns>
+      )}
 
       {visibleServers.length === 0 ? (
-        <div className="px-3 py-5 text-xs text-muted-foreground">
+        <FleetPanel.Empty>
           <T>No running localhosts or containers on this host.</T>
-        </div>
+        </FleetPanel.Empty>
       ) : (
-        <div className="divide-y divide-border/50">
+        <FleetPanel.Body>
           {Array.from(grouped.entries()).map(([project, items]) => {
             if (items.length === 1) {
               return renderServerRow(items[0]!, 0, false);
@@ -251,15 +252,11 @@ export function FleetLocalhostsPanel({
               <div key={project}>
                 <button
                   type="button"
-                  className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs hover:bg-muted/20"
+                  aria-expanded={expanded}
+                  className={`${ROW} w-full pl-3 text-left hover:bg-muted/20`}
                   onClick={() => toggleGroup(project)}
                 >
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    {expanded ? (
-                      <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                    )}
+                  <span className="flex min-w-0 items-center gap-2.5">
                     <span
                       className={
                         runningInGroup > 0
@@ -267,15 +264,24 @@ export function FleetLocalhostsPanel({
                           : "size-2 shrink-0 rounded-full bg-muted-foreground/35"
                       }
                     />
-                    <span className="truncate font-semibold text-foreground">{project}</span>
-                    <span className="font-mono text-3xs text-muted-foreground">
+                    <span className="truncate text-sm font-semibold text-foreground">
+                      {project}
+                    </span>
+                    <span className="font-mono text-xs text-muted-foreground">
                       {`${runningInGroup}/${items.length}`}
                     </span>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-3 font-mono text-3xs text-muted-foreground tabular-nums">
-                    <span>{totalCpu > 0 ? `${totalCpu.toFixed(0)}%` : "-"}</span>
-                    <span>{formatBytesShort(totalMem)}</span>
-                  </div>
+                  </span>
+                  <span className={`${WIDE} ${metric}`} />
+                  <span className={metric}>{totalCpu > 0 ? `${totalCpu.toFixed(0)}%` : "-"}</span>
+                  <span className={metric}>{formatBytesShort(totalMem)}</span>
+                  <span className={`${WIDE} ${metric}`} />
+                  <span className="flex justify-end text-muted-foreground">
+                    {expanded ? (
+                      <ChevronDownIcon className="size-4" />
+                    ) : (
+                      <ChevronRightIcon className="size-4" />
+                    )}
+                  </span>
                 </button>
                 {expanded ? (
                   <div className="divide-y divide-border/40 border-t border-border/40">
@@ -286,8 +292,8 @@ export function FleetLocalhostsPanel({
             );
           })}
           {standalone.map((srv, idx) => renderServerRow(srv, idx, false))}
-        </div>
+        </FleetPanel.Body>
       )}
-    </section>
+    </FleetPanel.Root>
   );
 }

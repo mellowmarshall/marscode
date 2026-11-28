@@ -22,6 +22,11 @@ import type { CommandExecutionTurnItem } from "./BackgroundTaskLifecycle.ts";
 import { CernoVisibilityCoordinator } from "./cernoJobMatcher.ts";
 import { CernoProcessBridge, type CernoProcessBridgeOptions } from "./CernoProcessBridge.ts";
 import { JobEventBroadcaster } from "./JobEventStream.ts";
+import {
+  collectJobLoadTargets,
+  JobProcessLoadTracker,
+  type ProcessTableRow,
+} from "./jobProcessLoad.ts";
 import { stripJobSummaryCmdline } from "./managedJobHelpers.ts";
 import { ShipQueueBridge } from "./ShipQueueBridge.ts";
 import {
@@ -67,6 +72,8 @@ export interface JobRegistryService {
     options?: { readonly includeCmdline?: boolean | undefined },
   ): ReadableStream<Uint8Array>;
   setDefaultStallMinutes(minutes: number): void;
+  /** Feeds the host process table sampled by the Fleet sessions scan into live job loads. */
+  applyProcessTable(rows: ReadonlyArray<ProcessTableRow>): void;
   dispose(): Promise<void>;
 }
 
@@ -74,11 +81,12 @@ export class JobRegistry extends Context.Service<JobRegistry, JobRegistryService
   "t3/devtools/jobs/JobRegistry",
 ) {}
 
-function formatSummaryForScope(summary: JobSummary, includeCmdline: boolean): JobSummary {
-  return includeCmdline ? summary : stripJobSummaryCmdline(summary);
-}
-
 export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistryService {
+  const loads = new JobProcessLoadTracker(() => Date.now());
+  const formatSummaryForScope = (summary: JobSummary, includeCmdline: boolean): JobSummary => {
+    const withLoad = loads.attach(summary);
+    return includeCmdline ? withLoad : stripJobSummaryCmdline(withLoad);
+  };
   const shipJobs = new Map<string, JobSummary>();
   let queueMeta: JobsQueueMeta = {};
   let lastShipRefreshAtMs = 0;
@@ -127,14 +135,15 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
       })
     : null;
 
+  const cernoHostname =
+    options.cernoBridge?.localHostname ??
+    options.backgroundBridge?.localHostname ??
+    NodeOS.hostname();
   const cernoBridge =
     options.cernoBridge != null || options.enableCernoBridge === true
       ? new CernoProcessBridge({
           ...options.cernoBridge,
-          localHostname:
-            options.cernoBridge?.localHostname ??
-            options.backgroundBridge?.localHostname ??
-            NodeOS.hostname(),
+          localHostname: cernoHostname,
           isWorkspaceAllowed:
             options.cernoBridge?.isWorkspaceAllowed ?? options.backgroundBridge?.isWorkspaceAllowed,
           hasShipJobId: (id) =>
@@ -330,6 +339,20 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
 
     setDefaultStallMinutes(minutes: number) {
       backgroundBridge?.setDefaultStallMinutes(minutes);
+    },
+
+    applyProcessTable(rows) {
+      const candidates = cernoBridge?.listMatchCandidates() ?? [];
+      const targets = collectJobLoadTargets({
+        localHostname: cernoHostname,
+        cernoSummaries: readVisibleCernoSummaries(true),
+        backgroundSummaries: (backgroundBridge?.listSummaries() ?? []).filter(
+          (s) => !visibility?.suppressedBgIds.has(s.id),
+        ),
+        rootPidForBackgroundJob: (id) => visibility?.liveCernoPidForBg(id, candidates),
+      });
+      // Non-urgent: load deltas ride the broadcaster's 1 s coalescing window.
+      for (const id of loads.apply(rows, targets)) broadcaster.markDirty(id, false);
     },
 
     async dispose() {

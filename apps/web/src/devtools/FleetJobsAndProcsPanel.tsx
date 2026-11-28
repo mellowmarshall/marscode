@@ -1,25 +1,42 @@
 /**
- * Per-host MCP Bounded Jobs & Killable Processes panel inside Fleet Console -> Machines.
- * Every shown job and process is killable/stoppable. Drops passive Observed stubs and Ship Queue duplicates.
+ * Host load table inside Fleet Console -> Machines: live jobs and hot processes, heaviest first,
+ * with CPU and memory as a share of the host so an overloading job can be stopped by hand.
+ * Finished jobs stay hidden until asked for. Drops passive Observed stubs and Ship Queue jobs.
  */
 import { useState } from "react";
 import { T, Var, useGT } from "gt-react";
-import { CpuIcon, FlameIcon, Maximize2Icon, TerminalIcon, XCircleIcon } from "lucide-react";
+import { ActivityIcon, FlameIcon, Maximize2Icon, SquareIcon } from "lucide-react";
 
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import type { DevdeckSessionItem } from "./devtoolsClient";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import type { MergedFleetHost } from "./devdeckTypes";
+import type { DevdeckSessionItem } from "./devtoolsClient";
 import { fleetHostTokens, normalizeFleetHostToken } from "./fleetHostEnvironment";
-import {
-  formatJobBytes,
-  formatJobElapsed,
-  isHostJob,
-  isJobLive,
-  jobKindLabel,
-  jobStateBadgeVariant,
-  type JobSummary,
-} from "./jobs/jobTypes";
+import { FleetPanel } from "./FleetPanel";
+import { formatJobBytes, isHostJob, isJobLive, type JobSummary } from "./jobs/jobTypes";
+
+// Below a 32rem panel the time column and load bars drop so the name keeps room.
+const COLS =
+  "grid-cols-[minmax(6rem,1fr)_3.5rem_4.5rem_3.75rem] @lg:grid-cols-[minmax(0,1fr)_6rem_7rem_4rem_3.75rem]";
+const WIDE = "hidden @lg:block";
+const ROW = `grid ${COLS} items-center gap-x-3 px-3 py-2`;
+
+function compactAge(seconds: number | undefined): string {
+  if (seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return "-";
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  const mins = Math.floor(seconds / 60);
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return mins % 60 > 0 ? `${hrs}h ${mins % 60}m` : `${hrs}h`;
+  return `${Math.floor(hrs / 24)}d ${hrs % 24}h`;
+}
+
+function jobAgeSeconds(job: JobSummary, nowMs: number): number | undefined {
+  const start = Date.parse(job.timing.startedAt);
+  const end = job.timing.endedAt ? Date.parse(job.timing.endedAt) : nowMs;
+  return Number.isFinite(start) && Number.isFinite(end) ? (end - start) / 1000 : undefined;
+}
 
 function jobMatchesFleetHost(job: JobSummary, host: MergedFleetHost): boolean {
   const jh = normalizeFleetHostToken(job.binding.host);
@@ -40,6 +57,28 @@ function isActionableFleetSession(s: DevdeckSessionItem): boolean {
   return Boolean(
     s.id && (s.endpoint || (s.cpu_pct ?? 0) >= 15 || (s.mem_bytes ?? 0) >= 256 * 1024 ** 2),
   );
+}
+
+function jobRank(job: JobSummary): number {
+  if (job.state === "running" || job.state === "cancelling") return 0;
+  return isJobLive(job) ? 1 : 2;
+}
+
+function byLoad(a: JobSummary, b: JobSummary): number {
+  const ra = jobRank(a);
+  const rb = jobRank(b);
+  if (ra !== rb) return ra - rb;
+  const ca = a.load?.cpuPct ?? -1;
+  const cb = b.load?.cpuPct ?? -1;
+  if (ca !== cb) return cb - ca;
+  return Date.parse(b.timing.startedAt) - Date.parse(a.timing.startedAt);
+}
+
+function stateDotClass(job: JobSummary): string {
+  if (job.state === "running") return "bg-info";
+  if (job.state === "cancelling" || job.state === "failed") return "bg-destructive";
+  if (job.state === "queued" || job.state === "waiting") return "bg-warning";
+  return "bg-muted-foreground/40";
 }
 
 export function FleetJobsAndProcsPanel({
@@ -63,260 +102,271 @@ export function FleetJobsAndProcsPanel({
 }) {
   const gt = useGT();
   const [confirmKillId, setConfirmKillId] = useState<string | null>(null);
+  const [showFinished, setShowFinished] = useState(false);
+
+  const cpus = host.telemetry?.cpus ?? 0;
+  const memTotal = host.telemetry?.mem?.total ?? 0;
+  const cpuShare = (pct: number | undefined) =>
+    typeof pct === "number" && cpus > 0 ? pct / (cpus * 100) : null;
+  const memShare = (bytes: number | undefined) =>
+    typeof bytes === "number" && memTotal > 0 ? bytes / memTotal : null;
+  const cpuText = (pct: number | undefined) => {
+    if (typeof pct !== "number") return "-";
+    const share = cpuShare(pct);
+    return share !== null ? `${Math.round(share * 100)}%` : `${Math.round(pct)}%`;
+  };
 
   const hostJobs = allHostJobs
     .filter((j) => isHostJob(j) && jobMatchesFleetHost(j, host))
-    .toSorted((a, b) => {
-      const la = isJobLive(a) ? 0 : 1;
-      const lb = isJobLive(b) ? 0 : 1;
-      if (la !== lb) return la - lb;
-      return Date.parse(b.timing.startedAt) - Date.parse(a.timing.startedAt);
-    })
-    .slice(0, 12);
+    .toSorted(byLoad);
+  const liveJobs = hostJobs.filter(isJobLive);
+  const finishedJobs = hostJobs.filter((j) => !isJobLive(j));
+  const shownJobs = showFinished ? [...liveJobs, ...finishedJobs] : liveJobs;
+  const sessions = host.sessions
+    .filter(isActionableFleetSession)
+    .toSorted((a, b) => (b.cpu_pct ?? 0) - (a.cpu_pct ?? 0));
 
-  const actionableSessions = host.sessions.filter(isActionableFleetSession);
-  const liveJobCount = hostJobs.filter(isJobLive).length;
+  const renderConfirm = (label: string, detail: string, onConfirm: () => void) => (
+    <div className="flex flex-wrap items-center justify-end gap-2 bg-destructive/6 px-3 py-1.5 text-sm">
+      <span className="mr-auto min-w-0 truncate text-muted-foreground">{detail}</span>
+      <Button size="xs" variant="ghost" onClick={() => setConfirmKillId(null)}>
+        <T>Cancel</T>
+      </Button>
+      <Button
+        size="xs"
+        variant="destructive"
+        onClick={() => {
+          setConfirmKillId(null);
+          onConfirm();
+        }}
+      >
+        {label}
+      </Button>
+    </div>
+  );
+
+  const renderJob = (job: JobSummary) => {
+    const live = isJobLive(job);
+    const pct = job.progress ? Math.round(job.progress.fraction * 100) : null;
+    const sub =
+      job.recentTail?.at(-1) ?? job.subtitle ?? (job.state === "running" ? "" : job.phaseLabel);
+    const subLine = [pct !== null ? `${pct}%` : "", sub].filter(Boolean).join(" · ");
+    const stopping = busyKeys.has(`job:${job.id}`) || job.state === "cancelling";
+    const confirming = confirmKillId === `job:${job.id}`;
+    return (
+      <div key={job.id} data-testid="fleet-job-row" data-live={live}>
+        <div
+          className={`${ROW} ${selectedJobId === job.id ? "bg-muted/40" : "hover:bg-muted/20"} ${live ? "" : "opacity-70"}`}
+        >
+          <button
+            type="button"
+            className="flex min-w-0 cursor-pointer items-center gap-2.5 text-left"
+            onClick={() => onInspectJob(job.id)}
+          >
+            <span className={`size-2 shrink-0 rounded-full ${stateDotClass(job)}`} />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-medium text-foreground">
+                {job.title}
+              </span>
+              {subLine ? (
+                <span className="block truncate font-mono text-xs text-muted-foreground">
+                  {subLine}
+                </span>
+              ) : null}
+            </span>
+          </button>
+          <FleetPanel.Meter
+            text={live ? cpuText(job.load?.cpuPct) : "-"}
+            share={live ? cpuShare(job.load?.cpuPct) : null}
+          />
+          <FleetPanel.Meter
+            text={live && job.load ? formatJobBytes(job.load.memBytes) || "0" : "-"}
+            share={live ? memShare(job.load?.memBytes) : null}
+          />
+          <span
+            className={`${WIDE} text-right font-mono text-sm text-muted-foreground tabular-nums`}
+          >
+            {compactAge(jobAgeSeconds(job, nowMs))}
+          </span>
+          <div className="flex items-center justify-end gap-0.5">
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label={gt("Inspect job")}
+              onClick={() => onInspectJob(job.id)}
+            >
+              <Maximize2Icon />
+            </Button>
+            {live && job.cancellable ? (
+              <Button
+                size="icon-xs"
+                variant="ghost-destructive"
+                disabled={stopping}
+                aria-label={gt("Stop thread for {title}", { title: job.title })}
+                title={gt("Stop owning thread and all its running background commands")}
+                onClick={() => setConfirmKillId(`job:${job.id}`)}
+              >
+                <SquareIcon className="size-3 fill-current" />
+              </Button>
+            ) : null}
+          </div>
+        </div>
+        {confirming
+          ? renderConfirm(
+              gt("Confirm stop"),
+              gt("Stop {title}? This stops its thread and every background command it runs.", {
+                title: job.title,
+              }),
+              () => onCancelJob(job.id),
+            )
+          : null}
+      </div>
+    );
+  };
+
+  const renderSession = (sess: DevdeckSessionItem) => {
+    const sid = sess.id || `${sess.pid ?? 0}:${sess.name ?? "proc"}`;
+    const watchdog = isWatchdogTree(sess);
+    const killing = busyKeys.has(`sess:${sid}`);
+    const canKill = host.isLocal && Boolean(sess.id && sess.close_allowed);
+    const name = sess.name || sess.kind || sid;
+    const meta = [sess.project, sess.pid ? `PID ${sess.pid}` : "", sess.endpoint ?? ""]
+      .filter(Boolean)
+      .join(" · ");
+    return (
+      <div key={sid} data-testid="fleet-proc-row">
+        <div className={`${ROW} hover:bg-muted/20`}>
+          <div className="flex min-w-0 items-center gap-2.5">
+            {watchdog || sess.runaway ? (
+              <FlameIcon className="size-3.5 shrink-0 text-destructive" />
+            ) : (
+              <span className="size-2 shrink-0 rounded-full bg-warning" />
+            )}
+            <span className="min-w-0">
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate text-sm font-medium text-foreground">{name}</span>
+                {sess.managed ? (
+                  <Badge size="sm" variant="outline">
+                    {sess.managed}
+                  </Badge>
+                ) : null}
+                {host.isLocal ? null : (
+                  <Badge
+                    size="sm"
+                    variant="secondary"
+                    title={sess.close_blocked_reason ?? gt("Close it from its own host")}
+                  >
+                    <T>View only</T>
+                  </Badge>
+                )}
+              </span>
+              {meta ? (
+                <span className="block truncate font-mono text-xs text-muted-foreground">
+                  {meta}
+                </span>
+              ) : null}
+            </span>
+          </div>
+          <FleetPanel.Meter text={cpuText(sess.cpu_pct)} share={cpuShare(sess.cpu_pct)} />
+          <FleetPanel.Meter
+            text={formatJobBytes(sess.mem_bytes) || "-"}
+            share={memShare(sess.mem_bytes)}
+          />
+          <span
+            className={`${WIDE} text-right font-mono text-sm text-muted-foreground tabular-nums`}
+          >
+            {compactAge(sess.age_s)}
+          </span>
+          <div className="flex items-center justify-end">
+            {canKill ? (
+              <Button
+                size="icon-xs"
+                variant="ghost-destructive"
+                disabled={killing}
+                aria-label={watchdog ? gt("Kill -9 {name}", { name }) : gt("Kill {name}", { name })}
+                onClick={() => (watchdog ? setConfirmKillId(sid) : onCloseSession(sess))}
+              >
+                <SquareIcon className="size-3 fill-current" />
+              </Button>
+            ) : null}
+          </div>
+        </div>
+        {confirmKillId === sid
+          ? renderConfirm(
+              gt("Confirm kill"),
+              gt("Kill {name} and its process tree?", { name }),
+              () => onCloseSession(sess),
+            )
+          : null}
+      </div>
+    );
+  };
 
   return (
-    <section className="overflow-hidden rounded-lg border border-border/70 bg-card/40">
-      <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-muted/20 px-3 py-2">
-        <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
-          <CpuIcon className="size-3.5 text-muted-foreground" />
-          <T>Host Jobs & Processes</T>
-          {liveJobCount > 0 ? (
-            <Badge size="sm" variant="secondary">
+    <FleetPanel.Root data-testid="fleet-load-panel">
+      <FleetPanel.Header>
+        <FleetPanel.Title>
+          <ActivityIcon />
+          <T context="panel heading: CPU and memory use of jobs and processes">Load</T>
+          {liveJobs.length > 0 ? (
+            <Badge variant="info">
               <T>
-                <Var>{liveJobCount}</Var> live
+                <Var>{liveJobs.length}</Var> live
               </T>
             </Badge>
           ) : null}
-        </div>
-        <span className="font-mono text-3xs text-muted-foreground">
-          {gt("{jobs} jobs · {procs} procs", {
-            jobs: hostJobs.length,
-            procs: actionableSessions.length,
-          })}
-        </span>
-      </div>
-
-      {hostJobs.length === 0 && actionableSessions.length === 0 ? (
-        <div className="px-3 py-4 text-xs text-muted-foreground">
-          <T>No bounded jobs or hot processes on this host.</T>
-        </div>
-      ) : (
-        <div className="divide-y divide-border/50">
-          {hostJobs.map((job) => {
-            const live = isJobLive(job);
-            const pct = job.progress ? Math.round(job.progress.fraction * 100) : null;
-            const elapsed = formatJobElapsed(job.timing, nowMs);
-            const lastLine = job.recentTail?.at(-1);
-            const cancelling = busyKeys.has(`job:${job.id}`);
-
-            const selected = selectedJobId === job.id;
-            return (
-              <div
-                key={job.id}
-                data-selected={selected ? "true" : undefined}
-                className={
-                  selected
-                    ? "space-y-1.5 bg-muted/40 px-3 py-2.5 text-xs"
-                    : "space-y-1.5 px-3 py-2.5 text-xs hover:bg-muted/20"
-                }
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <button
-                    type="button"
-                    className="min-w-0 flex-1 cursor-pointer space-y-0.5 text-left"
-                    onClick={() => onInspectJob(job.id)}
-                  >
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <Badge size="sm" variant="outline">
-                        {jobKindLabel(job.kind)}
-                      </Badge>
-                      <Badge size="sm" variant={jobStateBadgeVariant(job.state)}>
-                        {job.phaseLabel}
-                      </Badge>
-                      <span className="truncate font-medium text-foreground">{job.title}</span>
-                    </div>
-                    {job.subtitle ? (
-                      <div className="truncate text-3xs text-muted-foreground">{job.subtitle}</div>
-                    ) : null}
-                  </button>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {elapsed ? (
-                      <span className="font-mono text-3xs text-muted-foreground tabular-nums">
-                        {elapsed}
-                      </span>
-                    ) : null}
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      aria-label={gt("Inspect job")}
-                      onClick={() => onInspectJob(job.id)}
-                    >
-                      <Maximize2Icon className="size-3" />
-                    </Button>
-                    {live && job.cancellable ? (
-                      confirmKillId === `job:${job.id}` ? (
-                        <>
-                          <Button size="xs" variant="ghost" onClick={() => setConfirmKillId(null)}>
-                            <T>Cancel</T>
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="destructive"
-                            disabled={cancelling || job.state === "cancelling"}
-                            onClick={() => {
-                              setConfirmKillId(null);
-                              onCancelJob(job.id);
-                            }}
-                          >
-                            <T>Confirm stop</T>
-                          </Button>
-                        </>
-                      ) : (
-                        <Button
-                          size="xs"
-                          variant="outline"
-                          disabled={cancelling || job.state === "cancelling"}
-                          aria-label={gt("Stop thread for {title}", { title: job.title })}
-                          title={gt("Stop owning thread and all its running background commands")}
-                          onClick={() => setConfirmKillId(`job:${job.id}`)}
-                        >
-                          <XCircleIcon className="mr-1 size-3 text-destructive" />
-                          <T>Stop thread</T>
-                        </Button>
-                      )
-                    ) : null}
-                  </div>
-                </div>
-
-                {job.progress ? (
-                  <div className="flex items-center gap-2">
-                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                      <div
-                        className="h-full rounded-full bg-info"
-                        style={{ width: `${Math.max(0, Math.min(100, pct ?? 0))}%` }}
-                      />
-                    </div>
-                    <span className="font-mono text-3xs text-muted-foreground tabular-nums">
-                      {`${pct ?? 0}%`}
-                    </span>
-                  </div>
-                ) : null}
-
-                {lastLine ? (
-                  <div className="flex items-center gap-1.5 truncate rounded bg-background/70 px-2 py-1 font-mono text-3xs text-muted-foreground">
-                    <TerminalIcon className="size-2.5 shrink-0" />
-                    <span className="truncate">{lastLine}</span>
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-
-          {actionableSessions.map((sess) => {
-            const sid = sess.id || `${sess.pid ?? 0}:${sess.name ?? "proc"}`;
-            const watchdog = isWatchdogTree(sess);
-            const confirming = confirmKillId === sid;
-            const killing = busyKeys.has(`sess:${sid}`);
-            const cpuText =
-              typeof sess.cpu_pct === "number" && sess.cpu_pct >= 1
-                ? `${Math.round(sess.cpu_pct)}%`
-                : "";
-            const memText =
-              typeof sess.mem_bytes === "number" && sess.mem_bytes > 0
-                ? formatJobBytes(sess.mem_bytes)
-                : "";
-            const canKill = host.isLocal && Boolean(sess.id && sess.close_allowed);
-
-            return (
-              <div
-                key={sid}
-                className="flex items-center justify-between gap-2 px-3 py-2 text-xs hover:bg-muted/20"
-              >
-                <div className="flex min-w-0 items-center gap-2">
-                  {watchdog || sess.runaway ? (
-                    <FlameIcon className="size-3.5 shrink-0 text-destructive" />
-                  ) : (
-                    <span className="size-2 shrink-0 rounded-full bg-warning" />
-                  )}
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className="truncate font-medium text-foreground">
-                        {sess.name || sess.kind || sid}
-                      </span>
-                      {sess.managed ? (
-                        <Badge size="sm" variant="outline">
-                          {sess.managed}
-                        </Badge>
-                      ) : null}
-                      {host.isLocal ? null : (
-                        <Badge
-                          size="sm"
-                          variant="secondary"
-                          title={sess.close_blocked_reason ?? gt("Close it from its own host")}
-                        >
-                          <T>View only</T>
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap gap-x-2 font-mono text-3xs text-muted-foreground tabular-nums">
-                      {sess.pid ? <span>{`PID ${sess.pid}`}</span> : null}
-                      {sess.project ? <span>{sess.project}</span> : null}
-                      {sess.endpoint ? <span>{sess.endpoint}</span> : null}
-                      {cpuText ? <span>{cpuText}</span> : null}
-                      {memText ? <span>{memText}</span> : null}
-                    </div>
-                  </div>
-                </div>
-
-                {canKill ? (
-                  <div className="flex shrink-0 items-center gap-1">
-                    {watchdog && !confirming ? (
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        disabled={killing}
-                        onClick={() => setConfirmKillId(sid)}
-                      >
-                        <T>Kill -9</T>
-                      </Button>
-                    ) : confirming ? (
-                      <>
-                        <Button size="xs" variant="ghost" onClick={() => setConfirmKillId(null)}>
-                          <T>Cancel</T>
-                        </Button>
-                        <Button
-                          size="xs"
-                          variant="destructive"
-                          disabled={killing}
-                          onClick={() => {
-                            setConfirmKillId(null);
-                            onCloseSession(sess);
-                          }}
-                        >
-                          <T>Confirm kill</T>
-                        </Button>
-                      </>
-                    ) : (
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        disabled={killing}
-                        onClick={() => onCloseSession(sess)}
-                      >
-                        <XCircleIcon className="mr-1 size-3 text-destructive" />
-                        <T>Kill</T>
-                      </Button>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
+        </FleetPanel.Title>
+        {finishedJobs.length > 0 ? (
+          <Button size="xs" variant="ghost" onClick={() => setShowFinished((v) => !v)}>
+            {showFinished
+              ? gt("Hide {n} finished", { n: finishedJobs.length })
+              : gt("Show {n} finished", { n: finishedJobs.length })}
+          </Button>
+        ) : null}
+      </FleetPanel.Header>
+      {shownJobs.length === 0 && sessions.length === 0 ? null : (
+        <FleetPanel.Columns className={COLS}>
+          <span>
+            <T>Job or process</T>
+          </span>
+          <Tooltip>
+            <TooltipTrigger render={<span />}>
+              <T>CPU</T>
+            </TooltipTrigger>
+            <TooltipPopup side="top">{gt("Share of the host's CPU")}</TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger render={<span />}>
+              <T>Memory</T>
+            </TooltipTrigger>
+            <TooltipPopup side="top">{gt("Share of the host's memory")}</TooltipPopup>
+          </Tooltip>
+          <span className={WIDE}>
+            <T>Time</T>
+          </span>
+          <span />
+        </FleetPanel.Columns>
       )}
-    </section>
+      {shownJobs.length === 0 && sessions.length === 0 ? (
+        <FleetPanel.Empty>
+          <T>No running jobs or hot processes on this host.</T>
+        </FleetPanel.Empty>
+      ) : (
+        <FleetPanel.Body>
+          {shownJobs.length > 0 ? (
+            <FleetPanel.Group>
+              <T>Jobs</T>
+            </FleetPanel.Group>
+          ) : null}
+          {shownJobs.map(renderJob)}
+          {sessions.length > 0 ? (
+            <FleetPanel.Group>
+              <T>Hot processes</T>
+            </FleetPanel.Group>
+          ) : null}
+          {sessions.map(renderSession)}
+        </FleetPanel.Body>
+      )}
+    </FleetPanel.Root>
   );
 }

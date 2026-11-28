@@ -235,6 +235,19 @@ export class CernoVisibilityCoordinator {
     }
   }
 
+  /** Root PID of the live cerno process matched to a live background job, from the match cache. */
+  liveCernoPidForBg(
+    bgId: string,
+    candidates: ReadonlyArray<CernoJobMatchCandidate>,
+  ): number | undefined {
+    const bg = this.bgMatchCache.get(bgId);
+    if (!bg || isTerminalJobState(bg.state)) return undefined;
+    const matched = candidates.find(
+      (c) => !isTerminalJobState(c.state) && c.pidStats?.alive && cernoMatchesBackgroundJob(c, bg),
+    );
+    return matched?.pidStats?.pid;
+  }
+
   findLiveCernoForBg(
     bgSummary: JobSummary,
     bgDetail: JobDetail,

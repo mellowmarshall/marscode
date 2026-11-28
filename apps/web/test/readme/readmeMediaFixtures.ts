@@ -60,7 +60,16 @@ export const fleetHosts = mergeFleetHosts({
       host: { name: "host-c", uptime_s: 290_000, load1: 1.1, cpus: 12, cpu_pct: 27 },
     },
   },
-  hostsReport: null,
+  // Before a first hosts check the server lists manifest hosts with only their CI state.
+  hostsReport: {
+    report: {
+      hosts: [
+        { name: "host-a", ssh: null, ci_off: false },
+        { name: "host-b", ssh: "host-b", ci_off: false },
+        { name: "host-c", ssh: "host-c", ci_off: true },
+      ],
+    },
+  },
   shipPanel: null,
 });
 
@@ -78,6 +87,7 @@ export function fleetJobs(nowMs: number): ReadonlyArray<JobSummary> {
       binding: { host: "host-a" },
       timing: { startedAt: startedAt(38), etaSeconds: 1500 },
       progress: { current: 2, total: 5, fraction: 0.46, stageLabel: "Epoch 2/5" },
+      load: { cpuPct: 1220, memBytes: 18 * GiB, processCount: 6 },
       cancellable: true,
     },
     {
@@ -90,6 +100,7 @@ export function fleetJobs(nowMs: number): ReadonlyArray<JobSummary> {
       state: "running",
       binding: { host: "host-a" },
       timing: { startedAt: startedAt(4) },
+      load: { cpuPct: 310, memBytes: 2 * GiB, processCount: 3 },
       cancellable: true,
     },
   ];

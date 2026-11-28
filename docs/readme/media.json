@@ -4,7 +4,7 @@
       "apps/web/src/devtools/FleetMachinesView.tsx",
       "apps/web/src/devtools/DeckHeaderStrip.tsx",
       "apps/web/src/devtools/FleetJobsAndProcsPanel.tsx",
-      "apps/web/src/devtools/FleetThreadsPanel.tsx",
+      "apps/web/src/devtools/FleetPanel.tsx",
       "apps/web/src/devtools/FleetLocalhostsPanel.tsx",
       "apps/web/src/devtools/fleetDeck.css",
       "apps/web/test/readme/devtools.media.tsx",
@@ -12,7 +12,7 @@
       "apps/web/src/index.css",
       "apps/web/src/components/ui/*.tsx"
     ],
-    "hash": "be8ebd059057f2f1"
+    "hash": "06443ae6d60d509f"
   },
   "ship-queue.webp": {
     "sources": [
@@ -22,7 +22,7 @@
       "apps/web/src/index.css",
       "apps/web/src/components/ui/*.tsx"
     ],
-    "hash": "a3e83d1ee8dd6391"
+    "hash": "ac540176ac32b322"
   },
   "ship-queue.gif": {
     "sources": [
@@ -32,7 +32,7 @@
       "apps/web/src/index.css",
       "apps/web/src/components/ui/*.tsx"
     ],
-    "hash": "a3e83d1ee8dd6391"
+    "hash": "ac540176ac32b322"
   },
   "reaper.webp": {
     "sources": [
@@ -63,7 +63,7 @@
       "apps/web/src/index.css",
       "apps/web/src/components/ui/*.tsx"
     ],
-    "hash": "1fb46955a3478b61"
+    "hash": "93eee461db8761e6"
   },
   "cite.gif": {
     "sources": [

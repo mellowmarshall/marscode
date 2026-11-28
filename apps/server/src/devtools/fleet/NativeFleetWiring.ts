@@ -14,6 +14,7 @@ import * as PeerLinks from "../../peer/PeerLinks.ts";
 import * as DesktopTelemetryReceiver from "../../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as HostResources from "../../resourceTelemetry/HostResources.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
+import * as JobRegistry from "../jobs/JobRegistry.ts";
 import type { FleetWorktreesPanel } from "./FleetTypes.ts";
 import { makeFleetWorktreesCollector } from "./FleetWorktrees.ts";
 import { NativeFleetService } from "./NativeFleetService.ts";
@@ -70,6 +71,7 @@ export const makeNativeFleetFromContext = Effect.fn("NativeFleet.makeFromContext
       DesktopTelemetryReceiver.DesktopTelemetryReceiver,
     );
     const peerLinksOpt = yield* Effect.serviceOption(PeerLinks.PeerLinks);
+    const jobRegistryOpt = yield* Effect.serviceOption(JobRegistry.JobRegistry);
     const services = yield* Effect.context<never>();
     const runWithServices = Effect.runPromiseWith(services);
     const readWorktrees = yield* makeWorktreesReader();
@@ -93,6 +95,9 @@ export const makeNativeFleetFromContext = Effect.fn("NativeFleet.makeFromContext
               )
           : undefined,
       readWorktrees,
+      onProcessTable: Option.isSome(jobRegistryOpt)
+        ? (rows) => jobRegistryOpt.value.applyProcessTable(rows)
+        : undefined,
       listPeerLinks: Option.isSome(peerLinksOpt)
         ? () =>
             runWithServices(
