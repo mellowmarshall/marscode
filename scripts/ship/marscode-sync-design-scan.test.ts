@@ -7,7 +7,12 @@ import * as NodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { parseCliArgs } from "./marscode-sync-cli.ts";
-import { designScanBundle, installDesignScan } from "./marscode-sync-design-scan.ts";
+import {
+  designScanBundle,
+  designScanSource,
+  installDesignScan,
+  keptDesignScan,
+} from "./marscode-sync-design-scan.ts";
 import { WRAPPER_MARKER } from "./marscode-sync-parity.ts";
 import { SYNC_BINARY_TARGETS } from "./marscode-sync-plan.ts";
 import { runSync } from "./marscode-sync.ts";
@@ -40,7 +45,11 @@ afterEach(() => {
 });
 
 const install = () =>
-  installDesignScan(worktree, { dir, log: (m) => logs.push(m), warn: (m) => warnings.push(m) });
+  installDesignScan(designScanBundle(worktree), {
+    dir,
+    log: (m) => logs.push(m),
+    warn: (m) => warnings.push(m),
+  });
 const dest = () => NodePath.join(dir, "pb_design_scan.mjs");
 
 describe("marscode-sync design scan install", () => {
@@ -131,9 +140,9 @@ describe("marscode-sync runs the design scan install on every sync", () => {
       NodePath.join(dataRoot, ".sync-state.json"),
       JSON.stringify({ version: 1, installSha: head, targets }),
     );
-    const syncWorktree = NodePath.join(dataRoot, "sync-worktree");
-    NodeFS.mkdirSync(NodePath.dirname(designScanBundle(syncWorktree)), { recursive: true });
-    NodeFS.writeFileSync(designScanBundle(syncWorktree), BUNDLE);
+    // The worktree's dist is gone (a clean or an unrelated rebuild removed it); the kept copy stays.
+    NodeFS.mkdirSync(NodePath.dirname(keptDesignScan(dataRoot)), { recursive: true });
+    NodeFS.writeFileSync(keptDesignScan(dataRoot), BUNDLE);
     const options = parseCliArgs(
       [
         "--primary",
@@ -152,5 +161,50 @@ describe("marscode-sync runs the design scan install on every sync", () => {
     expect(
       NodeFS.readFileSync(NodePath.join(prefix, "lib", "playbook", "pb_design_scan.mjs"), "utf8"),
     ).toBe(`${MARKER_LINE}\n${BUNDLE}`);
+  });
+});
+
+describe("the design scan bundle marscode-sync installs from", () => {
+  const places = () => ({
+    worktree,
+    dataRoot: NodePath.join(tmp, "data"),
+    libDir: NodePath.join(tmp, "prefix", "lib", "marscode-tools"),
+  });
+  const noBuild = () => {
+    throw new Error("no build expected");
+  };
+
+  it("keeps a fresh worktree build in the data root, and uses that copy once the worktree's is gone", () => {
+    const p = places();
+    expect(designScanSource(p, noBuild)).toBe(keptDesignScan(p.dataRoot));
+    NodeFS.rmSync(designScanBundle(worktree));
+    expect(designScanSource(p, noBuild)).toBe(keptDesignScan(p.dataRoot));
+    expect(NodeFS.readFileSync(keptDesignScan(p.dataRoot), "utf8")).toBe(BUNDLE);
+  });
+
+  it("falls back to the installed playbook release's copy, then builds one", () => {
+    const p = places();
+    NodeFS.rmSync(designScanBundle(worktree));
+    const release = NodePath.join(p.libDir, "playbook", "dist", "pb_design_scan.mjs");
+    NodeFS.mkdirSync(NodePath.dirname(release), { recursive: true });
+    NodeFS.writeFileSync(release, BUNDLE);
+    expect(designScanSource(p, noBuild)).toBe(release);
+    NodeFS.rmSync(release);
+    let built = 0;
+    const source = designScanSource(p, () => {
+      built += 1;
+      NodeFS.writeFileSync(designScanBundle(worktree), BUNDLE);
+    });
+    expect(built).toBe(1);
+    expect(source).toBe(keptDesignScan(p.dataRoot));
+    expect(designScanSource({ ...p, dataRoot: NodePath.join(tmp, "other") }, () => {})).toBe(
+      keptDesignScan(NodePath.join(tmp, "other")),
+    );
+  });
+
+  it("gives no source when nothing is built and the build makes none", () => {
+    const p = places();
+    NodeFS.rmSync(designScanBundle(worktree));
+    expect(designScanSource(p, () => {})).toBeNull();
   });
 });

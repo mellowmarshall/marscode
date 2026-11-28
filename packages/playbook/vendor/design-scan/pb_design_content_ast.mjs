@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - The original scan runs as plain node, with no Effect runtime.
 // From the original playbook's design scan; only comments and the node: import style differ.
 // AST and lexical bindings for UI sinks inside declared authored content.
 import * as NodeModule from "node:module";

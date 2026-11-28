@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - The original scan runs as plain node, with no Effect runtime.
 // The repo's own import aliases for the design rules (PLAYBOOK §10): tsconfig `paths` of the
 // nearest config. An alias is the repo's own code only when every target is a relative path
 // inside the repo, its key names no dependency, and its target exists; otherwise it is a package.

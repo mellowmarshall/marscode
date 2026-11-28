@@ -111,7 +111,7 @@ function withoutTokenMixes(text) {
       : call && isTokenChannels(match[1], call.args);
     if (!token) continue;
     out += `${text.slice(at, match.index)} `;
-    at = call.end;
+    at = /** @type {NonNullable<typeof call>} */ (call).end;
   }
   return out + text.slice(at);
 }

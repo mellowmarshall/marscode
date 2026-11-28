@@ -16,6 +16,51 @@ export function designScanBundle(worktree: string): string {
   return NodePath.join(worktree, "packages", "playbook", "dist", DESIGN_SCAN);
 }
 
+export interface DesignScanPlaces {
+  readonly worktree: string;
+  /** The sync's data root: its copy survives the worktree's clean and rebuilds. */
+  readonly dataRoot: string;
+  /** The CLI bundles' lib dir (<libDir>/playbook/dist holds the installed release's copy). */
+  readonly libDir: string;
+}
+
+/** The sync's own copy of the last built bundle. */
+export function keptDesignScan(dataRoot: string): string {
+  return NodePath.join(dataRoot, "design-scan", DESIGN_SCAN);
+}
+
+function copyAtomic(src: string, dest: string): void {
+  NodeFS.mkdirSync(NodePath.dirname(dest), { recursive: true });
+  const tmp = `${dest}.next.${process.pid}`;
+  try {
+    NodeFS.copyFileSync(src, tmp);
+    NodeFS.renameSync(tmp, dest);
+  } finally {
+    NodeFS.rmSync(tmp, { force: true });
+  }
+}
+
+/**
+ * The bundle to install: a fresh build in the worktree (kept in the data root), else the
+ * kept copy, else the installed playbook release's; when none is there, BUILD makes one in
+ * the worktree. Null when no bundle can be had.
+ */
+export function designScanSource(places: DesignScanPlaces, build: () => void): string | null {
+  const fresh = designScanBundle(places.worktree);
+  const kept = keptDesignScan(places.dataRoot);
+  if (NodeFS.existsSync(fresh)) {
+    copyAtomic(fresh, kept);
+    return kept;
+  }
+  if (NodeFS.existsSync(kept)) return kept;
+  const release = NodePath.join(places.libDir, "playbook", "dist", DESIGN_SCAN);
+  if (NodeFS.existsSync(release)) return release;
+  build();
+  if (!NodeFS.existsSync(fresh)) return null;
+  copyAtomic(fresh, kept);
+  return kept;
+}
+
 /** Why the file at PATH is not MarsCode's to replace; null when it is absent or MarsCode wrote it. */
 function foreign(path: string): string | null {
   let st: NodeFS.Stats;
@@ -40,14 +85,13 @@ function foreign(path: string): string | null {
  * holds this bundle, or "kept" when another install's copy (or one it cannot read) stays.
  */
 export function installDesignScan(
-  worktree: string,
+  src: string,
   opts: {
     readonly dir: string;
     readonly log: (msg: string) => void;
     readonly warn: (msg: string) => void;
   },
 ): "installed" | "current" | "kept" {
-  const src = designScanBundle(worktree);
   if (!NodeFS.existsSync(src)) throw new Error(`marscode-sync: missing built bundle ${src}`);
   const dest = NodePath.join(opts.dir, DESIGN_SCAN);
   const kept = foreign(dest);

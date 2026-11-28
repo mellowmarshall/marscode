@@ -56,6 +56,19 @@ describe("size exceptions in the declaration ratchet", () => {
     ]);
   });
 
+  it("sends two entries for one file (after normalizing) to the owner, and judges neither as issue-backed", () => {
+    const head = withSize([
+      exception("src/old.ts"),
+      exception("src/big.ts", "#41"),
+      exception("./src//big.ts", "#99"),
+    ]);
+    const r = declarationRatchet(head, base, undefined, undefined, files());
+    expect(r.issueBacked).toEqual([]);
+    expect(r.problems).toEqual([
+      "size.exceptions declares scoped exception 'src/big.ts' more than once (requires owner override, §1.3)",
+    ]);
+  });
+
   it("takes a re-spelled subject (./, //) as the same exception, never as a new one", () => {
     const head = withSize([exception("./src//old.ts")]);
     expect(declarationRatchet(head, base, undefined, undefined, files())).toEqual({

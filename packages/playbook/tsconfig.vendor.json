@@ -1,0 +1,14 @@
+{
+  // The vendored design scan (plain JavaScript) checked as JavaScript: types are inferred, so
+  // implicit any is allowed, and JavaScript has no `!` for regex groups and array reads.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "noImplicitAny": false,
+    "noUncheckedIndexedAccess": false
+  },
+  "include": ["vendor/design-scan"]
+}

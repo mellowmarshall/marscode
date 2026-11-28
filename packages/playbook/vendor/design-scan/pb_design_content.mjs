@@ -45,7 +45,7 @@ export function contentUiFindings(text, rel, settings, renderer = {}) {
   try {
     ast = contentAst(text, rel, settings);
   } catch (error) {
-    reportAt("design/content-ui-unresolved", 0, error.message);
+    reportAt("design/content-ui-unresolved", 0, /** @type {Error} */ (error).message);
     return findings;
   }
   const { ts, source, unwrap, resolve, token, nameOf, binding, componentKind } = ast;

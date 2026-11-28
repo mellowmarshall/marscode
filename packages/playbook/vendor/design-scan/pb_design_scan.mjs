@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - The original scan runs as plain node, with no Effect runtime.
 // The design rules' scan (PLAYBOOK §10).
 // From the original playbook's design scan; only comments and the node: import style differ.
 import * as NodeChildProcess from "node:child_process";
@@ -159,7 +160,7 @@ function uiImportGraphFindings(scripts, settings) {
     const seen = new Set([start]);
     const queue = [[start]];
     while (queue.length) {
-      const chain = queue.shift();
+      const chain = /** @type {string[]} */ (queue.shift());
       const last = chain[chain.length - 1];
       if (isApp(last)) return chain;
       for (const { target } of importsOf(last)) {

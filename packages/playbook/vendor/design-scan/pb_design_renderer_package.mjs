@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - The original scan runs as plain node, with no Effect runtime.
 // Canonical renderer imports for design value positions.
 // A package-looking name alone is not proof: local packages, dependency aliases
 // and resolver overrides retain the ordinary design checks.

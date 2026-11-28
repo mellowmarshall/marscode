@@ -31,6 +31,19 @@ function normalizeSubject(subject: string): string {
     .replace(/\/{2,}/g, "/");
 }
 
+/** The subjects RAW lists more than once (after normalizing). */
+function repeatedSubjects(raw: unknown): ReadonlySet<string> {
+  const seen = new Set<string>();
+  const twice = new Set<string>();
+  for (const item of Array.isArray(raw) ? raw : []) {
+    if (!isRecord(item) || typeof item.subject !== "string") continue;
+    const key = normalizeSubject(item.subject);
+    if (seen.has(key)) twice.add(key);
+    seen.add(key);
+  }
+  return twice;
+}
+
 function exceptionMap(raw: unknown): ReadonlyMap<string, unknown> {
   const out = new Map<string, unknown>();
   if (!Array.isArray(raw)) return out;
@@ -81,7 +94,15 @@ function checkScopedExceptions(
   const { problems } = rules;
   const oldMap = exceptionMap(before);
   const newMap = exceptionMap(after);
+  // Two entries for one file could carry an exception no check sees: the owner decides.
+  const twice = repeatedSubjects(after);
+  for (const subject of [...twice].toSorted()) {
+    problems.push(
+      `${where} declares scoped exception '${subject}' more than once (requires owner override, §1.3)`,
+    );
+  }
   for (const [subject, entry] of [...newMap].toSorted(([a], [b]) => a.localeCompare(b))) {
+    if (twice.has(subject)) continue;
     if (!oldMap.has(subject)) {
       if (!rules.issueBacked) {
         problems.push(

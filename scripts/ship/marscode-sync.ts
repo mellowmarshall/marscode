@@ -22,7 +22,7 @@ import {
   stageShipQueueVersion,
   validateAndSwapAppImage,
 } from "./marscode-sync-install.ts";
-import { DESIGN_SCAN, designScanBundle, installDesignScan } from "./marscode-sync-design-scan.ts";
+import { DESIGN_SCAN, designScanSource, installDesignScan } from "./marscode-sync-design-scan.ts";
 import { parityFingerprint } from "./marscode-sync-parity.ts";
 import {
   APP_IMAGE_TARGET_ID,
@@ -173,11 +173,26 @@ export function runSync(options: SyncCliOptions): void {
     VP_GIT_HOOKS: "0",
   };
 
-  // Every sync: a missing design scan comes back, and an older one of ours is replaced.
+  // Every sync: a missing design scan comes back, and an older one of ours is replaced, from a
+  // bundle that outlives the worktree's clean (built when there is none).
   const syncDesignScan = (): void => {
-    if (!NodeFS.existsSync(designScanBundle(syncWorktree))) return;
     try {
-      installDesignScan(syncWorktree, {
+      const src = designScanSource(
+        { worktree: syncWorktree, dataRoot: options.dataRoot, libDir: options.libDir },
+        () => {
+          ensureWarmWorktree(options.primary, syncWorktree, headSha);
+          runChecked("vp", ["run", "--filter", "@t3tools/playbook", "build:bundle"], {
+            cwd: syncWorktree,
+            env: toolEnv,
+            inheritStdio: true,
+          });
+        },
+      );
+      if (src === null) {
+        logErr(`marscode-sync: warning: skipped ${DESIGN_SCAN}: no built bundle to install`);
+        return;
+      }
+      installDesignScan(src, {
         dir: NodePath.join(options.prefix, "lib", "playbook"),
         log,
         warn: logErr,
