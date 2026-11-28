@@ -88,6 +88,28 @@ parity_problem() {
   esac
 }
 
+# The playbook's design scan (the original playbook's scan in one file) goes where repos' design
+# evidence runs it, ~/.local/lib/playbook/pb_design_scan.mjs, never over a file another install
+# wrote. It has its own owner check, so it installs whether or not the CLI did.
+install_design_scan() {
+  local scan="$script_dir/../../packages/playbook/dist/pb_design_scan.mjs"
+  [ "$name" = playbook ] && [ -f "$scan" ] || return 0
+  local scan_marker="// ${wrapper_marker#\# }"
+  local scan_dir="$HOME/.local/lib/playbook"
+  local scan_dest="$scan_dir/pb_design_scan.mjs"
+  if [ -L "$scan_dest" ] || { [ -e "$scan_dest" ] && [ ! -f "$scan_dest" ]; } \
+    || { [ -f "$scan_dest" ] && [ "$(head -n 1 "$scan_dest" 2>/dev/null)" != "$scan_marker" ]; }; then
+    printf 'ci-marscode-cli.sh: warning: skipped pb_design_scan.mjs: kept %s (another install wrote it, not installed by MarsCode); remove it to let MarsCode install its design scan.\n' "$scan_dest"
+    return 0
+  fi
+  mkdir -p "$scan_dir"
+  local scan_tmp="$scan_dir/.pb_design_scan.mjs.$$"
+  { printf '%s\n' "$scan_marker"; cat "$scan"; } > "$scan_tmp"
+  chmod 644 "$scan_tmp"
+  mv -f "$scan_tmp" "$scan_dest"
+  printf 'ci-marscode-cli.sh: installed %s\n' "$scan_dest"
+}
+
 foreign=$(foreign_cli)
 if [ -n "$foreign" ]; then
   # The backticks are the message's literal text.
@@ -100,6 +122,7 @@ if [ -n "$foreign" ]; then
   if [ -n "$problem" ]; then
     printf 'ci-marscode-cli.sh: warning: skipped %s: kept %s (%s, not installed by MarsCode) because %s%s; remove it to let MarsCode install its %s.\n' \
       "$name" "$bin" "$foreign" "$problem" "${what:+ (the check: $what)}" "$name"
+    install_design_scan
     exit 0
   fi
 fi
@@ -130,3 +153,5 @@ find "$releases" -mindepth 1 -maxdepth 1 -name "$name.*" -mmin +10 -print | whil
   [ "$old" = "$current" ] || rm -rf "$old"
 done
 printf 'ci-marscode-cli.sh: installed %s\n' "$bin_dir/$name"
+
+install_design_scan

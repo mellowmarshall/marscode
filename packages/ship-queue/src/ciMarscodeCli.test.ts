@@ -192,6 +192,49 @@ describe("ci-marscode-cli.sh flag-parity guard", () => {
   });
 });
 
+/** The payload's design scan: a built bundle's shape, one ES module that prints the scan's JSON. */
+function designScan(): string {
+  const text = "process.stdout.write(JSON.stringify({ findings: [], files: 0 }));\n";
+  const file = NodePath.join(payload, "packages", "playbook", "dist", "pb_design_scan.mjs");
+  NodeFS.mkdirSync(NodePath.dirname(file), { recursive: true });
+  NodeFS.writeFileSync(file, text);
+  return text;
+}
+
+describe("ci-marscode-cli.sh design scan", () => {
+  const scanAt = () => NodePath.join(home, ".local", "lib", "playbook", "pb_design_scan.mjs");
+  const scanMarker = `// ${MARKER.slice(2)}`;
+
+  it("installs the playbook's design scan where repos run it, marked as MarsCode's, and it runs", () => {
+    bundle("playbook", "packages/playbook/src/bin.ts");
+    const text = designScan();
+    const r = installer("playbook");
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain(`ci-marscode-cli.sh: installed ${scanAt()}`);
+    expect(NodeFS.readFileSync(scanAt(), "utf8")).toBe(`${scanMarker}\n${text}`);
+    const run = NodeChildProcess.spawnSync(process.execPath, [scanAt()], { encoding: "utf8" });
+    expect(JSON.parse(run.stdout)).toEqual({ findings: [], files: 0 });
+  });
+
+  it("keeps another install's design scan, and still installs one when the CLI is kept", () => {
+    originalLink("playbook");
+    bundle("playbook", "packages/playbook/src/bin.ts");
+    const text = designScan();
+    NodeFS.mkdirSync(NodePath.dirname(scanAt()), { recursive: true });
+    NodeFS.writeFileSync(scanAt(), "// another install's scan\n");
+    let r = installer("playbook");
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain(
+      `ci-marscode-cli.sh: warning: skipped pb_design_scan.mjs: kept ${scanAt()} (another install wrote it, not installed by MarsCode)`,
+    );
+    expect(NodeFS.readFileSync(scanAt(), "utf8")).toBe("// another install's scan\n");
+    NodeFS.rmSync(scanAt());
+    r = installer("playbook");
+    expect(r.stdout).toContain("skipped playbook: kept");
+    expect(NodeFS.readFileSync(scanAt(), "utf8")).toBe(`${scanMarker}\n${text}`);
+  });
+});
+
 describe("hosts provision with a CLI the installer keeps", () => {
   it("skips the refused CLI, installs the others and succeeds", async () => {
     // The payload where provision points CI_HOST_PAYLOAD on a host.

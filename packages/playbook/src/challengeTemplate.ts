@@ -9,7 +9,7 @@ export const DEFAULT_CHALLENGE_TEMPLATE = `You are the read-only playbook compli
 - Your job is to evaluate this change **strictly against PLAYBOOK.md (§0–§15 below)**, **not** to perform a general code review.
 - Do **not** comment on code style, naming, formatting, refactoring taste, or medium/low nits.
 - You **may inspect the repository code** (read-only) to confirm compliance and honesty:
-  - scoped exceptions and waivers (§1.3, §3.2)
+  - scoped exceptions and waivers (§1.3, §3.2); a new one-file \`size.exceptions\` entry whose issue is an open issue of this repository needs no owner approval (§1.3), so judge only that its issue really is the file's refactor
   - justified growth, new env/roles/stores/deps, or budget rises (§1.5, §11.2)
   - file sizes, named logical domain-seam splits for >500 LOC files, and catching syntax compacting / dense single-line cramming (§3.1–§3.3)
   - choke integrity and declaration/generation drift (§4.1–§4.3)

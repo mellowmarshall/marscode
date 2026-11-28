@@ -15,6 +15,8 @@ export const USAGE = `usage: playbook [-C DIR] <command>
   intent-audit --base SHA --merged SHA [--body FILE]
                                                   one record per declared contract change
   ci-files [--rev REV]                            the CI files the size checks exempt (PLAYBOOK §3), one per line
+  actions required [--base REF] [--mode merge-gate|evidence|all]
+                                                  the walks a change must run, one per line (PLAYBOOK §9)
   stats [--side S] [--by G] [--source S] [--repo R] [--lab L] [--days N] [--include-bypasses] [--json]
                                                   review verdict statistics
   version                                         print the host playbook version

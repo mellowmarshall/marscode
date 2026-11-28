@@ -76,7 +76,7 @@
     }
   },
   "scripts": {
-    "typecheck": "effect-tsgo tsrs --noEmit",
+    "typecheck": "effect-tsgo tsrs --noEmit && effect-tsgo tsrs --noEmit -p tsconfig.vendor.json",
     "test": "vp test run --config ../../vite.config.ts --dir .",
     "build:bundle": "vp pack"
   },
