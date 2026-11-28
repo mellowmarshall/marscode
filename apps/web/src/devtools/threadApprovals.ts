@@ -179,7 +179,7 @@ function buildGuardApproval(req: PendingGuardRequest): ThreadDevtoolsApproval {
   const approveLabel = req.plan
     ? m(msg("Approve all listed"))
     : req.bundleEligible
-      ? m(msg("Approve for this diff"))
+      ? m(msg("Approve for this PR"))
       : m(msg("Approve once"));
   const options: ReadonlyArray<ProviderApprovalOption> = [
     { decision: "decline", label: m(msg("Deny")) },

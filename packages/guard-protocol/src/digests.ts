@@ -63,20 +63,15 @@ export function normalizeSortedUnique(items: ReadonlyArray<string>): ReadonlyArr
 }
 
 /**
- * Deterministic key and canonical signing payload for a bundled protected-diff approval.
- * Any change to a protected file diff, gate set, body digest, repo, or branch yields a distinct digest.
+ * The key of an owner approval of protected changes: one approval covers a pull request, that is,
+ * a repository and a branch. Every guard shares it, and a later change to the protected files on
+ * the same branch needs no new approval. It ends when the PR merges or the approval expires.
  */
 export function computeBundleKey(input: BundleDigestInput): string {
   const canonical = JSON.stringify({
-    v: 1,
+    v: 2,
     repo: normalizeRepoSlug(input.repo),
     branch: input.branch.trim(),
-    prOrIssue: input.prOrIssue.trim(),
-    guard: input.guard.trim().toLowerCase(),
-    gateIds: normalizeSortedUnique(input.gateIds),
-    protectedPaths: normalizeSortedUnique(input.protectedPaths),
-    protectedDiffSha256: input.protectedDiffSha256.trim().toLowerCase(),
-    bodySha256: input.bodySha256.trim().toLowerCase(),
   });
   return sha256Hex(Buffer.from(canonical, "utf8"));
 }

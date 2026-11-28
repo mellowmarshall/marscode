@@ -41,7 +41,7 @@ function sendRpc(
 
 describe("GuardGrantBroker bundled content-digest approvals & SQLite persistence", () => {
   it.effect(
-    "reuses Ed25519-signed bundled approval across CI resubmits, invalidates on protected diff edit and PR merge, and forces whole-commit gates to once-only",
+    "reuses Ed25519-signed bundled approval across CI resubmits and later protected edits on the branch, invalidates on PR merge, and forces whole-commit gates to once-only",
     () =>
       Effect.gen(function* () {
         yield* runMigrations();
@@ -321,21 +321,26 @@ describe("GuardGrantBroker bundled content-digest approvals & SQLite persistence
           expect(resubmitResp.grant_id).toBe(resp1.grant_id);
           expect(broker.listPending()).toHaveLength(0);
 
-          // 3. Modifying a protected file changes protected_diff_sha256 -> cache miss (check returns false).
+          // 3. The approval covers the pull request: a later protected edit on the same branch
+          //    needs no new approval, and another branch has none.
           const diffSha2 = canonicalProtectedDiffSha256(
-            "diff --git a/host-guards/exceptions.json\n+marscode\n+sneaky",
+            "diff --git a/host-guards/exceptions.json\n+marscode\n+later",
           );
-          const tamperedCheck = yield* Effect.promise(() =>
-            sendRpc(sockPath, {
-              v: 1,
-              op: "check",
-              guard: "ship-queue",
-              command: ["submit", "/data/Dev/example-repo/issue-1352", "issue-1352"],
-              cwd: tmpDir,
-              bundle: { ...bundle1, protected_diff_sha256: diffSha2 },
-            }),
-          );
-          expect(tamperedCheck.ok).toBe(false);
+          const check = (bundle: Record<string, unknown>) =>
+            Effect.promise(() =>
+              sendRpc(sockPath, {
+                v: 1,
+                op: "check",
+                guard: "ship-queue",
+                command: ["submit", "/data/Dev/example-repo/issue-1352", "issue-1352"],
+                cwd: tmpDir,
+                bundle,
+              }),
+            );
+          const laterEdit = yield* check({ ...bundle1, protected_diff_sha256: diffSha2 });
+          expect(laterEdit.ok).toBe(true);
+          expect(laterEdit.grant_id).toBe(resp1.grant_id);
+          expect((yield* check({ ...bundle1, branch: "issue-9999" })).ok).toBe(false);
 
           // 4. Whole-commit gate (`no-review`) is ALWAYS forced to once-only (bundleEligible = false).
           const wholeCommitQueued = yield* Effect.promise(() =>
