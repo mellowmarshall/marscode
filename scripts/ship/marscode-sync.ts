@@ -34,6 +34,8 @@ import {
   recordParitySkips,
   type DesktopHostStatus,
 } from "./marscode-sync-plan.ts";
+import { readFleetConfig, runFleetSync } from "./marscode-sync-fleet.ts";
+import type { FleetHostSyncRecord } from "./marscode-sync-fleet-config.ts";
 
 const DEFAULT_APP_IMAGE_NAME = "MarsCode-main.AppImage";
 
@@ -214,6 +216,7 @@ export function runSync(options: SyncCliOptions): void {
       }
     }
 
+    const fleetHosts = readFleetConfig(options.fleetConfigPath);
     const plan = planSync({
       headSha,
       state,
@@ -224,6 +227,8 @@ export function runSync(options: SyncCliOptions): void {
       jobsBehind: options.jobsBehind,
       force: options.force,
       skipApp: options.skipApp,
+      skipFleet: options.skipFleet,
+      fleetHosts,
       only: options.only,
       desktopHost: checkDesktopHost(options.appDir, toolPath),
       listChangedFiles: (fromSha) => listChangedFilesBetween(options.primary, fromSha, headSha),
@@ -244,10 +249,18 @@ export function runSync(options: SyncCliOptions): void {
           ? `build (${plan.appImage.reason}) -> ${appImagePath}`
           : `skip (${plan.appImage.reason}${plan.appImage.detail ? `: ${plan.appImage.detail}` : ""})`;
       log(`[dry-run] ${APP_IMAGE_TARGET_ID}: ${appDesc}`);
+      for (const entry of plan.fleet.hosts) {
+        const d = entry.decision;
+        const desc =
+          d.action === "build"
+            ? `sync (${d.reason})`
+            : `skip (${d.reason}${d.detail ? `: ${d.detail}` : ""})`;
+        log(`[dry-run] fleet ${entry.host.name} (${entry.host.kind}): ${desc}`);
+      }
       return;
     }
 
-    if (!plan.needsWorktreeUpdate) {
+    if (!plan.needsWorktreeUpdate && !plan.fleet.anyHostToSync) {
       const detail =
         plan.appImage.action === "skip" && plan.appImage.detail ? ` (${plan.appImage.detail})` : "";
       log(`marscode-sync: nothing to rebuild at ${headSha.slice(0, 10)}${detail}`);
@@ -258,16 +271,22 @@ export function runSync(options: SyncCliOptions): void {
     const nextTargets: Record<string, string> = { ...state.targets };
     const nextParitySkips: Record<string, string> = { ...state.paritySkips };
     let nextInstallSha = state.installSha;
+    let nextFleetArtifact = state.fleetArtifact;
+    const nextFleetHosts: Record<string, FleetHostSyncRecord> = { ...state.fleetHosts };
     const persist = (): void => {
       saveSyncState(statePath, {
         version: 1,
         installSha: nextInstallSha,
         targets: nextTargets,
         ...(Object.keys(nextParitySkips).length > 0 ? { paritySkips: nextParitySkips } : {}),
+        ...(nextFleetArtifact ? { fleetArtifact: nextFleetArtifact } : {}),
+        ...(Object.keys(nextFleetHosts).length > 0 ? { fleetHosts: nextFleetHosts } : {}),
       });
     };
 
-    ensureWarmWorktree(options.primary, syncWorktree, headSha);
+    if (plan.needsWorktreeUpdate) {
+      ensureWarmWorktree(options.primary, syncWorktree, headSha);
+    }
 
     if (plan.needsInstall) {
       if (!findCommandOnPath("vp", toolPath)) {
@@ -393,6 +412,39 @@ export function runSync(options: SyncCliOptions): void {
       log(`marscode-sync: skipped AppImage (${plan.appImage.detail})`);
     }
 
+    if (plan.fleet.anyHostToSync) {
+      const fleetTmp = NodePath.join(options.dataRoot, ".tmp");
+      NodeFS.mkdirSync(fleetTmp, { recursive: true });
+      try {
+        runFleetSync({
+          planned: plan.fleet.hosts,
+          needsLinuxBuild: plan.fleet.needsLinuxBuild,
+          primary: options.primary,
+          worktree: syncWorktree,
+          dataRoot: options.dataRoot,
+          headSha,
+          previousArtifact: nextFleetArtifact,
+          env: buildDesktopArtifactEnv(toolEnv, {
+            homeDir,
+            tmpDir: fleetTmp,
+            hostGlibcVersion: detectHostGlibcVersion(),
+          }),
+          log,
+          warn: logErr,
+          onArtifactBuilt: (artifact) => {
+            nextFleetArtifact = artifact;
+            persist();
+          },
+          onHostSynced: (hostName, record) => {
+            nextFleetHosts[hostName] = record;
+            persist();
+          },
+        });
+      } finally {
+        NodeFS.rmSync(fleetTmp, { recursive: true, force: true });
+      }
+    }
+
     let advanced = false;
     for (const item of plan.binaries) {
       if (item.decision.action === "skip" && item.decision.reason === "unchanged") {
@@ -403,6 +455,13 @@ export function runSync(options: SyncCliOptions): void {
     if (plan.appImage.action === "skip" && plan.appImage.reason === "unchanged") {
       nextTargets[APP_IMAGE_TARGET_ID] = headSha;
       advanced = true;
+    }
+    for (const entry of plan.fleet.hosts) {
+      const existing = nextFleetHosts[entry.host.name];
+      if (entry.decision.action === "skip" && entry.decision.reason === "unchanged" && existing) {
+        nextFleetHosts[entry.host.name] = { ...existing, sha: headSha };
+        advanced = true;
+      }
     }
     if (advanced) persist();
   };
