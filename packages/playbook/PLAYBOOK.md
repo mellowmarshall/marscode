@@ -50,14 +50,14 @@ The playbook does **not** run checks, lint source files, or scan code itself. Fo
 ## 4. Declarations and generations
 
 - **4.1 Chokes and single-DAG generation:** Author architectural facts once and force code to declare itself through **chokes** paired with deterministic generators, rather than regex/AST scanners.
-  - _Acceptable example private-repo:_ `fleet-shape.json` and code chokes generate `apps/api/src/fleetEnv.ts` (`readFleetEnv`), `config/workers/roles.ts`, `docker-compose.yml`, and `feature-surfaces.json` in one DAG. ESLint forbids raw `process.env` reads outside the generated choke, and `pnpm generate --check` fails any commit where code and declarations drift.
+  - _Acceptable example:_ `fleet-shape.json` and code chokes generate `apps/api/src/fleetEnv.ts` (`readFleetEnv`), `config/workers/roles.ts`, `docker-compose.yml`, and `feature-surfaces.json` in one DAG. ESLint forbids raw `process.env` reads outside the generated choke, and `pnpm generate --check` fails any commit where code and declarations drift.
   - _Bad:_ Reading `process.env.*` across 40 handlers and maintaining a custom regex scanner to guess env usage.
 - **4.2 Where Else Chokes Replace Scanners:**
 
 | Domain                      | Single Code Choke (+ Lint Ban on Raw Use)                                 | Emitted Artifact / Evidence (Replaces Scanner)                                                      |
 | --------------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | **Routes & APIs**           | `defineRoute` / typed router mount requiring path, auth, schema           | Generates `feature-surfaces.json` + client types (`surface` parser gone)                            |
-| **Env Vars & Secrets**      | Typed generated reader private-repo `readFleetEnv` (`fleetEnv.ts`)          | Exact env reads known at compile/gen time (`pb_fleet_reads` / regexes gone)                         |
+| **Env Vars & Secrets**      | Typed generated reader `readFleetEnv` (`fleetEnv.ts`)                     | Exact env reads known at compile/gen time (`pb_fleet_reads` / regexes gone)                         |
 | **UI Controls & Actions**   | `packages/ui` requiring `actionId: ActionId` + `controls-boundary` ESLint | Self-registers `client-actions.json`; test runtime logs fired IDs (`pb_actions_scan.mjs` gone)      |
 | **Design Tokens & Styles**  | Shared `tokens` + lint banning hex/spacing literals outside tokens        | Lint pass proves compliance (`11` `pb_design_*.mjs` files gone)                                     |
 | **Background Jobs / Crons** | `defineJob({ name, queue, schedule, sla })` wrapper                       | Emits `fleet-shape.json` worker roles + automatic job timing/metrics                                |
@@ -112,7 +112,7 @@ The playbook does **not** run checks, lint source files, or scan code itself. Fo
 
 ## 10. Design rules
 
-- **10.1 Token and UI package confinement:** Confine colors, typography, spacing, and interactive primitives to the shared UI package (`ui`) and design tokens via lint/type chokes (e.g., `exp`'s `private-repo` ESLint rule banning raw `<button>`/`Pressable`/`onClick` outside `src/ui`).
+- **10.1 Token and UI package confinement:** Confine colors, typography, spacing, and interactive primitives to the shared UI package (`ui`) and design tokens via lint/type chokes (e.g., a repo-local ESLint rule banning raw `<button>`/`Pressable`/`onClick` outside `src/ui`).
 - **10.2 Evidence:** Repo design-choke check evidence confirming compliance, plus any scoped exceptions (`content_values`, `system`, allowlist).
 
 ---
