@@ -8,6 +8,7 @@ import {
   type FleetNodeTelemetrySample,
   type FleetTelemetryProvider,
 } from "./ciRouter.ts";
+import { serviceToolSpecs } from "./ciServicesPlan.ts";
 import type { ShipDeclaration } from "./declaration.ts";
 import { execOnHost, probeCiHost, type HostExecDeps } from "./hostProbe.ts";
 
@@ -26,6 +27,8 @@ export type CiPlacement =
 export type CiPlacer = (input: {
   readonly jobId: string;
   readonly decl: ShipDeclaration;
+  /** The services the job starts (the base's and the branch's): the host needs docker for them. */
+  readonly services?: ReadonlyArray<string> | undefined;
   readonly activeLeases: ReadonlyArray<ActiveRouteLease>;
 }) => Promise<CiPlacement>;
 
@@ -75,7 +78,7 @@ export function manifestCiPlacer(options: {
   readonly telemetry?: FleetTelemetryProvider | undefined;
   readonly deps?: HostExecDeps | undefined;
 }): CiPlacer {
-  return async ({ decl, activeLeases }) => {
+  return async ({ decl, services, activeLeases }) => {
     const loaded = loadCiHostsManifest({ overridePath: options.manifestPath });
     const fallbackRoot = process.env.SHIP_QUEUE_DATA_ROOT?.trim() ?? "";
     if (!loaded.ok || !loaded.manifest) {
@@ -106,7 +109,7 @@ export function manifestCiPlacer(options: {
       manifest,
       telemetry,
       probesByHost,
-      requiredTools: decl.ciTools,
+      requiredTools: serviceToolSpecs(decl.ciTools, services ?? decl.ciServices),
       requiredArch: decl.ciArch,
       activeLeases,
       nowEpochSec: Math.floor(Date.now() / 1000),

@@ -5,6 +5,8 @@ import * as NodePath from "node:path";
 import type { ActiveRouteLease } from "./ciRouter.ts";
 import type { CiPlacement } from "./ciPlacement.ts";
 import { runRemoteCi, type RemoteStep } from "./ciRemote.ts";
+import { planCiServices, plannedServiceNames, type CiServicePlan } from "./ciServicesPlan.ts";
+import { localServiceShell, startCiServices, stopCiServices } from "./ciServicesRun.ts";
 import type { ShipDeclaration } from "./declaration.ts";
 import {
   appendLog,
@@ -80,10 +82,8 @@ function declaredSecrets(decl: ShipDeclaration, log: (text: string) => void) {
 /** Declaration keys this runner does not provide yet, said once per run instead of dropped. */
 function logUnsupported(decl: ShipDeclaration, log: (text: string) => void): void {
   const unsupported: Array<[string, ReadonlyArray<string>]> = [
-    ["ship_ci_service", decl.ciServices],
     ["ship_ci_doppler", decl.ciDoppler],
     ["ship_ci_evidence", decl.ciEvidence],
-    ["ship_ci_env", decl.ciEnv ? [decl.ciEnv] : []],
   ];
   for (const [key, values] of unsupported) {
     if (values.length > 0) {
@@ -91,6 +91,35 @@ function logUnsupported(decl: ShipDeclaration, log: (text: string) => void): voi
         `UNPROVEN: ${key} (${values.join(", ")}): this queue does not provide it yet; the CI runs without it`,
       );
     }
+  }
+}
+
+/** The stage header a services failure prints (the legacy queue's `ci-services` stage). */
+const CI_SERVICES_HEADER = "=== ci-services: the services the job's CI starts on its CI host ===";
+
+/**
+ * Runs `body` on this host with the job's services up, and stops them after it whatever happens
+ * (a failed step, a cancel, a throw). Returns why the services did not start, or null.
+ */
+async function runLocalSteps(
+  services: CiServicePlan | null,
+  worktree: string,
+  deps: ShipQueueDeps,
+  log: (text: string) => void,
+  body: (stepCtx: { readonly ciServiceEnv?: Readonly<Record<string, string>> }) => Promise<void>,
+): Promise<string | null> {
+  if (!services) {
+    await body({});
+    return null;
+  }
+  const shell = localServiceShell(deps.run, worktree);
+  try {
+    const started = await startCiServices(shell, services, log);
+    if (started.kind !== "up") return started.reason;
+    await body({ ciServiceEnv: started.env });
+    return null;
+  } finally {
+    await stopCiServices(shell, services, log);
   }
 }
 
@@ -117,6 +146,7 @@ async function placeCi(
   decl: ShipDeclaration,
   remoteAllowed: boolean,
   tip: string | undefined,
+  services: ReadonlyArray<string>,
 ): Promise<CiPlacement | null> {
   const fallback: CiPlacement = {
     kind: "local",
@@ -129,7 +159,12 @@ async function placeCi(
   if (Number.isFinite(lastTry) && Date.parse(deps.clock.now()) - lastTry < CI_WAIT_RETRY_MS) {
     return null;
   }
-  return deps.ciPlacer({ jobId: job.id, decl, activeLeases: activeLeases(deps.root, job.id) });
+  return deps.ciPlacer({
+    jobId: job.id,
+    decl,
+    services,
+    activeLeases: activeLeases(deps.root, job.id),
+  });
 }
 
 /**
@@ -151,7 +186,29 @@ export async function runCiSteps(input: {
 }): Promise<CiStepsOutcome> {
   const { deps, job, decl, steps, timings } = input;
   const log = (text: string) => appendLog(deps.root, job.id, text);
-  const placement = await placeCi(deps, job, decl, input.remoteAllowed, input.ctx.tipSha);
+  // The services the job starts decide routing too: a host without docker never takes it.
+  const planned = await planCiServices({
+    run: deps.run,
+    worktree: input.ctx.worktree,
+    tip: input.ctx.tipSha ?? "HEAD",
+    // The full `owner/name`, so two owners' repos of one name never share a project prefix.
+    repo: input.ctx.ghRepo || input.ctx.repo,
+    jobId: job.id,
+    decl,
+  });
+  if (!planned.ok) {
+    log(`${CI_SERVICES_HEADER}\n  ${planned.reason}; the CI did not run`);
+    return { kind: "fail", reason: `ci_services ${planned.reason}` };
+  }
+  const services = planned.plan;
+  const placement = await placeCi(
+    deps,
+    job,
+    decl,
+    input.remoteAllowed,
+    input.ctx.tipSha,
+    services ? plannedServiceNames(services) : [],
+  );
   if (!placement) return { kind: "wait" };
   if (placement.kind === "fail") return { kind: "fail", reason: placement.reason };
   if (placement.kind === "wait") {
@@ -168,10 +225,11 @@ export async function runCiSteps(input: {
     });
     return { kind: "wait" };
   }
-  const ctx =
+  const placed =
     placement.kind === "local" && placement.dataRoot
       ? { ...input.ctx, dataRoot: placement.dataRoot }
       : input.ctx;
+  const ctx = decl.ciEnv ? { ...placed, ciEnvFile: decl.ciEnv } : placed;
   if (placement.note) log(placement.note);
   logUnsupported(decl, log);
   const secrets = declaredSecrets(decl, log);
@@ -209,6 +267,7 @@ export async function runCiSteps(input: {
           body: NodeFS.readFileSync(jobBodyPath(deps.root, job.id), "utf8"),
           steps,
           secrets,
+          services,
           run: deps.run,
           runRemote: deps.runRemote,
           log,
@@ -216,6 +275,10 @@ export async function runCiSteps(input: {
           onStep: (step, res, ms) => record(step.name, remoteHost, res, ms) && !cancelled(),
         }),
       );
+      if (remote.kind === "refused") {
+        log(`${CI_SERVICES_HEADER}\n  ${remote.detail}; the CI did not run`);
+        return { kind: "fail", reason: `ci_services ${remote.detail}` };
+      }
       if (remote.kind === "infra") {
         log(`CI host ${remoteHost} unavailable (${remote.detail}); CI runs on this host`);
       } else {
@@ -223,24 +286,30 @@ export async function runCiSteps(input: {
       }
     }
     if (!ranRemote) {
-      for (const step of steps) {
-        if (cancelled()) break;
-        const started = Date.now();
-        const res = await withHeartbeat(
-          log,
-          step.name,
-          runLocalStep({
-            mode: "ci",
-            ctx,
-            cmdline: step.cmdline,
-            secrets,
-            withholdSecrets: step.withholdSecrets,
-            hook: step.hook,
-            timeoutMs: step.timeoutMs,
-            run: deps.run,
-          }),
-        );
-        if (!record(step.name, "local", res, Date.now() - started)) break;
+      const local = await runLocalSteps(services, ctx.worktree, deps, log, async (stepCtx) => {
+        for (const step of steps) {
+          if (cancelled()) break;
+          const started = Date.now();
+          const res = await withHeartbeat(
+            log,
+            step.name,
+            runLocalStep({
+              mode: "ci",
+              ctx: { ...ctx, ...stepCtx },
+              cmdline: step.cmdline,
+              secrets,
+              withholdSecrets: step.withholdSecrets,
+              hook: step.hook,
+              timeoutMs: step.timeoutMs,
+              run: deps.run,
+            }),
+          );
+          if (!record(step.name, "local", res, Date.now() - started)) break;
+        }
+      });
+      if (local) {
+        log(`${CI_SERVICES_HEADER}\n  ${local}; the CI did not run`);
+        return { kind: "fail", reason: `ci_services ${local}` };
       }
     }
     const outputFile = input.outputFile ?? ciOutputPath(deps.root, job.id);
