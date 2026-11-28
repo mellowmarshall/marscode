@@ -5,7 +5,12 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import { assertMayReplace, WRAPPER_MARKER, wrapperBundlePath } from "./marscode-sync-parity.ts";
+import {
+  assertMayReplace,
+  CliParityRefusal,
+  WRAPPER_MARKER,
+  wrapperBundlePath,
+} from "./marscode-sync-parity.ts";
 import {
   emptySyncState,
   parseSyncState,
@@ -294,6 +299,38 @@ export function atomicInstallNodeCli(
       NodeFS.rmSync(wrapperTmp, { force: true });
     }
   }
+}
+
+/**
+ * Installs each built CLI. One that would replace a CLI marscode-sync did not
+ * install, without flag parity, is skipped with its warning line and the rest
+ * still install. Returns the skipped targets.
+ */
+export function installNodeClis(
+  worktree: string,
+  targets: ReadonlyArray<SyncBinaryTarget>,
+  opts: {
+    readonly binDir: string;
+    readonly libDir: string;
+    readonly nodeBin: string;
+    readonly log: (msg: string) => void;
+    readonly warn: (msg: string) => void;
+    readonly onInstalled: (target: SyncBinaryTarget) => void;
+  },
+): SyncBinaryTarget[] {
+  const skipped: SyncBinaryTarget[] = [];
+  for (const target of targets) {
+    try {
+      atomicInstallNodeCli(worktree, target, opts);
+    } catch (err) {
+      if (!(err instanceof CliParityRefusal)) throw err;
+      opts.warn(err.message);
+      skipped.push(target);
+      continue;
+    }
+    opts.onInstalled(target);
+  }
+  return skipped;
 }
 
 export function stageShipQueueVersion(

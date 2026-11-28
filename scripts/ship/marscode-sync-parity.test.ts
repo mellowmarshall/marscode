@@ -7,7 +7,7 @@ import * as NodeURL from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { atomicInstallNodeCli } from "./marscode-sync-install.ts";
+import { atomicInstallNodeCli, installNodeClis } from "./marscode-sync-install.ts";
 import { CliParityRefusal, PARITY_PROBES, WRAPPER_MARKER } from "./marscode-sync-parity.ts";
 import { SYNC_BINARY_TARGETS, type SyncBinaryTarget } from "./marscode-sync-plan.ts";
 
@@ -107,11 +107,12 @@ describe("marscode-sync flag-parity guard", () => {
     }
     expect(refusal).toBeInstanceOf(CliParityRefusal);
     const message = (refusal as Error).message;
-    expect(message).toContain(`refusing to replace ${link}`);
+    expect(message).toContain(`marscode-sync: warning: skipped runlog: kept ${link}`);
+    expect(message.split("\n")).toHaveLength(1);
     expect(message).toContain(`a link to ${script}`);
     expect(message).toContain("runlog --ci-suite x -- true");
     expect(message).toMatch(/it exited [1-9]/);
-    expect(message).toContain("remove it yourself to let marscode-sync install its runlog");
+    expect(message).toContain("; remove it to let marscode-sync install its runlog.");
     expect(NodeFS.readlinkSync(link)).toBe(script);
     expect(run(link, []).stdout).toBe("original\n");
     // No release was left behind for the refused CLI.
@@ -134,7 +135,7 @@ describe("marscode-sync flag-parity guard", () => {
     NodeFS.writeFileSync(shipQueue, "#!/bin/sh\necho mine\n", { mode: 0o755 });
     const wt = worktreeRunning(target("ship-queue"), currentRunlog);
     expect(() => install(target("ship-queue"), wt)).toThrow(
-      /refusing to replace .*ship-queue \(a file another install wrote, not installed by marscode-sync\): the MarsCode ship-queue has no flag-parity check/,
+      /skipped ship-queue: kept .*ship-queue \(a file another install wrote, not installed by marscode-sync\) because the MarsCode ship-queue has no flag-parity check/,
     );
     expect(NodeFS.readFileSync(shipQueue, "utf8")).toBe("#!/bin/sh\necho mine\n");
   });
@@ -165,6 +166,44 @@ describe("marscode-sync flag-parity guard", () => {
       });
       expect(probe.judge({ status: r.status, stdout: r.stdout }), name).toBeNull();
     }
+  });
+
+  it("skips a refused CLI with one warning line and still installs the others", () => {
+    const { link, script } = originalStyleLink("playbook");
+    const playbook = target("playbook");
+    const runlog = target("runlog");
+    const fleet = target("fleet");
+    // One worktree holding all three built bundles, as the sync's build leaves it.
+    const wt = NodePath.join(tmp, "wt-all");
+    for (const [t, entry] of [
+      [playbook, "packages/playbook/src/bin.ts"],
+      [runlog, "packages/runlog/src/bin.ts"],
+      [fleet, "packages/fleet/src/bin.ts"],
+    ] as const) {
+      const file = NodePath.join(wt, t.pkgRel, "dist", "bin.mjs");
+      NodeFS.mkdirSync(NodePath.dirname(file), { recursive: true });
+      const href = NodeURL.pathToFileURL(NodePath.join(REPO, entry)).href;
+      NodeFS.writeFileSync(file, `import ${JSON.stringify(href)};\n`);
+    }
+    const warnings: string[] = [];
+    const installed: string[] = [];
+    const skipped = installNodeClis(wt, [playbook, runlog, fleet], {
+      binDir,
+      libDir,
+      nodeBin: process.execPath,
+      log: (m) => logs.push(m),
+      warn: (m) => warnings.push(m),
+      onInstalled: (t) => installed.push(t.id),
+    });
+    expect(skipped.map((t) => t.id)).toEqual(["playbook"]);
+    expect(installed).toEqual(["runlog", "fleet"]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(
+      /^marscode-sync: warning: skipped playbook: kept .*playbook \(a link to .*\) because the MarsCode playbook has no flag-parity check; remove it to let marscode-sync install its playbook\.$/,
+    );
+    expect(NodeFS.readlinkSync(link)).toBe(script);
+    expect(run(NodePath.join(binDir, "runlog"), ["--ci-suite", "x", "--", "true"]).status).toBe(0);
+    expect(run(NodePath.join(binDir, "fleet"), ["--help"]).status).toBe(0);
   });
 
   it("installs where nothing is installed yet", () => {

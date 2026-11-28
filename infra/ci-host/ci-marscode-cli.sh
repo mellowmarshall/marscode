@@ -8,7 +8,8 @@
 # install's link or file) unless the new CLI passes its flag-parity check, the same rule as
 # scripts/ship/marscode-sync-parity.ts: runlog must print its --ci-suite begin and end lines;
 # playbook has no parity with the original (it lacks subcommands the original's callers use),
-# so it never replaces one. A refusal leaves everything in place and exits 1.
+# so it never replaces one. A refusal skips the install: it leaves everything in place, prints
+# one "warning: skipped" line (which hosts provision reports) and exits 0.
 #
 # Usage: ci-marscode-cli.sh runlog|playbook
 set -euo pipefail
@@ -82,7 +83,7 @@ parity_problem() {
       fi
       [ "${BASH_REMATCH[1]}" = "$pid" ] || printf 'its begin and end lines name different pids'
       ;;
-    *) printf 'the MarsCode %s has no flag-parity check, so it never replaces it' "$name" ;;
+    *) printf 'the MarsCode %s has no flag-parity check' "$name" ;;
   esac
 }
 
@@ -96,9 +97,9 @@ if [ -n "$foreign" ]; then
   esac
   problem=$(parity_problem)
   if [ -n "$problem" ]; then
-    printf 'ci-marscode-cli.sh: refusing to replace %s (%s, not installed by MarsCode): %s%s. It stays as it is; remove it yourself to let MarsCode install its %s.\n' \
-      "$bin" "$foreign" "$problem" "${what:+ (the check: $what)}" "$name" >&2
-    exit 1
+    printf 'ci-marscode-cli.sh: warning: skipped %s: kept %s (%s, not installed by MarsCode) because %s%s; remove it to let MarsCode install its %s.\n' \
+      "$name" "$bin" "$foreign" "$problem" "${what:+ (the check: $what)}" "$name"
+    exit 0
   fi
 fi
 

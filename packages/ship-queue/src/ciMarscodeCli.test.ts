@@ -7,6 +7,9 @@ import * as NodeURL from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
+import { provisionCiHost } from "./hostProvision.ts";
+import { nodeProcessRunner } from "./nodeProcess.ts";
+
 const REPO = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "../../..");
 const INSTALLER = NodePath.join(REPO, "infra/ci-host/ci-marscode-cli.sh");
 const MARKER = "# Installed by MarsCode; reinstalls replace this file.";
@@ -84,18 +87,19 @@ describe("ci-marscode-cli.sh flag-parity guard", () => {
     );
   });
 
-  it("refuses a runlog without --ci-suite over another install's, and leaves it in place", () => {
+  it("skips a runlog without --ci-suite over another install's with one warning line, exit 0", () => {
     const { link, script } = originalLink("runlog");
     // A real MarsCode CLI with no --ci-suite where runlog's bundle belongs, as a stale build would be.
     bundle("runlog", "packages/fleet/src/bin.ts");
     const r = installer("runlog");
-    expect(r.status).toBe(1);
-    expect(r.stderr).toContain(
-      `refusing to replace ${link} (a link to ${script}, not installed by MarsCode)`,
+    expect(r.status).toBe(0);
+    expect(r.stdout.split("\n").filter(Boolean)).toHaveLength(1);
+    expect(r.stdout).toContain(
+      `ci-marscode-cli.sh: warning: skipped runlog: kept ${link} (a link to ${script}, not installed by MarsCode) because`,
     );
-    expect(r.stderr).toMatch(/it exited [1-9]/);
-    expect(r.stderr).toContain("runlog --ci-suite x -- true");
-    expect(r.stderr).toContain("remove it yourself to let MarsCode install its runlog");
+    expect(r.stdout).toMatch(/it exited [1-9]/);
+    expect(r.stdout).toContain("runlog --ci-suite x -- true");
+    expect(r.stdout).toContain("; remove it to let MarsCode install its runlog.\n");
     expect(NodeFS.readlinkSync(link)).toBe(script);
     expect(runBin("runlog", []).stdout).toBe("original\n");
     const lib = NodePath.join(home, ".local", "lib", "marscode-tools");
@@ -103,22 +107,28 @@ describe("ci-marscode-cli.sh flag-parity guard", () => {
     expect(NodeFS.readdirSync(NodePath.join(lib, ".releases"))).toEqual([]);
   });
 
-  it("never replaces another install's playbook", () => {
+  it("never replaces another install's playbook, and skips it with exit 0", () => {
     const { link, script } = originalLink("playbook");
     bundle("playbook", "packages/playbook/src/bin.ts");
     const r = installer("playbook");
-    expect(r.status).toBe(1);
-    expect(r.stderr).toContain("the MarsCode playbook has no flag-parity check");
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain(
+      "skipped playbook: kept " +
+        link +
+        " (a link to " +
+        script +
+        ", not installed by MarsCode) because the MarsCode playbook has no flag-parity check;",
+    );
     expect(NodeFS.readlinkSync(link)).toBe(script);
   });
 
-  it("refuses over a plain file another install wrote", () => {
+  it("skips over a plain file another install wrote", () => {
     const own = binOf("runlog");
     NodeFS.writeFileSync(own, "#!/bin/sh\necho mine\n", { mode: 0o755 });
     bundle("runlog", "packages/fleet/src/bin.ts");
     const r = installer("runlog");
-    expect(r.status).toBe(1);
-    expect(r.stderr).toContain("(a file another install wrote, not installed by MarsCode)");
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("(a file another install wrote, not installed by MarsCode)");
     expect(NodeFS.readFileSync(own, "utf8")).toBe("#!/bin/sh\necho mine\n");
   });
 
@@ -148,5 +158,71 @@ describe("ci-marscode-cli.sh flag-parity guard", () => {
     bundle("runlog", "packages/runlog/src/bin.ts");
     expect(installer("runlog").status).toBe(0);
     expect(runBin("runlog", ["--ci-suite", "x", "--", "false"]).status).toBe(1);
+  });
+});
+
+describe("hosts provision with a CLI the installer keeps", () => {
+  it("skips the refused CLI, installs the others and succeeds", async () => {
+    // The payload where provision points CI_HOST_PAYLOAD on a host.
+    const hostPayload = NodePath.join(home, ".local", "share", "ship-queue-ci", "marscode-ci-host");
+    NodeFS.mkdirSync(NodePath.dirname(hostPayload), { recursive: true });
+    NodeFS.renameSync(payload, hostPayload);
+    payload = hostPayload;
+    bundle("runlog", "packages/runlog/src/bin.ts");
+    bundle("playbook", "packages/playbook/src/bin.ts");
+    const runlogLink = originalLink("runlog");
+    const playbookLink = originalLink("playbook");
+    const install = (name: string) =>
+      `bash "$CI_HOST_PAYLOAD/infra/ci-host/ci-marscode-cli.sh" ${name}`;
+    const manifestPath = NodePath.join(tmp, "ci-hosts.json");
+    NodeFS.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        schema: 1,
+        hosts: [{ name: "local", ssh: null, role: "ci", data_root: NodePath.join(tmp, "data") }],
+        toolchain: {
+          runlog: {
+            version: "*",
+            probe: "command -v runlog",
+            install: install("runlog"),
+            refresh: true,
+          },
+          playbook: {
+            version: "*",
+            probe: "command -v playbook",
+            install: install("playbook"),
+            refresh: true,
+          },
+        },
+      }),
+    );
+    const seenHomes = new Set<string>();
+    const progress: string[] = [];
+    const res = await provisionCiHost({
+      queueRoot: NodePath.join(tmp, "queue"),
+      hostName: "local",
+      manifestPath,
+      onProgress: (line) => progress.push(line),
+      deps: {
+        homeDir: home,
+        // The local host's commands run with this test's home, never the real one.
+        runLocal: (input) => {
+          const env = { ...input.env, HOME: home };
+          seenHomes.add(env.HOME);
+          return nodeProcessRunner({ ...input, env });
+        },
+      },
+    });
+    expect([...seenHomes]).toEqual([home]);
+    expect(res.ok, res.message).toBe(true);
+    expect(res.installedTools).toEqual(["runlog"]);
+    expect(res.skippedTools).toEqual(["playbook"]);
+    const skippedLine = progress.find((l) => l.includes("tool=playbook"));
+    expect(skippedLine).toMatch(
+      /^PROVISION host=local tool=playbook result=skipped: ci-marscode-cli\.sh: warning: skipped playbook: kept .* because the MarsCode playbook has no flag-parity check; remove it to let MarsCode install its playbook\.$/,
+    );
+    expect(NodeFS.readlinkSync(playbookLink.link)).toBe(playbookLink.script);
+    expect(NodeFS.lstatSync(runlogLink.link).isSymbolicLink()).toBe(false);
+    expect(runBin("runlog", ["--ci-suite", "x", "--", "true"]).status).toBe(0);
   });
 });

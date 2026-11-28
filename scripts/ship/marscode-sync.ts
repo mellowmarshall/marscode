@@ -11,7 +11,7 @@ import * as NodeURL from "node:url";
 import { parseCliArgs, type SyncCliOptions } from "./marscode-sync-cli.ts";
 import {
   acquireSyncLock,
-  atomicInstallNodeCli,
+  installNodeClis,
   ensureWarmWorktree,
   findBuiltAppImage,
   findCommandOnPath,
@@ -22,7 +22,6 @@ import {
   stageShipQueueVersion,
   validateAndSwapAppImage,
 } from "./marscode-sync-install.ts";
-import { CliParityRefusal } from "./marscode-sync-parity.ts";
 import {
   APP_IMAGE_TARGET_ID,
   SYNC_BINARY_TARGETS,
@@ -172,7 +171,6 @@ export function runSync(options: SyncCliOptions): void {
   };
 
   const execute = (): void => {
-    const refused: string[] = [];
     const state = readSyncState(statePath);
     const existingAppSha = NodeFS.existsSync(appShaPath)
       ? NodeFS.readFileSync(appShaPath, "utf8").trim() || undefined
@@ -256,31 +254,32 @@ export function runSync(options: SyncCliOptions): void {
           inheritStdio: true,
         });
       }
-      for (const item of dirtyClis) {
-        try {
-          atomicInstallNodeCli(syncWorktree, item.target, {
-            binDir: options.binDir,
-            libDir: options.libDir,
-            nodeBin,
-            log,
-          });
-        } catch (err) {
-          if (!(err instanceof CliParityRefusal)) throw err;
-          // The other targets still install; this one stays unsynced and the sync fails at the end.
-          logErr(err.message);
-          refused.push(err.binName);
-          continue;
-        }
-        if (item.target.stageShipQueue && !options.skipStage) {
-          stageShipQueueVersion(headSha, {
-            binDir: options.binDir,
-            libDir: options.libDir,
-            queueRoot: options.queueRoot,
-          });
-        }
-        nextTargets[item.target.id] = headSha;
-        persist();
-      }
+      const skipped = installNodeClis(
+        syncWorktree,
+        dirtyClis.map((item) => item.target),
+        {
+          binDir: options.binDir,
+          libDir: options.libDir,
+          nodeBin,
+          log,
+          warn: logErr,
+          onInstalled: (target) => {
+            if (target.stageShipQueue && !options.skipStage) {
+              stageShipQueueVersion(headSha, {
+                binDir: options.binDir,
+                libDir: options.libDir,
+                queueRoot: options.queueRoot,
+              });
+            }
+            nextTargets[target.id] = headSha;
+            persist();
+          },
+        },
+      );
+      // A skipped CLI is settled at this sha too: removing the other install's
+      // file makes the next sync install it (a missing binary is always built).
+      for (const target of skipped) nextTargets[target.id] = headSha;
+      if (skipped.length > 0) persist();
     }
 
     const guardItem = plan.binaries.find((b) => b.target.kind === "guard-protocol")!;
@@ -365,11 +364,6 @@ export function runSync(options: SyncCliOptions): void {
       advanced = true;
     }
     if (advanced) persist();
-    if (refused.length > 0) {
-      throw new Error(
-        `marscode-sync: did not install ${refused.join(", ")}: each would replace a CLI marscode-sync did not install, without flag parity (see above)`,
-      );
-    }
   };
 
   if (options.dryRun) {

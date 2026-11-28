@@ -112,7 +112,7 @@ export function foreignCli(binPath: string, bundlePath: string): string | null {
 }
 
 /**
- * Throws a CliParityRefusal when the bin path holds a CLI this installer did
+ * Throws a CliParityRefusal (its message is the one warning line the sync prints) when the bin path holds a CLI this installer did
  * not write and the staged CLI does not pass its flag-parity probe (a CLI with
  * no probe never replaces one it did not write).
  */
@@ -129,12 +129,12 @@ export function assertMayReplace(input: {
   const refuse = (why: string) =>
     new CliParityRefusal(
       input.binName,
-      `marscode-sync: refusing to replace ${input.binPath} (${foreign}, not installed by marscode-sync): ${why}. ` +
-        `It stays as it is; remove it yourself to let marscode-sync install its ${input.binName}.`,
+      `marscode-sync: warning: skipped ${input.binName}: kept ${input.binPath} (${foreign}, not installed by marscode-sync) ` +
+        `because ${why}; remove it to let marscode-sync install its ${input.binName}.`,
     );
   const probe = PARITY_PROBES[input.binName];
   if (!probe) {
-    throw refuse(`the MarsCode ${input.binName} has no flag-parity check, so it never replaces it`);
+    throw refuse(`the MarsCode ${input.binName} has no flag-parity check`);
   }
   const res = NodeChildProcess.spawnSync(input.nodeBin, [input.stagedBundle, ...probe.args], {
     cwd: input.cwd,
@@ -146,7 +146,7 @@ export function assertMayReplace(input: {
     : probe.judge({ status: res.status, stdout: res.stdout ?? "" });
   if (why !== null) {
     throw refuse(
-      `the MarsCode ${input.binName} fails its flag-parity check (${probe.what}): ${why}`,
+      `the MarsCode ${input.binName} fails its flag-parity check (${probe.what}: ${why})`,
     );
   }
 }

@@ -35,6 +35,9 @@ export function resolveHostSyncPaths(marscodeRoot: string): ReadonlyArray<string
 }
 
 /** MarsCode CLIs whose prebuilt bundles ride in the payload for `infra/ci-host/ci-marscode-cli.sh`. */
+/** The one line an installer prints when it kept another install's CLI (ci-marscode-cli.sh). */
+const SKIPPED_INSTALL = /^[\w.-]+: warning: skipped .*$/m;
+
 export const PAYLOAD_CLI_BUNDLES: ReadonlyArray<string> = ["runlog", "playbook"];
 
 /** Where the post-merge sync installs MarsCode CLI bundles (`<dir>/<name>/dist/bin.mjs`). */
@@ -137,6 +140,8 @@ export async function provisionCiHost(input: {
   readonly message: string;
   readonly installedTools?: ReadonlyArray<string> | undefined;
   readonly skippedRootTools?: ReadonlyArray<string> | undefined;
+  /** Tools whose installer kept another install's CLI that the new one has no flag parity with. */
+  readonly skippedTools?: ReadonlyArray<string> | undefined;
 }> {
   const loaded = loadCiHostsManifest({ overridePath: input.manifestPath });
   if (!loaded.ok || !loaded.manifest) {
@@ -184,6 +189,7 @@ export async function provisionCiHost(input: {
   const envPrefix = `${setup}; export CI_HOST_PAYLOAD=${REMOTE_PAYLOAD_DIR} CI_DEVTOOLS=${REMOTE_PAYLOAD_DIR}`;
   const installedTools: string[] = [];
   const skippedRootTools: string[] = [];
+  const skippedTools: string[] = [];
   let failed = "";
 
   for (const [toolName, spec] of Object.entries(loaded.manifest.toolchain)) {
@@ -201,13 +207,22 @@ export async function provisionCiHost(input: {
     const res = await execOnHost(host, `${envPrefix}\n${spec.install}`, input.deps, {
       timeoutMs: 15 * 60_000,
     });
+    // An installer that kept another install's CLI (no flag parity) says so in one line: skipped, not failed.
+    const skippedWhy = res.exitCode === 0 ? SKIPPED_INSTALL.exec(res.stdout)?.[0] : undefined;
     const line =
-      res.exitCode === 0
-        ? `PROVISION host=${host.name} tool=${toolName} result=installed`
-        : `PROVISION host=${host.name} tool=${toolName} result=failed: ${res.stderr.trim() || `exit ${res.exitCode}`}`;
+      res.exitCode !== 0
+        ? `PROVISION host=${host.name} tool=${toolName} result=failed: ${res.stderr.trim() || `exit ${res.exitCode}`}`
+        : skippedWhy
+          ? `PROVISION host=${host.name} tool=${toolName} result=skipped: ${skippedWhy}`
+          : `PROVISION host=${host.name} tool=${toolName} result=installed`;
     input.onProgress?.(line);
-    if (res.exitCode === 0) installedTools.push(toolName);
-    else if (!failed) failed = line;
+    if (res.exitCode !== 0) {
+      if (!failed) failed = line;
+    } else if (skippedWhy) {
+      skippedTools.push(toolName);
+    } else {
+      installedTools.push(toolName);
+    }
   }
 
   const allowRoot = input.allowRoot !== false;
@@ -250,6 +265,12 @@ export async function provisionCiHost(input: {
   }
 
   return failed
-    ? { ok: false, message: failed, installedTools, skippedRootTools }
-    : { ok: true, message: `Provisioned ${host.name}`, installedTools, skippedRootTools };
+    ? { ok: false, message: failed, installedTools, skippedRootTools, skippedTools }
+    : {
+        ok: true,
+        message: `Provisioned ${host.name}`,
+        installedTools,
+        skippedRootTools,
+        skippedTools,
+      };
 }
