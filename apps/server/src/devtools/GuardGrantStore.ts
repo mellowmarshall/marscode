@@ -141,10 +141,10 @@ export class GuardGrantStore {
     }
   }
 
-  canAddOnceGrant(): boolean {
+  canAddOnceGrant(count = 1): boolean {
     this.pruneExpiredOnce();
     this.plans.pruneExpired();
-    return this.preapproved.size + this.plans.size < this.maxPreapproved;
+    return this.preapproved.size + this.plans.size + count <= this.maxPreapproved;
   }
 
   preapproveOnce(input: {
@@ -201,7 +201,7 @@ export class GuardGrantStore {
     const unscopedKey = onceGrantKey(guard, digest, cwd, "");
     const unscoped = this.preapproved.get(unscopedKey);
     if (unscoped) return { key: unscopedKey, grant: unscoped };
-    return this.plans.lookup(digest, cwd, threadId);
+    return this.plans.lookup(guard, digest, cwd, threadId);
   }
 
   deleteOnce(key: string): void {

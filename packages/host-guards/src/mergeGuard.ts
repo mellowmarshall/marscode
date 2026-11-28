@@ -295,7 +295,7 @@ export function decideGh(
   }
 
   if (words[0] === "repo" && words[1] && words[1] !== "sync") {
-    return decideGhRepoAdmin(args, words[1], tokens[1]!.index, cwd, config, env);
+    return decideGhRepoAdmin(args, words, tokens[1]!.index, cwd, config, env);
   }
 
   if (words[0] === "repo" && words[1] === "sync") {

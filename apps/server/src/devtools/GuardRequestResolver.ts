@@ -163,11 +163,18 @@ export function resolveGuardRequest(
       });
       return { found: true };
     }
-    ctx.store.pruneExpiredOnce();
+    if (!ctx.store.canAddOnceGrant(req.plan?.length ?? 1)) {
+      ctx.finishPending(entry, "denied", {
+        ok: false,
+        denied: false,
+        error: "too many pre-approved grants pending",
+      });
+      return { found: true };
+    }
     if (req.plan) {
       ctx.store.plans.put({
         grantId,
-        commands: req.plan,
+        entries: req.plan,
         cwd: req.cwd,
         threadId: req.threadId,
         reason,

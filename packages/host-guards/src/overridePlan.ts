@@ -6,7 +6,7 @@ import {
 } from "@t3tools/guard-protocol/client";
 import { PLAN_GUARD, planContains, readPlanFile } from "@t3tools/guard-protocol/plan";
 
-import { redactGuardCommand } from "./commandRedact.ts";
+import { redactGuardCommand } from "@t3tools/guard-protocol/command-redact";
 
 const OVERRIDE_PLAN_ENV = "HOST_GUARD_OVERRIDE_PLAN";
 
@@ -37,11 +37,10 @@ export async function requestPlanGrant(input: {
     input.writeErr(`host-guard: refusing ${input.guard}: ${OVERRIDE_PLAN_ENV}: ${plan.error}.`);
     return null;
   }
-  const commands = plan.commands.map((c) => redactGuardCommand(c));
   const safeCommand = redactGuardCommand(input.command);
-  if (!planContains(commands, safeCommand)) {
+  if (!planContains(plan.entries, input.guard, safeCommand)) {
     input.writeErr(
-      `host-guard: refusing ${input.guard}: this exact command is not listed in ${OVERRIDE_PLAN_ENV}.`,
+      `host-guard: refusing ${input.guard}: this exact command is not listed for the ${input.guard} guard in ${OVERRIDE_PLAN_ENV}.`,
     );
     return null;
   }
@@ -57,7 +56,7 @@ export async function requestPlanGrant(input: {
   const reply = await requestGuardGrant({
     ...common,
     guard: PLAN_GUARD,
-    plan: commands,
+    plan: plan.entries,
     refusal: input.refusal.split(/\r?\n/, 1)[0] ?? "",
     proposedReason: plan.reason,
     wait: input.allowBlocking,
@@ -72,7 +71,7 @@ export async function requestPlanGrant(input: {
   }
   if (reply.queued) {
     input.writeErr(
-      `host-guard: plan approval requested in MarsCode for ${commands.length} commands; ` +
+      `host-guard: plan approval requested in MarsCode for ${plan.entries.length} commands; ` +
         "your thread is told when the owner decides. Then run each listed command once.",
     );
     return null;

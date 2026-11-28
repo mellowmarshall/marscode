@@ -74,6 +74,12 @@ export interface GuardBundleSpec {
   readonly summary: string;
 }
 
+export interface GuardPlanEntry {
+  /** The host guard whose refusal this entry lifts; it matches no other guard. */
+  readonly guard: string;
+  readonly command: ReadonlyArray<string>;
+}
+
 export interface PendingGuardRequest {
   readonly requestId: string;
   readonly guard: string;
@@ -91,7 +97,7 @@ export interface PendingGuardRequest {
   readonly bundleEligible?: boolean | undefined;
   readonly wholeCommitGates?: ReadonlyArray<string> | undefined;
   /** A batch request: one approval covers each listed command once. */
-  readonly plan?: ReadonlyArray<ReadonlyArray<string>> | undefined;
+  readonly plan?: ReadonlyArray<GuardPlanEntry> | undefined;
 }
 
 export interface ActiveGuardBundleGrant {

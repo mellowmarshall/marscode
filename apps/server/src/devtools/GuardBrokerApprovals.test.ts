@@ -53,6 +53,7 @@ interface Peer {
 async function startBroker(options?: {
   readonly queueRoot?: string;
   readonly trustedPids?: ReadonlySet<number>;
+  readonly maxPreapproved?: number;
 }) {
   const dir = tempDir("guard-approvals-");
   const socketPath = NodePath.join(dir, "guard.sock");
@@ -72,6 +73,7 @@ async function startBroker(options?: {
       isTrustedWorker: (pid) => options?.trustedPids?.has(pid) === true,
     },
     notifyThread: (notice) => notices.push(notice),
+    ...(options?.maxPreapproved ? { maxPreapproved: options.maxPreapproved } : {}),
   });
   broker.subscribe((ev: GuardBrokerEvent) => {
     if (ev.type === "pending_added")
@@ -129,7 +131,7 @@ describe("GuardGrantBroker owner approvals", () => {
     });
     const requestId = await pending;
     const listed = broker.listPending().find((r) => r.requestId === requestId);
-    expect(listed?.plan).toEqual(plan);
+    expect(listed?.plan).toEqual(plan.map((command) => ({ guard: "gh", command })));
     expect(listed?.bundleEligible).toBe(false);
     expect(broker.resolveRequest(requestId, { decision: "approve" }).found).toBe(true);
     const approved = await reply;
@@ -140,6 +142,9 @@ describe("GuardGrantBroker owner approvals", () => {
     const use = (command: ReadonlyArray<string>, cwd = dir, guard = "gh") =>
       rpc(socketPath, { v: 2, op: "use", guard, command, cwd });
     expect((await use(plan[0]!, otherDir)).ok).toBe(false);
+    // Probe: an entry lifts only the guard it was approved for.
+    expect((await use(plan[0]!, dir, "git")).ok).toBe(false);
+    expect((await use(plan[0]!, dir, "ship-queue")).ok).toBe(false);
     peer.threadId = "thread-b";
     expect((await use(plan[0]!)).ok).toBe(false);
     peer.threadId = "thread-a";
@@ -151,6 +156,45 @@ describe("GuardGrantBroker owner approvals", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 31 * 60 * 1000);
     expect((await use(plan[1]!)).ok).toBe(false);
+  });
+
+  it("refuses plans that would stand in for bundle-gated guards, and counts plan entries against the grant cap", async () => {
+    const { broker, socketPath, dir, nextPending } = await startBroker({ maxPreapproved: 2 });
+    const submitCmd = ["ship-queue", "submit", dir, "feat/x"];
+    const ask = (plan: unknown, command: ReadonlyArray<string>) =>
+      rpc(socketPath, {
+        v: 2,
+        op: "request",
+        wait: false,
+        guard: "plan",
+        command,
+        plan,
+        cwd: dir,
+        proposed_reason: "ship it without the diff approval",
+        refusal: "x",
+      });
+    expect(await ask([submitCmd], submitCmd)).toMatchObject({ ok: false });
+    expect(await ask([{ guard: "ship-queue", command: submitCmd }], submitCmd)).toMatchObject({
+      ok: false,
+      error: "a plan cannot approve ship-queue; it needs its own approval",
+    });
+    expect(
+      await ask([{ guard: "playbook", command: ["playbook", "check"] }], ["playbook", "check"]),
+    ).toMatchObject({
+      ok: false,
+    });
+
+    const three = [
+      ["gh", "repo", "edit", "example-org/example-repo", "-d", "a"],
+      ["gh", "repo", "edit", "example-org/example-repo", "-d", "b"],
+      ["gh", "repo", "edit", "example-org/example-repo", "-d", "c"],
+    ];
+    const pending = nextPending();
+    expect(await ask(three, three[0]!)).toMatchObject({ ok: true, queued: true });
+    broker.resolveRequest(await pending, { decision: "approve" });
+    expect(
+      (await rpc(socketPath, { v: 2, op: "check", guard: "gh", command: three[0], cwd: dir })).ok,
+    ).toBe(false);
   });
 
   it("tells the requesting thread when the owner approves or denies and nobody is waiting", async () => {
@@ -230,6 +274,19 @@ describe("GuardGrantBroker owner approvals", () => {
         { now: () => "2026-11-27T00:00:00.000Z" },
       ).id;
     const command = ["ship-queue", "submit", worktree, branch];
+    // What `ship-queue submit` does after creating the job: bind it as the verified submitter.
+    const bindAs = async (threadId: string, jobId: string, at = worktree) => {
+      const saved = { ...peer };
+      Object.assign(peer, { threadId, pid: 5000 });
+      const reply = await rpc(socketPath, { v: 2, op: "bind_job", job_id: jobId, cwd: at, branch });
+      Object.assign(peer, saved);
+      return reply;
+    };
+    const boundJob = async (threadId: string, actionDigest = digest) => {
+      const id = job(threadId, actionDigest);
+      expect((await bindAs(threadId, id)).ok).toBe(true);
+      return id;
+    };
 
     // The owner approves the bundle for the requesting thread.
     peer.threadId = "thread-q";
@@ -262,7 +319,7 @@ describe("GuardGrantBroker owner approvals", () => {
         ...extra,
       });
 
-    const good = job("thread-q");
+    const good = await boundJob("thread-q");
     expect(await check(good)).toMatchObject({ ok: true, scope: "bundle", thread_id: "thread-q" });
     expect(await check(good, "use")).toMatchObject({ ok: true, scope: "bundle" });
     expect(
@@ -278,9 +335,36 @@ describe("GuardGrantBroker owner approvals", () => {
       ).ok,
     ).toBe(false);
 
-    expect((await check(job("thread-other"))).ok).toBe(false);
-    expect(await check(job(""))).toMatchObject({ ok: false, error: "job has no recorded thread" });
-    expect(await check(job("thread-q", "0".repeat(64)))).toMatchObject({
+    expect((await check(await boundJob("thread-other"))).ok).toBe(false);
+    expect(await check(job("thread-q"))).toMatchObject({
+      ok: false,
+      error: "job is not bound to a verified thread",
+    });
+    // Probe: the job file is agent-writable. Bound to thread-other, edited to claim thread-q.
+    const edited = await boundJob("thread-other");
+    const jobFile = NodePath.join(queueRoot, "jobs", edited, "job.json");
+    const record = JSON.parse(NodeFS.readFileSync(jobFile, "utf8")) as Record<string, unknown>;
+    NodeFS.writeFileSync(jobFile, JSON.stringify({ ...record, thread_id: "thread-q" }));
+    expect((await check(edited)).ok).toBe(false);
+    // A binding is first-write-wins: another thread cannot take it over, and no thread cannot bind.
+    expect(await bindAs("thread-q", edited)).toMatchObject({
+      ok: false,
+      error: "job is already bound",
+    });
+    expect(await bindAs("", job("thread-q"))).toMatchObject({
+      ok: false,
+      error: "binding a job requires a verified thread",
+    });
+    const moved = await boundJob("thread-q");
+    NodeFS.writeFileSync(
+      NodePath.join(queueRoot, "jobs", moved, "job.json"),
+      JSON.stringify({ ...record, id: moved, thread_id: "thread-q", branch: "feat/other" }),
+    );
+    expect(await check(moved)).toMatchObject({
+      ok: false,
+      error: "job record does not match its verified binding",
+    });
+    expect(await check(await boundJob("thread-q", "0".repeat(64)))).toMatchObject({
       ok: false,
       error: "protected diff digest does not match the job",
     });

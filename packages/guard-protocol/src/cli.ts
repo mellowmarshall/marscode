@@ -103,10 +103,10 @@ async function runPlanOverride(
   }
   const requested = await requestGuardGrant({
     guard: PLAN_GUARD,
-    command: plan.commands[0]!,
-    plan: plan.commands,
+    command: plan.entries[0]!.command,
+    plan: plan.entries,
     cwd,
-    refusal: `Batch approval requested for ${plan.commands.length} owner-only commands`,
+    refusal: `Batch approval requested for ${plan.entries.length} owner-only commands`,
     proposedReason: plan.reason,
     timeoutMs,
     threadId: parsed.values.get("--thread-id"),

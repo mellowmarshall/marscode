@@ -7,7 +7,7 @@ import {
   useGuardGrant,
 } from "@t3tools/guard-protocol/client";
 
-import { redactGuardCommand } from "./commandRedact.ts";
+import { redactGuardCommand } from "@t3tools/guard-protocol/command-redact";
 import type { HostGuardsConfig } from "./hostConfig.ts";
 import { recordBrokerGrant, writeOverrideRecord, writeRefusalRecord } from "./overrideLog.ts";
 import { overridePlanFile, requestPlanGrant } from "./overridePlan.ts";

@@ -1,18 +1,19 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off - In-memory batch (plan) grants: each approved command usable once, per thread and cwd.
 import { argvSha256 } from "@t3tools/guard-protocol/digests";
+import type { GuardPlanEntry } from "@t3tools/guard-protocol/protocol";
 
 import type { StoredOnceGrant } from "./GuardBrokerTypes.ts";
 import { canonicalCwd } from "./GuardSocketPath.ts";
 
 export const PLAN_KEY_PREFIX = "plan\0";
 
-function planKey(digest: string, cwd: string, threadId: string): string {
-  return `${PLAN_KEY_PREFIX}${digest}\0${canonicalCwd(cwd)}\0${threadId}`;
+function planKey(guard: string, digest: string, cwd: string, threadId: string): string {
+  return `${PLAN_KEY_PREFIX}${guard}\0${digest}\0${canonicalCwd(cwd)}\0${threadId}`;
 }
 
 /**
- * A plan entry matches by exact argv digest whatever guard refused the command, since one owner
- * approval covered the whole list. It never matches without a thread or in another cwd.
+ * A plan entry matches one guard and one exact argv digest, in the thread and cwd that asked.
+ * Bundle-gated guards never get plan entries (the plan parser refuses them).
  */
 export class GuardPlanGrants {
   private readonly entries = new Map<string, StoredOnceGrant>();
@@ -33,7 +34,7 @@ export class GuardPlanGrants {
 
   put(input: {
     readonly grantId: string;
-    readonly commands: ReadonlyArray<ReadonlyArray<string>>;
+    readonly entries: ReadonlyArray<GuardPlanEntry>;
     readonly cwd: string;
     readonly threadId: string;
     readonly reason: string;
@@ -41,11 +42,11 @@ export class GuardPlanGrants {
     readonly expiresAtMs: number;
   }): void {
     if (!input.threadId) return;
-    for (const command of input.commands) {
-      const digest = argvSha256(command);
-      this.entries.set(planKey(digest, input.cwd, input.threadId), {
+    for (const entry of input.entries) {
+      const digest = argvSha256(entry.command);
+      this.entries.set(planKey(entry.guard, digest, input.cwd, input.threadId), {
         grantId: input.grantId,
-        guard: "plan",
+        guard: entry.guard,
         argvSha256: digest,
         cwd: canonicalCwd(input.cwd),
         reason: input.reason,
@@ -58,13 +59,14 @@ export class GuardPlanGrants {
   }
 
   lookup(
+    guard: string,
     digest: string,
     cwd: string,
     threadId: string,
   ): { readonly key: string; readonly grant: StoredOnceGrant } | null {
     if (!threadId) return null;
     this.pruneExpired();
-    const key = planKey(digest, cwd, threadId);
+    const key = planKey(guard, digest, cwd, threadId);
     const grant = this.entries.get(key);
     return grant ? { key, grant } : null;
   }

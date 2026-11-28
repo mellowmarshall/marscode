@@ -1,53 +1,77 @@
-// @effect-diagnostics nodeBuiltinImport:off - Batch override plans: one owner approval for a declared list of exact commands.
+// @effect-diagnostics nodeBuiltinImport:off - Batch override plans: one owner approval for a declared list of exact, guard-bound commands.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import { redactGuardCommand } from "./commandRedact.ts";
 import { argvSha256 } from "./digests.ts";
-import { MAX_GUARD_ARGS, sanitizeText } from "./protocol.ts";
+import { GUARD_NAME_RE, MAX_GUARD_ARGS, sanitizeText, type GuardPlanEntry } from "./protocol.ts";
 
 export const PLAN_GUARD = "plan";
 export const MAX_PLAN_COMMANDS = 32;
 /** Each approved plan command is usable once within this window, in the same thread and cwd. */
 export const PLAN_GRANT_TTL_MS = 30 * 60 * 1000;
 const MAX_PLAN_FILE_BYTES = 64 * 1024;
+/** Guards whose approvals bind to a protected diff (a bundle); a plan never stands in for them. */
+const PLAN_FORBIDDEN_GUARDS: ReadonlySet<string> = new Set([PLAN_GUARD, "ship-queue", "playbook"]);
+const DEFAULT_GUARD_BY_PROGRAM: Readonly<Record<string, string>> = { git: "git", gh: "gh" };
 
 export interface GuardPlan {
   readonly reason: string;
-  readonly commands: ReadonlyArray<ReadonlyArray<string>>;
+  readonly entries: ReadonlyArray<GuardPlanEntry>;
 }
 
-export function parsePlanCommands(
+type Parsed<T> = ({ readonly ok: true } & T) | { readonly ok: false; readonly error: string };
+
+function parseArgv(raw: unknown): ReadonlyArray<string> | null {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_GUARD_ARGS) return null;
+  const argv: string[] = [];
+  for (const word of raw) {
+    if (typeof word !== "string" || word.includes("\0")) return null;
+    argv.push(word);
+  }
+  return argv;
+}
+
+/**
+ * Entries are `[argv...]` (git and gh only, by program name) or `{ guard, command }`. Commands
+ * are redacted exactly as host guards redact what they send, so the digests match.
+ */
+export function parsePlanEntries(
   raw: unknown,
-):
-  | { readonly ok: true; readonly commands: ReadonlyArray<ReadonlyArray<string>> }
-  | { readonly ok: false; readonly error: string } {
+): Parsed<{ readonly entries: ReadonlyArray<GuardPlanEntry> }> {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > MAX_PLAN_COMMANDS) {
     return { ok: false, error: `plan needs 1..${MAX_PLAN_COMMANDS} commands` };
   }
-  const commands: string[][] = [];
+  const entries: GuardPlanEntry[] = [];
   const seen = new Set<string>();
-  for (const entry of raw) {
-    if (!Array.isArray(entry) || entry.length === 0 || entry.length > MAX_GUARD_ARGS) {
-      return { ok: false, error: "each plan command must be a non-empty argv array" };
+  for (const item of raw) {
+    const obj =
+      item && typeof item === "object" && !Array.isArray(item)
+        ? (item as Record<string, unknown>)
+        : null;
+    const argv = parseArgv(obj ? obj.command : item);
+    if (!argv) return { ok: false, error: "each plan command must be a non-empty argv array" };
+    const guard = obj
+      ? typeof obj.guard === "string"
+        ? obj.guard
+        : ""
+      : (DEFAULT_GUARD_BY_PROGRAM[NodePath.basename(argv[0] ?? "")] ?? "");
+    if (!GUARD_NAME_RE.test(guard)) {
+      return { ok: false, error: `plan entry needs a guard: ${argv.slice(0, 3).join(" ")}` };
     }
-    const argv: string[] = [];
-    for (const word of entry) {
-      if (typeof word !== "string" || word.includes("\0")) {
-        return { ok: false, error: "plan command arguments must be strings without NUL bytes" };
-      }
-      argv.push(word);
+    if (PLAN_FORBIDDEN_GUARDS.has(guard)) {
+      return { ok: false, error: `a plan cannot approve ${guard}; it needs its own approval` };
     }
-    const digest = argvSha256(argv);
-    if (seen.has(digest)) continue;
-    seen.add(digest);
-    commands.push(argv);
+    const command = redactGuardCommand(argv);
+    const key = `${guard}\0${argvSha256(command)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    entries.push({ guard, command });
   }
-  return { ok: true, commands };
+  return { ok: true, entries };
 }
 
-export function parsePlan(
-  raw: unknown,
-): ({ readonly ok: true } & GuardPlan) | { readonly ok: false; readonly error: string } {
+export function parsePlan(raw: unknown): Parsed<GuardPlan> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, error: "plan must be a JSON object with reason and commands" };
   }
@@ -56,16 +80,13 @@ export function parsePlan(
   if (reason.split(/\s+/).filter(Boolean).length < 3) {
     return { ok: false, error: "plan reason must say why, in words" };
   }
-  const commands = parsePlanCommands(obj.commands);
-  if (!commands.ok) return commands;
-  return { ok: true, reason, commands: commands.commands };
+  const parsed = parsePlanEntries(obj.commands);
+  if (!parsed.ok) return parsed;
+  return { ok: true, reason, entries: parsed.entries };
 }
 
 /** Reads a plan file (`{"reason": "...", "commands": [["gh", "repo", "edit", ...], ...]}`). */
-export function readPlanFile(
-  filePath: string,
-  cwd: string,
-): ({ readonly ok: true } & GuardPlan) | { readonly ok: false; readonly error: string } {
+export function readPlanFile(filePath: string, cwd: string): Parsed<GuardPlan> {
   const abs = NodePath.resolve(cwd, filePath);
   try {
     const st = NodeFS.statSync(abs);
@@ -82,9 +103,10 @@ export function readPlanFile(
 }
 
 export function planContains(
-  commands: ReadonlyArray<ReadonlyArray<string>>,
+  entries: ReadonlyArray<GuardPlanEntry>,
+  guard: string,
   command: ReadonlyArray<string>,
 ): boolean {
   const digest = argvSha256(command);
-  return commands.some((c) => argvSha256(c) === digest);
+  return entries.some((e) => e.guard === guard && argvSha256(e.command) === digest);
 }

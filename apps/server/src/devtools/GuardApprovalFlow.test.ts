@@ -6,7 +6,7 @@ import * as NodePath from "node:path";
 
 import { canonicalProtectedDiffSha256 } from "@t3tools/guard-protocol/digests";
 import { runGuardCli } from "@t3tools/guard-protocol/cli";
-import { identifyGuardThread } from "@t3tools/guard-protocol/client";
+import { bindGuardJob, identifyGuardThread } from "@t3tools/guard-protocol/client";
 import { runHostGuardCli } from "@t3tools/host-guards/cli";
 import { makeGuardProtocolGuard, protectedDiffDigest } from "@t3tools/ship-queue/houseGate";
 import { runShipQueueCli } from "@t3tools/ship-queue/cli";
@@ -269,6 +269,10 @@ describe("owner approval flows against a real broker", () => {
     expect(resolved.found).toBe(true);
     expect(await cli).toBe(0);
 
+    // Submit binds the job to its verified thread with the broker; the worker check needs it.
+    expect((await bindGuardJob({ jobId: id, worktree, branch, socketPath })).threadId).toBe(
+      "thread-q",
+    );
     // The CLI's inspector found no git worktree, so this approval is a once grant for the command.
     peer.threadId = "";
     peer.pid = 9200;
@@ -329,13 +333,19 @@ describe("owner approval flows against a real broker", () => {
           cwd: dir,
         },
         identifyThread,
+        bindJob: async (input) => (await bindGuardJob({ ...input, socketPath })).ok,
       });
       expect(code, out.join("")).toBe(0);
       return readJob(NodePath.join(dir, "queue"), /^job=(\d+)/m.exec(out.join(""))?.[1] ?? "");
     };
 
     const viaBroker = async () => (await identifyGuardThread({ socketPath })).threadId ?? "";
-    expect((await submit("feat/74-verified", viaBroker))?.thread_id).toBe("thread-verified");
+    const verified = await submit("feat/74-verified", viaBroker);
+    expect(verified?.thread_id).toBe("thread-verified");
+    // Submit bound the job broker-side, so nothing can rebind it to another worktree or branch.
+    expect(
+      await bindGuardJob({ jobId: verified!.id, worktree: dir, branch: "other", socketPath }),
+    ).toMatchObject({ ok: false, error: "job is already bound" });
 
     // No verifiable thread: the job records none, so the broker refuses any grant for it.
     const unreachable = async () =>

@@ -237,6 +237,20 @@ describe("gitGuard and pushGuard against real git repos", () => {
     expect(
       decideGit(["config", "set", "core.hooksPath", "/dev/null"], {}, worktreeDir, config).verdict,
     ).toBe("deny");
+    // Probes: option parsing stops at --/--end-of-options; a dash word after the key is a value.
+    for (const write of [
+      ["config", "--", "core.hooksPath", "-x"],
+      ["config", "--", "include.path", "-evil.cfg"],
+      ["config", "--local", "--", "core.hooksPath", "-x"],
+      ["config", "--end-of-options", "core.hooksPath", "-x"],
+      ["config", "--local", "--end-of-options", "include.path", "-evil.cfg"],
+      ["config", "core.hooksPath", "-x"],
+      ["config", "--show-origin", "core.hooksPath", "/dev/null"],
+      ["config", "--", "--get", "core.hooksPath"],
+      ["config", "--unknown-flag", "core.hooksPath"],
+    ]) {
+      expect(decideGit(write, {}, worktreeDir, config).verdict, write.join(" ")).toBe("deny");
+    }
     // Setting core.hooksPath to tracked directory containing pre-commit is allowed
     expect(
       decideGit(["config", "core.hooksPath", ".githooks"], {}, worktreeDir, config).verdict,

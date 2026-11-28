@@ -18,6 +18,10 @@
       "types": "./src/client.ts",
       "import": "./src/client.ts"
     },
+    "./command-redact": {
+      "types": "./src/commandRedact.ts",
+      "import": "./src/commandRedact.ts"
+    },
     "./digests": {
       "types": "./src/digests.ts",
       "import": "./src/digests.ts"

@@ -6,7 +6,7 @@ import * as NodePath from "node:path";
 
 import type { WireGuardBundle } from "./bundleInspect.ts";
 import { argvSha256 } from "./digests.ts";
-import { GUARD_PROTOCOL_VERSION } from "./protocol.ts";
+import { GUARD_PROTOCOL_VERSION, type GuardPlanEntry } from "./protocol.ts";
 
 const GUARD_SOCKET_ENV = "T3_GUARD_GRANT_SOCKET";
 const GUARD_TIMEOUT_ENV = "T3_GUARD_REQUEST_TIMEOUT";
@@ -411,7 +411,7 @@ export async function requestGuardGrant(
     readonly consumeExisting?: boolean | undefined;
     readonly timeoutMs?: number | undefined;
     /** Commands one approval covers, each usable once (`guard` should be `plan`). */
-    readonly plan?: ReadonlyArray<ReadonlyArray<string>> | undefined;
+    readonly plan?: ReadonlyArray<GuardPlanEntry> | undefined;
     /** Store the approved once grant for the guarded command instead of handing it to this caller. */
     readonly storeGrant?: boolean | undefined;
   },
@@ -432,6 +432,41 @@ export async function requestGuardGrant(
   const res = await sendGuardRpc(sock, payload, timeoutMs + 2_000);
   if (!res.ok) return { ok: false, errCode: res.errCode, error: res.errCode };
   return parseGrantReply(res.data, { allowQueued: input.wait === false });
+}
+
+/**
+ * Asks the broker to bind `jobId` to this caller's kernel-verified thread, worktree and branch,
+ * so the job's worker can later use that thread's grants. Returns the bound thread, or "".
+ */
+export async function bindGuardJob(input: {
+  readonly jobId: string;
+  readonly worktree: string;
+  readonly branch: string;
+  readonly socketPath?: string | undefined;
+  readonly env?: NodeJS.ProcessEnv | undefined;
+  readonly allowTestOverride?: boolean | undefined;
+}): Promise<{ readonly ok: boolean; readonly threadId?: string; readonly error?: string }> {
+  const sock =
+    input.socketPath ??
+    resolveGuardSocketPath(input.env, { allowTestOverride: input.allowTestOverride });
+  if (!sock) return { ok: false, error: "guard socket unavailable" };
+  const res = await sendGuardRpc(
+    sock,
+    {
+      v: GUARD_PROTOCOL_VERSION,
+      op: "bind_job",
+      job_id: input.jobId,
+      cwd: canonicalReal(input.worktree),
+      branch: input.branch,
+    },
+    CHECK_TIMEOUT_MS,
+  );
+  if (!res.ok) return { ok: false, error: res.errCode };
+  return {
+    ok: res.data.ok === true,
+    ...(typeof res.data.thread_id === "string" ? { threadId: res.data.thread_id } : {}),
+    ...(typeof res.data.error === "string" ? { error: res.data.error } : {}),
+  };
 }
 
 export async function identifyGuardThread(options?: {

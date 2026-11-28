@@ -1,5 +1,5 @@
 // Text the broker sends into the requesting thread when the owner decides and nobody is waiting.
-import type { PendingGuardRequest } from "@t3tools/guard-protocol/protocol";
+import { sanitizeText, type PendingGuardRequest } from "@t3tools/guard-protocol/protocol";
 
 export type GuardNoticeDecision = "approved" | "denied" | "expired";
 
@@ -24,9 +24,10 @@ export function guardThreadNoticeText(
   decision: GuardNoticeDecision,
   reason: string,
 ): string {
-  const where = req.cwd ? ` from ${req.cwd}` : "";
+  const cwd = sanitizeText(req.cwd, 260);
+  const where = cwd ? ` from ${cwd}` : "";
   if (req.plan && req.plan.length > 0) {
-    const list = req.plan.map((c) => `- ${showCommand(c)}`).join("\n");
+    const list = req.plan.map((e) => `- ${showCommand(e.command)}`).join("\n");
     if (decision === "approved") {
       return `Host guard: the owner approved your command plan (${reason}). Run each command once${where} within 30 minutes:\n${list}`;
     }

@@ -148,7 +148,7 @@ function buildGuardApproval(req: PendingGuardRequest): ThreadDevtoolsApproval {
         count: req.plan.length,
       },
     );
-    detail = [header, "", ...req.plan.map((argv) => formatSafeCommandArgv(argv))].join("\n");
+    detail = [header, "", ...req.plan.map((e) => formatSafeCommandArgv(e.command))].join("\n");
   } else if (req.bundle) {
     const lines: string[] = [];
     const gateNames = req.bundle.gates

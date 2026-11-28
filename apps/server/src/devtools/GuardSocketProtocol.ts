@@ -3,7 +3,8 @@ import * as NodeCrypto from "node:crypto";
 import type * as NodeNet from "node:net";
 import * as NodeStringDecoder from "node:string_decoder";
 
-import { PLAN_GUARD, parsePlanCommands, planContains } from "@t3tools/guard-protocol/plan";
+import { argvSha256 } from "@t3tools/guard-protocol/digests";
+import { PLAN_GUARD, parsePlanEntries } from "@t3tools/guard-protocol/plan";
 import {
   parseBundleSpec,
   sanitizeText,
@@ -21,7 +22,11 @@ import {
 } from "./GuardBrokerTypes.ts";
 import type { GuardGrantStore } from "./GuardGrantStore.ts";
 import type { PeerThreadResolution } from "./GuardPeerIdentity.ts";
-import { verifyQueueWorkerJob, type QueueWorkerTrust } from "./GuardQueueWorker.ts";
+import {
+  verifyQueueWorkerJob,
+  type GuardJobBindings,
+  type QueueWorkerTrust,
+} from "./GuardQueueWorker.ts";
 import { canonicalCwd } from "./GuardSocketPath.ts";
 
 const MAX_LINE_BYTES = 64 * 1024;
@@ -44,6 +49,7 @@ export interface GuardProtocolContext {
     reason?: string,
   ) => void;
   readonly queueWorkerTrust: QueueWorkerTrust;
+  readonly jobBindings: GuardJobBindings;
 }
 
 export function writeAndCloseSocket(
@@ -157,6 +163,21 @@ async function handleGuardProtocolMessage(
     });
     return;
   }
+  if (op === "bind_job") {
+    const peer = await ctx.resolvePeer(socket);
+    if (ctx.isClosed() || socket.destroyed) return;
+    if (!peer.verified) {
+      writeAndCloseSocket(socket, { ok: false, error: peer.error });
+      return;
+    }
+    const bound = ctx.jobBindings.bind(typeof msg.job_id === "string" ? msg.job_id : "", {
+      threadId: peer.threadId,
+      worktree: typeof msg.cwd === "string" && msg.cwd ? canonicalCwd(msg.cwd) : "",
+      branch: sanitizeText(msg.branch, 200),
+    });
+    writeAndCloseSocket(socket, bound.ok ? { ok: true, thread_id: peer.threadId } : bound);
+    return;
+  }
   if (op !== "peek" && op !== "check" && op !== "use" && op !== "request") {
     writeAndCloseSocket(socket, { ok: false, error: "unsupported op" });
     return;
@@ -173,17 +194,17 @@ async function handleGuardProtocolMessage(
     return;
   }
 
-  const parsedPlan = msg.plan === undefined ? null : parsePlanCommands(msg.plan);
+  const parsedPlan = msg.plan === undefined ? null : parsePlanEntries(msg.plan);
   if (parsedPlan && !parsedPlan.ok) {
     writeAndCloseSocket(socket, { ok: false, error: parsedPlan.error });
     return;
   }
-  const plan = parsedPlan?.ok ? parsedPlan.commands : undefined;
+  const plan = parsedPlan?.ok ? parsedPlan.entries : undefined;
   if (
     plan &&
     (op !== "request" ||
       validated.guard !== PLAN_GUARD ||
-      !planContains(plan, validated.displayCommand))
+      !plan.some((e) => argvSha256(e.command) === validated.digest))
   ) {
     writeAndCloseSocket(socket, {
       ok: false,
@@ -207,7 +228,7 @@ async function handleGuardProtocolMessage(
       writeAndCloseSocket(socket, { ok: false, error: "queue workers cannot request grants" });
       return;
     }
-    const worker = verifyQueueWorkerJob(ctx.queueWorkerTrust, {
+    const worker = verifyQueueWorkerJob(ctx.queueWorkerTrust, ctx.jobBindings, {
       peerPid: peer.peerPid,
       jobId,
       guard: validated.guard,

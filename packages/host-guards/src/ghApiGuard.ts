@@ -4,7 +4,7 @@ import * as NodePath from "node:path";
 
 import { resolveEnvGhRepoSlug } from "./ghArgParse.ts";
 import { decideGhGraphqlCall, GH_UNREADABLE_INPUT } from "./ghGraphqlGuard.ts";
-import { isRepoAdminApiCall, repoAdminRefusal } from "./ghRepoAdmin.ts";
+import { createsManagedRepo, isRepoAdminApiCall, repoAdminRefusal } from "./ghRepoAdmin.ts";
 import type { HostGuardsConfig } from "./hostConfig.ts";
 import { ALLOW_VERDICT, type GuardVerdict } from "./pushGuard.ts";
 import { FALLBACK_BASES, formatMergeRefusal, inspectRepo, isSlugInScope } from "./repoScope.ts";
@@ -138,12 +138,7 @@ export function decideGhApiCall(
     return decideGhGraphqlCall({ endpoint, fields, raw, hasInputFlag }, here, config, queued);
   }
 
-  const orgCreate = /^orgs\/([^/]+)\/repos$/.exec(path);
-  if (
-    orgCreate?.[1] &&
-    method === "POST" &&
-    isSlugInScope(orgCreate[1], config, fields.name || "new")
-  ) {
+  if (createsManagedRepo(method, path, fields, config)) {
     return repoAdminRefusal(`gh api ${method} ${path}`);
   }
   const repoMatch = /^repos\/([^/]+)\/([^/]+)(?:\/(.*))?$/.exec(path);

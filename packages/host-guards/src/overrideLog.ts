@@ -4,7 +4,7 @@ import * as NodePath from "node:path";
 import type { GuardGrantReply } from "@t3tools/guard-protocol/client";
 import { argvSha256 } from "@t3tools/guard-protocol/digests";
 
-import { redactGuardCommand } from "./commandRedact.ts";
+import { redactGuardCommand } from "@t3tools/guard-protocol/command-redact";
 import { safeRealpath, type HostGuardsConfig } from "./hostConfig.ts";
 import { defaultProcFs, type ProcFsReader } from "./procFs.ts";
 import { resolveCallerIdentity } from "./procIdentity.ts";

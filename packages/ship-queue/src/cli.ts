@@ -5,7 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-import { identifyGuardThread } from "@t3tools/guard-protocol/client";
+import { bindGuardJob, identifyGuardThread } from "@t3tools/guard-protocol/client";
 
 import { ghForge } from "./ghForge.ts";
 import {
@@ -50,6 +50,14 @@ export interface CliOptions {
   readonly waitForChange?: ((root: string, id: string) => () => Promise<void>) | undefined;
   /** The submitter's kernel-verified thread ("" when none); the default asks the guard broker. */
   readonly identifyThread?: (() => Promise<string>) | undefined;
+  /** Records the job's verified thread, worktree and branch with the broker; true when bound. */
+  readonly bindJob?:
+    | ((input: {
+        readonly jobId: string;
+        readonly worktree: string;
+        readonly branch: string;
+      }) => Promise<boolean>)
+    | undefined;
   readonly quietMs?: number | undefined;
 }
 
@@ -229,6 +237,17 @@ export async function runShipQueueCli(
       return 1;
     }
     for (const warning of res.warnings) io.stderr(`ship-queue: warning: ${warning}\n`);
+    if (thread) {
+      const bind =
+        options.bindJob ??
+        (async (input) => (await bindGuardJob({ ...input, env: { ...io.env } })).ok);
+      const bound = await bind({ jobId: res.id, worktree: res.record.worktree, branch });
+      if (!bound) {
+        io.stderr(
+          "ship-queue: warning: the guard broker did not bind this job to your thread; a protected diff in it cannot use owner approvals\n",
+        );
+      }
+    }
     io.stdout(`job=${res.id} log=${jobLogPath(root, res.id)}\n${watcherBlock(res.id)}\n`);
     if (!rest.includes("--no-start")) io.stdout(`${startWorker(root, res.id)}\n`);
     return 0;

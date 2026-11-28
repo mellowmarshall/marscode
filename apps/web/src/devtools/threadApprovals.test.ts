@@ -111,8 +111,11 @@ describe("threadApprovals unified approval subroutine", () => {
 
   it("shows every command of a batch plan and one approve action for the whole list", () => {
     const plan = [
-      ["gh", "repo", "rename", "next", "-R", "example-org/example-repo"],
-      ["gh", "repo", "edit", "example-org/next", "--description", "new words"],
+      { guard: "gh", command: ["gh", "repo", "rename", "next", "-R", "example-org/example-repo"] },
+      {
+        guard: "gh",
+        command: ["gh", "repo", "edit", "example-org/next", "--description", "new words"],
+      },
     ];
     const [entry] = deriveThreadDevtoolsApprovals({
       threadId: "thread-A",
@@ -121,7 +124,7 @@ describe("threadApprovals unified approval subroutine", () => {
           requestId: "req-plan",
           threadId: "thread-A",
           guard: "plan",
-          command: plan[0]!,
+          command: plan[0]!.command,
           plan,
         }),
       ],

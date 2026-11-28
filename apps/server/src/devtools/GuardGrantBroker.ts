@@ -17,7 +17,11 @@ import type {
 } from "./GuardBrokerTypes.ts";
 import { GuardGrantStore } from "./GuardGrantStore.ts";
 import { defaultResolvePeerThreadId, type PeerThreadResolution } from "./GuardPeerIdentity.ts";
-import { defaultQueueWorkerTrust, type QueueWorkerTrust } from "./GuardQueueWorker.ts";
+import {
+  defaultQueueWorkerTrust,
+  GuardJobBindings,
+  type QueueWorkerTrust,
+} from "./GuardQueueWorker.ts";
 import {
   resolveGuardRequest,
   type GuardResolveInput,
@@ -64,6 +68,7 @@ export class GuardGrantBroker {
   ) => Promise<PeerThreadResolution>;
   private readonly hasCustomResolver: boolean;
   private readonly queueWorkerTrust: QueueWorkerTrust;
+  private readonly jobBindings = new GuardJobBindings();
   private readonly notifyThread: ((notice: GuardThreadNotice) => void) | undefined;
 
   private server: NodeNet.Server | null = null;
@@ -185,6 +190,7 @@ export class GuardGrantBroker {
         reason?: string,
       ) => this.finishPending(entry, decision, payload, reason),
       queueWorkerTrust: this.queueWorkerTrust,
+      jobBindings: this.jobBindings,
     };
 
     const server = NodeNet.createServer((socket) =>

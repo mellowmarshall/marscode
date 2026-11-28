@@ -129,19 +129,90 @@ const CONFIG_VALUE_FLAGS = new Set([
   "--comment",
   "--value",
 ]);
+const CONFIG_READ_MODES = new Set([
+  "--get",
+  "--get-all",
+  "--get-regexp",
+  "--get-urlmatch",
+  "--get-color",
+  "--get-colorbool",
+  "-l",
+  "--list",
+]);
+const CONFIG_WRITE_MODES = new Set([
+  "--unset",
+  "--unset-all",
+  "--add",
+  "--replace-all",
+  "--rename-section",
+  "--remove-section",
+  "--edit",
+  "-e",
+]);
+const CONFIG_MODIFIER_FLAGS = new Set([
+  "--local",
+  "--global",
+  "--system",
+  "--worktree",
+  "--show-origin",
+  "--show-scope",
+  "--null",
+  "-z",
+  "--name-only",
+  "--includes",
+  "--no-includes",
+  "--bool",
+  "--int",
+  "--bool-or-int",
+  "--path",
+  "--expiry-date",
+  "--fixed-value",
+]);
+const CONFIG_READ_SUBS = new Set(["get", "list"]);
+const CONFIG_WRITE_SUBS = new Set(["set", "unset", "rename-section", "remove-section", "edit"]);
 
-function configPositionals(rest: ReadonlyArray<string>): ReadonlyArray<string> {
-  const out: string[] = [];
+/**
+ * Splits `git config` arguments the way git does: options stop at `--`/`--end-of-options`, and
+ * once the key is seen a dash word that is not a known flag is a value. An unknown option
+ * marks the call unknown, so it is never treated as a read.
+ */
+function splitConfigArgs(rest: ReadonlyArray<string>): {
+  readonly options: ReadonlyArray<string>;
+  readonly positionals: ReadonlyArray<string>;
+  readonly unknown: boolean;
+} {
+  const options: string[] = [];
+  const positionals: string[] = [];
+  let unknown = false;
+  let parsing = true;
   for (let i = 0; i < rest.length; i += 1) {
     const a = rest[i]!;
-    if (CONFIG_VALUE_FLAGS.has(a)) {
-      i += 1;
+    if (parsing && (a === "--" || a === "--end-of-options")) {
+      parsing = false;
       continue;
     }
-    if (a.startsWith("-")) continue;
-    out.push(a);
+    if (!parsing || !a.startsWith("-") || a === "-") {
+      positionals.push(a);
+      continue;
+    }
+    const name = a.startsWith("--") && a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
+    if (CONFIG_VALUE_FLAGS.has(name)) {
+      if (name === a) i += 1;
+      options.push(name);
+    } else if (
+      CONFIG_READ_MODES.has(a) ||
+      CONFIG_WRITE_MODES.has(a) ||
+      CONFIG_MODIFIER_FLAGS.has(a)
+    ) {
+      options.push(a);
+    } else if (positionals.length > 0) {
+      positionals.push(a);
+    } else {
+      unknown = true;
+      options.push(a);
+    }
   }
-  return out;
+  return { options, positionals, unknown };
 }
 
 export function checkGitConfigWrite(
@@ -152,35 +223,14 @@ export function checkGitConfigWrite(
   const rest = sub.slice(1);
   const keys = rest.filter((a) => GUARDED_CONFIG_RE.test(a));
   if (keys.length === 0) return ALLOW_VERDICT;
-  const reads = new Set([
-    "--get",
-    "--get-all",
-    "--get-regexp",
-    "-l",
-    "--list",
-    "get",
-    "list",
-    "--show-origin",
-    "--show-scope",
-  ]);
-  const writes = new Set([
-    "--unset",
-    "--unset-all",
-    "set",
-    "unset",
-    "--add",
-    "--replace-all",
-    "--rename-section",
-    "--remove-section",
-    "--edit",
-    "-e",
-  ]);
-  const hasRead = rest.some((r) => reads.has(r));
-  const hasWrite = rest.some((r) => writes.has(r));
-  if (hasRead && !hasWrite) return ALLOW_VERDICT;
-  // `git config <key>` with no value is a read; a value after the key makes it a write.
-  if (!hasWrite && configPositionals(rest).length === 1) {
-    return ALLOW_VERDICT;
+  const { options, positionals, unknown } = splitConfigArgs(rest);
+  const subcommand = positionals[0] ?? "";
+  const hasRead = options.some((o) => CONFIG_READ_MODES.has(o)) || CONFIG_READ_SUBS.has(subcommand);
+  const hasWrite =
+    options.some((o) => CONFIG_WRITE_MODES.has(o)) || CONFIG_WRITE_SUBS.has(subcommand);
+  if (!unknown && !hasWrite) {
+    // A read mode reads; `git config <key>` with the key alone reads too.
+    if (hasRead || positionals.length === 1) return ALLOW_VERDICT;
   }
 
   const firstKey = keys[0]!;
@@ -190,14 +240,14 @@ export function checkGitConfigWrite(
       reason: `host git guard: refusing to write ${firstKey} in ${repo.slug}: an included file can switch its hooks off.`,
     };
   }
-  if (rest.some((r) => r === "--unset" || r === "--unset-all" || r === "unset")) {
+  if (options.some((o) => o === "--unset" || o === "--unset-all") || subcommand === "unset") {
     return {
       verdict: "deny",
       reason: `host git guard: refusing to unset core.hooksPath in ${repo.slug}: it drops the repo's hooks.`,
     };
   }
   const value =
-    [...rest].reverse().find((a) => !a.startsWith("-") && a !== "set" && a !== firstKey) ?? "";
+    positionals.filter((p, i) => !(i === 0 && p === "set") && p !== firstKey).at(-1) ?? "";
   if (!isTrackedHooksDir(repo, value, config)) {
     return {
       verdict: "deny",
