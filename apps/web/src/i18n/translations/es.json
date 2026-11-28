@@ -12777,5 +12777,11 @@
   "99d51127f573296b": "Otra cuenta",
   "8ec2c57414669b79": "Conecta un segundo espacio de trabajo o usuario de {tracker}.",
   "99963c0142e17f00": "Para la nueva cuenta de {tracker}.",
-  "6d8e4ebc889bace9": "Añadir cuenta"
+  "6d8e4ebc889bace9": "Añadir cuenta",
+  "aeddf4420f291989": "Instrucciones del agente",
+  "ae18dbee5982ccc5": "prompt del sistema orquestación guía editar restablecer predeterminado agentes",
+  "4e2bae10c1ec9047": "Las instrucciones que T3 añade al prompt del sistema de cada agente. Los cambios sustituyen el texto integrado y se aplican cuando se inicia la siguiente sesión del agente.",
+  "67d1444f1ebafc5d": "Restablecer las instrucciones del agente a los valores predeterminados",
+  "6c33fafcd03b38e0": "Cargando las instrucciones integradas…",
+  "a9f26af6134146f9": "Este servidor no envió sus instrucciones integradas. Actualízalo para editarlas aquí."
 }

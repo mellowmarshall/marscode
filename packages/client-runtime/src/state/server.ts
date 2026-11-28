@@ -1606,6 +1606,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,
     }),
+    defaultAgentInstructions: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:default-agent-instructions",
+      tag: WS_METHODS.serverGetDefaultAgentInstructions,
+      staleTimeMs: 5 * 60_000,
+    }),
     npmRelease: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:npm-release",
       tag: WS_METHODS.serverGetNpmRelease,
