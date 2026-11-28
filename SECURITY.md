@@ -108,7 +108,7 @@ once it has one.
   reach (2–3), outlives revocation (5), or shows how the token leaks (6).
 - Check the reported commit against `main`. Reports often trail fixes.
 - Prove a finding with a failing test at the lowest layer that shows it, as
-  [Verifying](AGENTS.md#verifying) describes. Do not run a PoC against
+  the repository's test commands describe. Do not run a PoC against
   `~/.t3/userdata` or any live environment. Use a dev server on seeded data.
 - Treat report attachments as untrusted. Extract them into an empty directory
   outside the worktree and read PoCs before running anything.

@@ -117,12 +117,6 @@ const DOC_RULES = [
     instructions:
       "Hold repository and package scripts to docs/internals/17_scripts.md: use Effect, effect/cli, NodeServices, and NodeRuntime.runMain rather than raw node:fs, node:child_process, or hand-rolled process.argv parsing.",
   },
-  {
-    files: "AGENTS.md",
-    applyTo: "docs/internals/**/*.md",
-    instructions:
-      "Hold internal doc edits to the Documentation rules in AGENTS.md: keep only durable architectural decisions, trust boundaries, conventions, and cross-cutting traps. Flag single-feature walkthroughs, field/method catalogs, exact constants/timeouts/migration numbers, and PR appends.",
-  },
 ] as const;
 
 export default defineConfig((ctx) => ({
