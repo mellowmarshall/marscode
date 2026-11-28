@@ -45,6 +45,16 @@ function rpc(
   });
 }
 
+/** The `ship-queue submit` process the tests treat as verified. */
+const SUBMIT_PID = 5000;
+/** Job freshness is checked against Date, so job tests pin it to one epoch. */
+const FIXED_NOW = Date.parse("2026-11-27T12:00:00.000Z");
+const nowClock = { now: () => new Date(FIXED_NOW).toISOString() };
+function freezeDate(): void {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(FIXED_NOW);
+}
+
 interface Peer {
   threadId: string;
   pid: number;
@@ -71,6 +81,7 @@ async function startBroker(options?: {
     queueWorkerTrust: {
       queueRoot: options?.queueRoot ?? NodePath.join(dir, "queue"),
       isTrustedWorker: (pid) => options?.trustedPids?.has(pid) === true,
+      isTrustedSubmitter: (pid) => pid === SUBMIT_PID,
     },
     notifyThread: (notice) => notices.push(notice),
     ...(options?.maxPreapproved ? { maxPreapproved: options.maxPreapproved } : {}),
@@ -236,6 +247,7 @@ describe("GuardGrantBroker owner approvals", () => {
   });
 
   it("lets a trusted queue worker check grants only for its job's thread, worktree, branch, and digest", async () => {
+    freezeDate();
     const queueRoot = tempDir("guard-approvals-queue-");
     const worktree = tempDir("guard-approvals-wt-");
     const workerPid = 7100;
@@ -271,13 +283,13 @@ describe("GuardGrantBroker owner approvals", () => {
           action_digest: actionDigest,
         },
         "body\n",
-        { now: () => "2026-11-27T00:00:00.000Z" },
+        nowClock,
       ).id;
     const command = ["ship-queue", "submit", worktree, branch];
     // What `ship-queue submit` does after creating the job: bind it as the verified submitter.
-    const bindAs = async (threadId: string, jobId: string, at = worktree) => {
+    const bindAs = async (threadId: string, jobId: string, at = worktree, pid = SUBMIT_PID) => {
       const saved = { ...peer };
-      Object.assign(peer, { threadId, pid: 5000 });
+      Object.assign(peer, { threadId, pid });
       const reply = await rpc(socketPath, { v: 2, op: "bind_job", job_id: jobId, cwd: at, branch });
       Object.assign(peer, saved);
       return reply;
@@ -355,6 +367,38 @@ describe("GuardGrantBroker owner approvals", () => {
       ok: false,
       error: "binding a job requires a verified thread",
     });
+    // Probes: another thread's agent process pre-binds a fresh job, or a guessed id.
+    expect(await bindAs("thread-evil", job("thread-q"), worktree, 6000)).toMatchObject({
+      ok: false,
+      error: "caller is not this job's ship-queue submit",
+    });
+    expect(await bindAs("thread-evil", "99999")).toMatchObject({
+      ok: false,
+      error: "job is not open",
+    });
+    const stale = createJob(
+      queueRoot,
+      {
+        repo: "example-org/example-repo",
+        primary: worktree,
+        worktree,
+        branch,
+        base_branch: "main",
+        remote: "origin",
+        title: "old",
+        head_sha: "b".repeat(40),
+      },
+      "body\n",
+      { now: () => new Date(FIXED_NOW - 5 * 60_000).toISOString() },
+    ).id;
+    expect(await bindAs("thread-q", stale)).toMatchObject({
+      ok: false,
+      error: "job was not just submitted",
+    });
+    expect(await bindAs("thread-q", job("thread-q"), "/home/dev/other")).toMatchObject({
+      ok: false,
+      error: "bind does not match the job's worktree and branch",
+    });
     const moved = await boundJob("thread-q");
     NodeFS.writeFileSync(
       NodePath.join(queueRoot, "jobs", moved, "job.json"),
@@ -387,5 +431,36 @@ describe("GuardGrantBroker owner approvals", () => {
       ok: false,
       error: "caller is not a trusted ship-queue worker",
     });
+  });
+
+  it("never evicts job bindings: a flood is refused at the cap and earlier bindings stay", async () => {
+    freezeDate();
+    const queueRoot = tempDir("guard-approvals-flood-");
+    const worktree = tempDir("guard-approvals-flood-wt-");
+    const { socketPath, peer } = await startBroker({ queueRoot });
+    peer.pid = SUBMIT_PID;
+    const newJob = () =>
+      createJob(
+        queueRoot,
+        {
+          repo: "example-org/example-repo",
+          primary: worktree,
+          worktree,
+          branch: "feat/flood",
+          base_branch: "main",
+          remote: "origin",
+          title: "flood",
+          head_sha: "c".repeat(40),
+        },
+        "body\n",
+        nowClock,
+      ).id;
+    const bind = (id: string) =>
+      rpc(socketPath, { v: 2, op: "bind_job", job_id: id, cwd: worktree, branch: "feat/flood" });
+    const first = newJob();
+    expect((await bind(first)).ok).toBe(true);
+    for (let i = 1; i < 1024; i += 1) expect((await bind(newJob())).ok).toBe(true);
+    expect(await bind(newJob())).toMatchObject({ ok: false, error: "too many job bindings" });
+    expect(await bind(first)).toMatchObject({ ok: false, error: "job is already bound" });
   });
 });

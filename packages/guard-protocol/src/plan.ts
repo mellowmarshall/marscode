@@ -62,6 +62,8 @@ export function parsePlanEntries(
     if (PLAN_FORBIDDEN_GUARDS.has(guard)) {
       return { ok: false, error: `a plan cannot approve ${guard}; it needs its own approval` };
     }
+    // Commands that differ only in redacted secrets share a digest; accepted as visibility-only,
+    // since the owner approved the shape shown and the secret never reaches the broker.
     const command = redactGuardCommand(argv);
     const key = `${guard}\0${argvSha256(command)}`;
     if (seen.has(key)) continue;

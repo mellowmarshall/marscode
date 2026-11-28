@@ -129,27 +129,9 @@ const CONFIG_VALUE_FLAGS = new Set([
   "--comment",
   "--value",
 ]);
-const CONFIG_READ_MODES = new Set([
-  "--get",
-  "--get-all",
-  "--get-regexp",
-  "--get-urlmatch",
-  "--get-color",
-  "--get-colorbool",
-  "-l",
-  "--list",
-]);
-const CONFIG_WRITE_MODES = new Set([
-  "--unset",
-  "--unset-all",
-  "--add",
-  "--replace-all",
-  "--rename-section",
-  "--remove-section",
-  "--edit",
-  "-e",
-]);
-const CONFIG_MODIFIER_FLAGS = new Set([
+const CONFIG_READ_MODES = new Set(["--get", "--get-all", "--get-regexp", "--list", "-l"]);
+/** Flags a read may carry before its key; anything else makes the call a write. */
+const CONFIG_READ_FLAGS = new Set([
   "--local",
   "--global",
   "--system",
@@ -166,23 +148,29 @@ const CONFIG_MODIFIER_FLAGS = new Set([
   "--bool-or-int",
   "--path",
   "--expiry-date",
-  "--fixed-value",
 ]);
-const CONFIG_READ_SUBS = new Set(["get", "list"]);
-const CONFIG_WRITE_SUBS = new Set(["set", "unset", "rename-section", "remove-section", "edit"]);
+/** Section-wide edits: any key can become core.hooksPath or an include, so they are owner-only. */
+const CONFIG_SECTION_EDITS = new Set([
+  "--rename-section",
+  "--remove-section",
+  "-e",
+  "--edit",
+  "rename-section",
+  "remove-section",
+  "edit",
+]);
 
 /**
- * Splits `git config` arguments the way git does: options stop at `--`/`--end-of-options`, and
- * once the key is seen a dash word that is not a known flag is a value. An unknown option
- * marks the call unknown, so it is never treated as a read.
+ * Splits `git config` arguments: options until the first positional (or `--`), then every word
+ * is positional, whatever it looks like. `unknown` marks an option no read may carry.
  */
 function splitConfigArgs(rest: ReadonlyArray<string>): {
-  readonly options: ReadonlyArray<string>;
+  readonly readMode: boolean;
   readonly positionals: ReadonlyArray<string>;
   readonly unknown: boolean;
 } {
-  const options: string[] = [];
   const positionals: string[] = [];
+  let readMode = false;
   let unknown = false;
   let parsing = true;
   for (let i = 0; i < rest.length; i += 1) {
@@ -191,28 +179,32 @@ function splitConfigArgs(rest: ReadonlyArray<string>): {
       parsing = false;
       continue;
     }
-    if (!parsing || !a.startsWith("-") || a === "-") {
+    if (!parsing || positionals.length > 0 || !a.startsWith("-") || a === "-") {
       positionals.push(a);
       continue;
     }
     const name = a.startsWith("--") && a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
     if (CONFIG_VALUE_FLAGS.has(name)) {
       if (name === a) i += 1;
-      options.push(name);
-    } else if (
-      CONFIG_READ_MODES.has(a) ||
-      CONFIG_WRITE_MODES.has(a) ||
-      CONFIG_MODIFIER_FLAGS.has(a)
-    ) {
-      options.push(a);
-    } else if (positionals.length > 0) {
-      positionals.push(a);
-    } else {
+    } else if (CONFIG_READ_MODES.has(a)) {
+      readMode = true;
+    } else if (!CONFIG_READ_FLAGS.has(a)) {
       unknown = true;
-      options.push(a);
     }
   }
-  return { options, positionals, unknown };
+  return { readMode, positionals, unknown };
+}
+
+/** Whether `git config` is one of the exact read shapes; everything else is a write. */
+function isConfigRead(rest: ReadonlyArray<string>): boolean {
+  const { readMode, positionals, unknown } = splitConfigArgs(rest);
+  if (unknown) return false;
+  if (readMode) return positionals.length <= 1;
+  if (positionals.length === 1) return true;
+  return (
+    (positionals.length === 2 && positionals[0] === "get") ||
+    (positionals.length === 1 && positionals[0] === "list")
+  );
 }
 
 export function checkGitConfigWrite(
@@ -221,17 +213,23 @@ export function checkGitConfigWrite(
   config: HostGuardsConfig,
 ): GuardVerdict {
   const rest = sub.slice(1);
+  const terminator = rest.findIndex((a) => a === "--" || a === "--end-of-options");
+  const optionRegion = terminator === -1 ? rest : rest.slice(0, terminator);
+  // git also reads options after positionals, so a section edit anywhere before `--` counts.
+  const { positionals } = splitConfigArgs(rest);
+  const subcommand = positionals[0] ?? "";
+  const sectionEdit =
+    optionRegion.find((w) => w.startsWith("-") && CONFIG_SECTION_EDITS.has(w.split("=", 1)[0]!)) ??
+    (CONFIG_SECTION_EDITS.has(subcommand) ? subcommand : undefined);
+  if (sectionEdit) {
+    return {
+      verdict: "deny",
+      reason: `host git guard: refusing git config ${sectionEdit} in ${repo.slug}: a section edit can switch its hooks off; owner approval required.`,
+    };
+  }
   const keys = rest.filter((a) => GUARDED_CONFIG_RE.test(a));
   if (keys.length === 0) return ALLOW_VERDICT;
-  const { options, positionals, unknown } = splitConfigArgs(rest);
-  const subcommand = positionals[0] ?? "";
-  const hasRead = options.some((o) => CONFIG_READ_MODES.has(o)) || CONFIG_READ_SUBS.has(subcommand);
-  const hasWrite =
-    options.some((o) => CONFIG_WRITE_MODES.has(o)) || CONFIG_WRITE_SUBS.has(subcommand);
-  if (!unknown && !hasWrite) {
-    // A read mode reads; `git config <key>` with the key alone reads too.
-    if (hasRead || positionals.length === 1) return ALLOW_VERDICT;
-  }
+  if (isConfigRead(rest)) return ALLOW_VERDICT;
 
   const firstKey = keys[0]!;
   if (firstKey.toLowerCase() !== "core.hookspath") {
@@ -240,14 +238,19 @@ export function checkGitConfigWrite(
       reason: `host git guard: refusing to write ${firstKey} in ${repo.slug}: an included file can switch its hooks off.`,
     };
   }
-  if (options.some((o) => o === "--unset" || o === "--unset-all") || subcommand === "unset") {
+  if (rest.some((o) => o.startsWith("--unset")) || subcommand === "unset") {
     return {
       verdict: "deny",
       reason: `host git guard: refusing to unset core.hooksPath in ${repo.slug}: it drops the repo's hooks.`,
     };
   }
-  const value =
-    positionals.filter((p, i) => !(i === 0 && p === "set") && p !== firstKey).at(-1) ?? "";
+  // Only `[set] core.hooksPath <dir>` with no other flag may set it, to a tracked hooks dir.
+  const keyAt = subcommand === "set" ? 1 : 0;
+  const plainSet =
+    rest.every((w) => !w.startsWith("-")) &&
+    positionals.length === keyAt + 2 &&
+    positionals[keyAt] === firstKey;
+  const value = plainSet ? (positionals.at(-1) ?? "") : "";
   if (!isTrackedHooksDir(repo, value, config)) {
     return {
       verdict: "deny",

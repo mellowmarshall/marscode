@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - End to end without the live app: real broker on a temp socket, driven by the real host-guards hook/shim entry, the real marscode-guard CLI, and the real ship-queue guard client.
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off - End to end without the live app: real broker on a temp socket, driven by the real host-guards hook/shim entry, the real marscode-guard CLI, and the real ship-queue guard client.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -12,12 +12,20 @@ import { makeGuardProtocolGuard, protectedDiffDigest } from "@t3tools/ship-queue
 import { runShipQueueCli } from "@t3tools/ship-queue/cli";
 import { createJob, readJob } from "@t3tools/ship-queue/jobStore";
 import type { ShipForge } from "@t3tools/ship-queue/types";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { GuardGrantBroker, type GuardThreadNotice } from "./GuardGrantBroker.ts";
 
 const cleanups: Array<() => Promise<void> | void> = [];
+/** Job freshness is checked against Date, so job tests pin it to one epoch. */
+const FIXED_NOW = Date.parse("2026-11-27T12:00:00.000Z");
+function freezeDate(): void {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(FIXED_NOW);
+}
+
 afterEach(async () => {
+  vi.useRealTimers();
   for (const fn of cleanups.splice(0).toReversed()) await fn();
 });
 
@@ -191,6 +199,7 @@ describe("owner approval flows against a real broker", () => {
   });
 
   it("the real ship-queue guard client checks a job-bound grant as a trusted worker", async () => {
+    freezeDate();
     const dir = tempDir("guard-flow-queue-");
     const queueRoot = NodePath.join(dir, "queue");
     const worktree = NodePath.join(dir, "wt");
@@ -206,7 +215,11 @@ describe("owner approval flows against a real broker", () => {
         threadId: peer.threadId,
         peerPid: peer.pid,
       }),
-      queueWorkerTrust: { queueRoot, isTrustedWorker: (pid) => pid === 9200 },
+      queueWorkerTrust: {
+        queueRoot,
+        isTrustedWorker: (pid) => pid === 9200,
+        isTrustedSubmitter: (pid) => pid === 9100,
+      },
     });
     broker.subscribe((ev) => {
       if (ev.type === "pending_added")
@@ -241,7 +254,7 @@ describe("owner approval flows against a real broker", () => {
         action_digest: protectedDiffDigest(bundle),
       },
       "body\n",
-      { now: () => "2026-11-27T00:00:00.000Z" },
+      { now: () => new Date(FIXED_NOW).toISOString() },
     );
     const guard = makeGuardProtocolGuard({ socketPath });
 
@@ -290,6 +303,7 @@ describe("owner approval flows against a real broker", () => {
   });
 
   it("ship-queue submit binds the job to the broker-verified thread, not the thread its environment claims", async () => {
+    freezeDate();
     const dir = tempDir("guard-flow-submit-");
     const socketPath = NodePath.join(dir, "guard.sock");
     const broker = new GuardGrantBroker({
@@ -300,6 +314,11 @@ describe("owner approval flows against a real broker", () => {
         threadId: "thread-verified",
         peerPid: 4400,
       }),
+      queueWorkerTrust: {
+        queueRoot: NodePath.join(dir, "queue"),
+        isTrustedWorker: () => false,
+        isTrustedSubmitter: (pid) => pid === 4400,
+      },
     });
     await broker.start("linux");
     cleanups.push(() => broker.close());

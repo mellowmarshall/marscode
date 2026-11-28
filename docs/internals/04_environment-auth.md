@@ -54,8 +54,10 @@ model.
   ([GuardSocketProtocol](../../apps/server/src/devtools/GuardSocketProtocol.ts)) takes a caller's
   thread from its socket peer's process tree. A detached ship-queue worker has no thread, so it names
   a job instead; the broker accepts that only from a recorded, trusted worker process
-  ([GuardQueueWorker](../../apps/server/src/devtools/GuardQueueWorker.ts)) and only for the job's
-  own thread, worktree, branch, and protected-diff digest. Workers may check grants, never request
+  ([GuardQueueWorker](../../apps/server/src/devtools/GuardQueueWorker.ts)) and only for the thread
+  the broker bound to that job when its own `ship-queue submit` process asked
+  ([GuardJobBindings](../../apps/server/src/devtools/GuardJobBindings.ts)); the agent-writable job
+  file never decides it. Workers may check grants, never request
   them. `check` and `peek` never consume a grant; only `use`, sent by the guarded command itself,
   does.
 

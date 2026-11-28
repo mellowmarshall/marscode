@@ -213,7 +213,7 @@ describe("mergeGuard and ghApiGuard", () => {
         repoDir,
         config,
       ).verdict,
-    ).toBe("allow");
+    ).toBe("deny");
     expect(decideGh(["api", "repos/example-org/demo-app/pulls/12"], repoDir, config).verdict).toBe(
       "allow",
     );
@@ -239,9 +239,10 @@ describe("mergeGuard and ghApiGuard", () => {
         "repo settings change: owner approval required",
       );
     }
+    // The cwd repo is always a candidate target, so a managed cwd needs the owner.
     expect(
       decideGh(["repo", "edit", "other-org/other-repo", "-d", "x"], repoDir, config).verdict,
-    ).toBe("allow");
+    ).toBe("deny");
     expect(decideGh(["repo", "view", "example-org/demo-app"], repoDir, config).verdict).toBe(
       "allow",
     );
@@ -261,7 +262,39 @@ describe("mergeGuard and ghApiGuard", () => {
       { args: ["repo", "edit", "--description", "other-org/other-repo"], cwd: repoDir },
       { args: ["repo", "edit", "--homepage", "other-org/other-repo"], cwd: repoDir },
       { args: ["repo", "edit", "--template", "example-org/demo-app"], cwd: outside },
-      { args: ["repo", "edit", "other-org/other-repo", "--frobnicate"], cwd: outside },
+      { args: ["repo", "fork", "--remote", "example-org/demo-app"], cwd: outside },
+      { args: ["repo", "fork", "example-org/demo-app", "--remote", "--clone"], cwd: outside },
+      {
+        args: ["repo", "deploy-key", "add", "key.pub", "-w", "-R", "example-org/demo-app"],
+        cwd: outside,
+      },
+      { args: ["repo", "deploy-key", "add", "key.pub", "-w"], cwd: repoDir },
+      { args: ["repo", "deploy-key", "list", "-R", "example-org/demo-app"], cwd: outside },
+      { args: ["repo", "archive", "example-org/demo-app", "-y"], cwd: outside },
+      { args: ["repo", "autolink", "create", "X-", "https://x/<num>"], cwd: repoDir },
+      {
+        args: ["api", "-X", "POST", "repos/other-org/other-repo/forks", "--input", "-"],
+        cwd: outside,
+      },
+      {
+        args: ["api", "-X", "POST", "repos/example-org/demo-app/hooks", "-f", "name=web"],
+        cwd: outside,
+      },
+      { args: ["api", "-X", "PUT", "repos/example-org/demo-app/environments/prod"], cwd: outside },
+      {
+        args: [
+          "api",
+          "-X",
+          "PUT",
+          "repos/example-org/demo-app/actions/permissions",
+          "-F",
+          "enabled=false",
+        ],
+        cwd: outside,
+      },
+      { args: ["api", "-X", "PATCH", "repos/example-org/demo-app/invitations/1"], cwd: outside },
+      { args: ["api", "-X", "POST", "orgs/example-org/hooks", "-f", "name=web"], cwd: outside },
+      { args: ["api", "-X", "PUT", "repos/example-org/demo-app/rulesets/1"], cwd: outside },
       { args: ["repo", "deploy-key", "add", "key.pub", "--allow-write"], cwd: repoDir },
       { args: ["repo", "fork", "other-org/other-repo", "--org", "example-org"], cwd: outside },
       { args: ["api", "-X", "POST", "user/repos", "-f", "name=x"], cwd: outside },
@@ -300,10 +333,16 @@ describe("mergeGuard and ghApiGuard", () => {
       expect(verdict.verdict === "deny" ? verdict.reason : "").toContain("repo settings change");
     }
     for (const args of [
-      ["repo", "deploy-key", "add", "key.pub", "-R", "example-org/demo-app"],
-      ["repo", "fork", "example-org/demo-app"],
+      ["repo", "view", "example-org/demo-app"],
+      ["repo", "clone", "example-org/demo-app"],
       ["repo", "delete", "other-org/other-repo", "--yes"],
       ["api", "-X", "POST", "repos/other-org/other-repo/forks"],
+      ["api", "-X", "POST", "repos/example-org/demo-app/issues", "-f", "title=t"],
+      ["api", "-X", "POST", "repos/example-org/demo-app/issues/3/comments", "-f", "body=b"],
+      ["api", "-X", "POST", "repos/example-org/demo-app/pulls/3/reviews", "-f", "event=COMMENT"],
+      ["api", "-X", "POST", "repos/example-org/demo-app/labels", "-f", "name=bug"],
+      ["api", "-X", "POST", "repos/example-org/demo-app/statuses/abc1234", "-f", "state=success"],
+      ["api", "-X", "POST", "repos/example-org/demo-app/check-runs", "-f", "name=ci"],
     ]) {
       expect(decideGh(args, outside, config).verdict, args.join(" ")).toBe("allow");
     }

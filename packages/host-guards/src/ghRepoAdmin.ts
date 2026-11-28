@@ -1,61 +1,51 @@
-// @effect-diagnostics nodeBuiltinImport:off - Repo administration (settings, rename, create, delete, transfer, keys, forks into orgs) is owner-only in managed orgs.
+// @effect-diagnostics nodeBuiltinImport:off - Deny-by-default repo administration in managed orgs: a short allowlist of gh repo subcommands and gh api write paths.
+import { GH_UNREADABLE_INPUT } from "./ghGraphqlGuard.ts";
 import { resolveEnvGhRepoSlug } from "./ghArgParse.ts";
 import type { HostGuardsConfig } from "./hostConfig.ts";
 import { ALLOW_VERDICT, type GuardVerdict } from "./pushGuard.ts";
 import { inspectRepo, isSlugInScope, parseRepoSlugArg } from "./repoScope.ts";
 
-const ADMIN_SUBS = new Set(["create", "new", "edit", "rename", "delete", "archive", "unarchive"]);
-/** `gh repo` flags that take a value, across the admin subcommands (and global ones). */
-const VALUE_FLAGS = new Set([
-  "-R",
-  "--repo",
-  "--hostname",
-  "-d",
-  "--description",
-  "-h",
-  "--homepage",
-  "--default-branch",
-  "--add-topic",
-  "--remove-topic",
-  "--visibility",
-  "-t",
-  "--team",
-  "--title",
-  "-p",
-  "--template",
-  "-g",
-  "--gitignore",
-  "-l",
-  "--license",
-  "-s",
-  "--source",
-  "-r",
-  "--remote",
-  "--remote-name",
-  "--org",
-  "--fork-name",
-  "-k",
-  "--key",
+/** `gh repo` subcommands that change nothing remote. `sync` has its own guard. */
+const GH_REPO_READ_SUBS: ReadonlySet<string> = new Set([
+  "view",
+  "list",
+  "clone",
+  "set-default",
+  "sync",
 ]);
-const BOOL_FLAGS = new Set([
-  "-y",
-  "--yes",
-  "--confirm",
-  "--private",
-  "--public",
-  "--internal",
-  "--push",
-  "-c",
-  "--clone",
-  "--include-all-branches",
-  "--default-branch-only",
-  "--allow-write",
-  "--disable-issues",
-  "--disable-wiki",
-]);
-const BOOL_FLAG_PREFIXES = ["--enable-", "--allow-", "--delete-branch-on-merge", "--accept-"];
-/** A repo name with no owner: the account `gh` is logged in as, which cannot be known offline. */
-const BARE_NAME_RE = /^[A-Za-z0-9_.-]+$/;
+
+/** Everyday `gh api` writes under `repos/<managed>/<repo>/`; every other write is owner-only. */
+const GH_API_EVERYDAY_WRITES: ReadonlyArray<{
+  readonly methods: ReadonlySet<string>;
+  readonly path: RegExp;
+}> = [
+  { methods: new Set(["POST"]), path: /^issues$/ },
+  { methods: new Set(["PATCH"]), path: /^issues\/\d+$/ },
+  { methods: new Set(["POST"]), path: /^issues\/\d+\/comments$/ },
+  { methods: new Set(["PATCH", "DELETE"]), path: /^issues\/comments\/\d+$/ },
+  { methods: new Set(["POST", "PUT", "DELETE"]), path: /^issues\/\d+\/labels(?:\/[^/]+)?$/ },
+  { methods: new Set(["POST", "DELETE"]), path: /^issues\/\d+\/assignees$/ },
+  { methods: new Set(["POST"]), path: /^pulls$/ },
+  { methods: new Set(["PATCH"]), path: /^pulls\/\d+$/ },
+  { methods: new Set(["POST"]), path: /^pulls\/\d+\/comments(?:\/\d+\/replies)?$/ },
+  { methods: new Set(["PATCH", "DELETE"]), path: /^pulls\/comments\/\d+$/ },
+  { methods: new Set(["POST"]), path: /^pulls\/\d+\/reviews$/ },
+  {
+    methods: new Set(["PUT", "POST", "DELETE"]),
+    path: /^pulls\/\d+\/reviews\/\d+(?:\/events|\/dismissals)?$/,
+  },
+  { methods: new Set(["POST", "DELETE"]), path: /^pulls\/\d+\/requested_reviewers$/ },
+  { methods: new Set(["POST"]), path: /^labels$/ },
+  { methods: new Set(["PATCH", "DELETE"]), path: /^labels\/[^/]+$/ },
+  { methods: new Set(["POST"]), path: /^statuses\/[0-9a-f]{7,64}$/i },
+  { methods: new Set(["POST"]), path: /^check-runs$/ },
+  { methods: new Set(["PATCH"]), path: /^check-runs\/\d+$/ },
+  { methods: new Set(["POST"]), path: /^git\/refs$/ },
+  { methods: new Set(["PATCH", "DELETE"]), path: /^git\/refs\/heads\/.+$/ },
+];
+
+/** What the queue daemon itself writes when it lands a job. */
+const QUEUE_WRITES: ReadonlyArray<RegExp> = [/^pulls\/\d+\/merge$/];
 
 export function repoAdminRefusal(what: string): GuardVerdict {
   return {
@@ -64,94 +54,62 @@ export function repoAdminRefusal(what: string): GuardVerdict {
   };
 }
 
-/** `gh api` REST calls under `repos/<o>/<r>` that change a managed repo's settings or access. */
-export function isRepoAdminApiCall(method: string, rest: string): boolean {
-  if (method === "GET") return false;
-  if (rest === "") return true;
-  if (method === "POST" && (rest === "transfer" || rest === "keys")) return true;
-  return (method === "PUT" || method === "DELETE") && /^collaborators\/[^/]+$/.test(rest);
+export function isEverydayApiWrite(method: string, rest: string, queued: boolean): boolean {
+  if (GH_API_EVERYDAY_WRITES.some((w) => w.methods.has(method) && w.path.test(rest))) return true;
+  return queued && QUEUE_WRITES.some((p) => p.test(rest));
+}
+
+function bodyField(
+  fields: Readonly<Record<string, string>>,
+  raw: string,
+  key: string,
+): string | null {
+  if (fields[key] === GH_UNREADABLE_INPUT || raw === GH_UNREADABLE_INPUT) return null;
+  if (fields[key] !== undefined) return fields[key];
+  if (!raw.trim()) return "";
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const value = parsed?.[key];
+    return typeof value === "string" ? value : "";
+  } catch {
+    return null;
+  }
 }
 
 /**
- * `gh api` calls that create a repo in a managed org whatever repo they start from: user repos
- * (the account's owner is unknown offline), forks with `organization`, and template generation.
+ * `gh api` writes that create a repo in a managed org whatever repo they start from: user repos
+ * (the account's owner is unknown offline), any write under `orgs/<managed>/`, forks with an
+ * `organization`, and template generation. A body it cannot read counts as managed.
  */
 export function createsManagedRepo(
   method: string,
   path: string,
   fields: Readonly<Record<string, string>>,
+  raw: string,
   config: HostGuardsConfig,
 ): boolean {
-  if (method !== "POST") return false;
+  if (method === "GET") return false;
+  const managed = (org: string | null) =>
+    org === null || config.orgs.includes(org.trim().toLowerCase());
   if (path === "user/repos") return true;
-  const managedOrg = (org: string | undefined) =>
-    org !== undefined && config.orgs.includes(org.trim().toLowerCase());
-  const orgCreate = /^orgs\/([^/]+)\/repos$/.exec(path);
-  if (orgCreate) return managedOrg(orgCreate[1]);
-  const repoAction = /^repos\/[^/]+\/[^/]+\/(forks|generate)$/.exec(path);
-  if (repoAction?.[1] === "forks") return managedOrg(fields.organization);
-  if (repoAction?.[1] === "generate") return !fields.owner || managedOrg(fields.owner);
+  const org = /^orgs\/([^/]+)(?:\/|$)/.exec(path);
+  if (org) return managed(org[1] ?? null);
+  const action = /^repos\/[^/]+\/[^/]+\/(forks|generate)$/.exec(path);
+  if (action?.[1] === "forks") {
+    const target = bodyField(fields, raw, "organization");
+    return target === null || (target !== "" && managed(target));
+  }
+  if (action?.[1] === "generate") {
+    const owner = bodyField(fields, raw, "owner");
+    return owner === null || owner === "" || managed(owner);
+  }
   return false;
 }
 
-interface ParsedRepoArgs {
-  readonly repoFlag: string | null;
-  readonly orgFlag: string | null;
-  readonly positionals: ReadonlyArray<string>;
-  readonly unknownFlag: string | null;
-  readonly allowWrite: boolean;
-}
-
-function parseRepoArgs(
-  args: ReadonlyArray<string>,
-  fromIndex: number,
-  sub: string,
-): ParsedRepoArgs {
-  let repoFlag: string | null = null;
-  let orgFlag: string | null = null;
-  let unknownFlag: string | null = null;
-  let allowWrite = false;
-  const positionals: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i]!;
-    if (a === "--") {
-      if (i >= fromIndex) positionals.push(...args.slice(i + 1));
-      break;
-    }
-    if (!a.startsWith("-") || a === "-") {
-      if (i > fromIndex) positionals.push(a);
-      continue;
-    }
-    const eq = a.startsWith("--") ? a.indexOf("=") : -1;
-    const name = eq === -1 ? a : a.slice(0, eq);
-    const attachedR = !a.startsWith("--") && a.startsWith("-R") && a.length > 2;
-    let value: string | null = null;
-    if (attachedR) {
-      value = a.slice(2).replace(/^=/, "");
-    } else if (VALUE_FLAGS.has(name) && !(sub === "edit" && name === "--template")) {
-      value = eq !== -1 ? a.slice(eq + 1) : (args[i + 1] ?? "");
-      if (eq === -1) i += 1;
-    } else if (
-      BOOL_FLAGS.has(name) ||
-      BOOL_FLAG_PREFIXES.some((p) => name.startsWith(p)) ||
-      (sub === "edit" && name === "--template")
-    ) {
-      if (name === "--allow-write") allowWrite = true;
-      continue;
-    } else {
-      unknownFlag ??= a;
-      continue;
-    }
-    if (attachedR || name === "-R" || name === "--repo") repoFlag = value;
-    if (name === "--org") orgFlag = value;
-  }
-  return { repoFlag, orgFlag, positionals, unknownFlag, allowWrite };
-}
-
 /**
- * `gh repo create|edit|rename|delete|archive|fork --org|deploy-key add --allow-write` on a
- * managed repo. The target resolves as gh does (`-R`, then `GH_REPO`, then the cwd repo) and a
- * positional slug counts too; an unknown flag or an owner that cannot be known fails closed.
+ * `gh repo` in a managed org: only `GH_REPO_READ_SUBS` run without the owner. The target is every
+ * repo the call could mean (`-R` in any form, `GH_REPO`, any slug-shaped word, the cwd repo, and
+ * `--org`), so a flag value can never hide the real one.
  */
 export function decideGhRepoAdmin(
   args: ReadonlyArray<string>,
@@ -162,42 +120,33 @@ export function decideGhRepoAdmin(
   env: NodeJS.ProcessEnv,
 ): GuardVerdict {
   const sub = words[1] ?? "";
-  const deployKeyAdd = sub === "deploy-key" && words[2] === "add";
-  if (!ADMIN_SUBS.has(sub) && sub !== "fork" && !deployKeyAdd) return ALLOW_VERDICT;
-  const parsed = parseRepoArgs(args, subIndex, sub);
-  const what = `gh repo ${deployKeyAdd ? "deploy-key add" : sub}`;
-
-  if (sub === "fork") {
-    if (!parsed.orgFlag) return ALLOW_VERDICT;
-    return config.orgs.includes(parsed.orgFlag.trim().toLowerCase())
-      ? repoAdminRefusal(`${what} --org ${parsed.orgFlag}`)
-      : ALLOW_VERDICT;
-  }
-  if (deployKeyAdd && !parsed.allowWrite) return ALLOW_VERDICT;
-  if (parsed.unknownFlag)
-    return repoAdminRefusal(`${what} with unrecognised flag ${parsed.unknownFlag}`);
-
+  if (!sub || GH_REPO_READ_SUBS.has(sub)) return ALLOW_VERDICT;
+  const what = `gh repo ${words.slice(1, 3).join(" ")}`;
   const candidates: string[] = [];
-  const addSlug = (raw: string | null) => {
-    const slug = raw ? parseRepoSlugArg(raw) : null;
-    if (slug) candidates.push(slug);
-    return slug !== null;
-  };
-  const explicit = addSlug(parsed.repoFlag);
+  let named = false;
+  for (let i = subIndex + 1; i < args.length; i += 1) {
+    const a = args[i]!;
+    const value = /^-R./.test(a)
+      ? a.slice(2).replace(/^=/, "")
+      : /^--(?:repo|org)=/.test(a)
+        ? a.slice(a.indexOf("=") + 1)
+        : a;
+    if (a === "--org" || a.startsWith("--org=")) {
+      const org = a === "--org" ? (args[i + 1] ?? "") : value;
+      if (config.orgs.includes(org.trim().toLowerCase()))
+        return repoAdminRefusal(`${what} --org ${org}`);
+    }
+    const slug = parseRepoSlugArg(value);
+    if (slug) {
+      candidates.push(slug);
+      named = true;
+    }
+  }
   const envSlug = resolveEnvGhRepoSlug(env);
   if (envSlug) candidates.push(envSlug);
-  // rename's positional is the new name; deploy-key add's is the key file.
-  const repoPositional = sub !== "rename" && !deployKeyAdd ? parsed.positionals[0] : undefined;
-  const positionalSlug = repoPositional !== undefined && addSlug(repoPositional);
-  if (sub === "create" || sub === "new") {
-    if (!positionalSlug && !explicit) return repoAdminRefusal(what);
-    if (repoPositional !== undefined && BARE_NAME_RE.test(repoPositional))
-      return repoAdminRefusal(what);
-  }
-  if (!explicit && !positionalSlug && !envSlug) {
-    const here = inspectRepo(cwd, config, env);
-    if (here && here.inScope) candidates.push(here.slug);
-  }
+  const here = inspectRepo(cwd, config, env);
+  if (here && here.inScope) candidates.push(here.slug);
+  if ((sub === "create" || sub === "new") && !named) return repoAdminRefusal(what);
   const managed = candidates.find((slug) => isSlugInScope(slug, config));
   return managed ? repoAdminRefusal(`${what} ${managed}`) : ALLOW_VERDICT;
 }

@@ -17,11 +17,8 @@ import type {
 } from "./GuardBrokerTypes.ts";
 import { GuardGrantStore } from "./GuardGrantStore.ts";
 import { defaultResolvePeerThreadId, type PeerThreadResolution } from "./GuardPeerIdentity.ts";
-import {
-  defaultQueueWorkerTrust,
-  GuardJobBindings,
-  type QueueWorkerTrust,
-} from "./GuardQueueWorker.ts";
+import { GuardJobBindings } from "./GuardJobBindings.ts";
+import { defaultQueueWorkerTrust, type QueueWorkerTrust } from "./GuardQueueWorker.ts";
 import {
   resolveGuardRequest,
   type GuardResolveInput,

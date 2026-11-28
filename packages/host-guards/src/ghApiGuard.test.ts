@@ -51,8 +51,9 @@ describe("ghApiGuard {branch} placeholders", () => {
         "repos/example-org/demo-app/branches/{branch}/protection/required_status_checks",
       ]),
     ).toBe("deny");
+    // Branch protection is repo administration, so even a feature branch needs the owner.
     expect(verdict(["-X", "PUT", "repos/example-org/demo-app/branches/feat-x/protection"])).toBe(
-      "allow",
+      "deny",
     );
   });
 
@@ -69,6 +70,7 @@ describe("ghApiGuard {branch} placeholders", () => {
         "branch={branch}",
       ]),
     ).toBe("deny");
-    expect(verdict([...put, "-f", "branch=feat/x", "-f", "message=m"])).toBe("allow");
+    // Contents writes are not an everyday write, so they need the owner on any branch.
+    expect(verdict([...put, "-f", "branch=feat/x", "-f", "message=m"])).toBe("deny");
   });
 });

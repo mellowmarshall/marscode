@@ -1,69 +1,32 @@
 // @effect-diagnostics nodeBuiltinImport:off - Binds a trusted ship-queue worker's grant check to one job record's thread, worktree, branch, and digest.
 import { normalizeRepoSlug } from "@t3tools/guard-protocol/digests";
 import type { GuardBundleSpec } from "@t3tools/guard-protocol/protocol";
+import { isTrustedShipQueueSubmit } from "@t3tools/host-guards/ship-queue-submit-trust";
 import { isRecordedQueueWorker } from "@t3tools/host-guards/t3-server-trust";
 import { resolveQueueRoot } from "@t3tools/ship-queue/cli";
 import { isEnded, isJobId, readJob } from "@t3tools/ship-queue/jobStore";
 
 import { bundleKeyOf } from "./GuardBrokerTypes.ts";
+import type { GuardJobBindings } from "./GuardJobBindings.ts";
 import { canonicalCwd } from "./GuardSocketPath.ts";
 
 const SHIP_QUEUE_GUARD = "ship-queue";
-const MAX_JOB_BINDINGS = 1024;
-
-export interface JobBinding {
-  readonly threadId: string;
-  readonly worktree: string;
-  readonly branch: string;
-}
-
-/**
- * job id -> the submitter's kernel-verified thread, worktree and branch, recorded by the broker
- * at submit. The job file is agent-writable, so it never decides whose grants a worker may use.
- * In memory only: a server restart forgets them, and such jobs fail closed until resubmitted.
- */
-export class GuardJobBindings {
-  private readonly bindings = new Map<string, JobBinding>();
-
-  bind(
-    jobId: string,
-    binding: JobBinding,
-  ): { readonly ok: true } | { readonly ok: false; readonly error: string } {
-    if (!isJobId(jobId)) return { ok: false, error: "invalid job_id" };
-    if (!binding.threadId) return { ok: false, error: "binding a job requires a verified thread" };
-    if (!binding.worktree || !binding.branch) {
-      return { ok: false, error: "binding a job requires its worktree and branch" };
-    }
-    const existing = this.bindings.get(jobId);
-    if (existing) {
-      const same =
-        existing.threadId === binding.threadId &&
-        existing.worktree === binding.worktree &&
-        existing.branch === binding.branch;
-      return same ? { ok: true } : { ok: false, error: "job is already bound" };
-    }
-    if (this.bindings.size >= MAX_JOB_BINDINGS) {
-      const oldest = this.bindings.keys().next().value;
-      if (oldest !== undefined) this.bindings.delete(oldest);
-    }
-    this.bindings.set(jobId, binding);
-    return { ok: true };
-  }
-
-  get(jobId: string): JobBinding | undefined {
-    return this.bindings.get(jobId);
-  }
-}
-
 export interface QueueWorkerTrust {
   readonly queueRoot: string;
   /** Whether a kernel-verified peer PID is a recorded, trusted ship-queue worker of `queueRoot`. */
   readonly isTrustedWorker: (pid: number) => boolean;
+  /** Whether a peer PID is the installed `ship-queue submit <worktree> <branch>` process. */
+  readonly isTrustedSubmitter: (pid: number, worktree: string, branch: string) => boolean;
 }
 
 export function defaultQueueWorkerTrust(queueRoot?: string): QueueWorkerTrust {
   const root = queueRoot ?? resolveQueueRoot(process.env);
-  return { queueRoot: root, isTrustedWorker: (pid) => isRecordedQueueWorker(root, pid) };
+  return {
+    queueRoot: root,
+    isTrustedWorker: (pid) => isRecordedQueueWorker(root, pid),
+    isTrustedSubmitter: (pid, worktree, branch) =>
+      isTrustedShipQueueSubmit(pid, { queueRoot: root, worktree, branch }),
+  };
 }
 
 export type QueueWorkerVerdict =

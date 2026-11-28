@@ -70,6 +70,10 @@
       "types": "./src/shimDepth.ts",
       "import": "./src/shimDepth.ts"
     },
+    "./ship-queue-submit-trust": {
+      "types": "./src/shipQueueSubmitTrust.ts",
+      "import": "./src/shipQueueSubmitTrust.ts"
+    },
     "./t3-server-trust": {
       "types": "./src/t3ServerTrust.ts",
       "import": "./src/t3ServerTrust.ts"

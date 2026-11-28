@@ -22,11 +22,8 @@ import {
 } from "./GuardBrokerTypes.ts";
 import type { GuardGrantStore } from "./GuardGrantStore.ts";
 import type { PeerThreadResolution } from "./GuardPeerIdentity.ts";
-import {
-  verifyQueueWorkerJob,
-  type GuardJobBindings,
-  type QueueWorkerTrust,
-} from "./GuardQueueWorker.ts";
+import type { GuardJobBindings } from "./GuardJobBindings.ts";
+import { verifyQueueWorkerJob, type QueueWorkerTrust } from "./GuardQueueWorker.ts";
 import { canonicalCwd } from "./GuardSocketPath.ts";
 
 const MAX_LINE_BYTES = 64 * 1024;
@@ -170,9 +167,11 @@ async function handleGuardProtocolMessage(
       writeAndCloseSocket(socket, { ok: false, error: peer.error });
       return;
     }
-    const bound = ctx.jobBindings.bind(typeof msg.job_id === "string" ? msg.job_id : "", {
+    const bound = ctx.jobBindings.bind(ctx.queueWorkerTrust, {
+      peerPid: peer.peerPid,
       threadId: peer.threadId,
-      worktree: typeof msg.cwd === "string" && msg.cwd ? canonicalCwd(msg.cwd) : "",
+      jobId: typeof msg.job_id === "string" ? msg.job_id : "",
+      worktree: typeof msg.cwd === "string" ? msg.cwd : "",
       branch: sanitizeText(msg.branch, 200),
     });
     writeAndCloseSocket(socket, bound.ok ? { ok: true, thread_id: peer.threadId } : bound);
