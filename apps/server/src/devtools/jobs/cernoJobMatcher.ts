@@ -31,6 +31,8 @@ export interface BgMatchEntry {
   readonly worktreePath?: string | undefined;
   readonly command?: string | undefined;
   readonly logPath?: string | undefined;
+  /** `timing.startedAt` in ms; NaN when unknown. */
+  readonly startedAtMs?: number | undefined;
 }
 
 const MIN_COMMAND_MATCH_LEN = 6;
@@ -226,6 +228,36 @@ export function indexCernoCandidates(
   };
 }
 
+function byStartOrder(a: number, b: number): number {
+  const ka = Number.isFinite(a) ? a : Number.POSITIVE_INFINITY;
+  const kb = Number.isFinite(b) ? b : Number.POSITIVE_INFINITY;
+  return ka - kb;
+}
+
+/**
+ * Pairs each live cerno process with at most one live background job and the reverse, in start
+ * order on both sides, so two runs of one command each keep their own verdict.
+ */
+function pairLiveCernoWithBg(
+  candidates: ReadonlyArray<CernoJobMatchCandidate>,
+  bgEntries: ReadonlyArray<BgMatchEntry>,
+): Map<string, CernoJobMatchCandidate> {
+  const liveBg = bgEntries
+    .filter((bg) => !isTerminalJobState(bg.state))
+    .toSorted((a, b) => byStartOrder(a.startedAtMs ?? NaN, b.startedAtMs ?? NaN));
+  const liveCerno = candidates
+    .filter((c) => !isTerminalJobState(c.state))
+    .toSorted((a, b) =>
+      byStartOrder(cernoIdStartTicks(a.id) ?? NaN, cernoIdStartTicks(b.id) ?? NaN),
+    );
+  const paired = new Map<string, CernoJobMatchCandidate>();
+  for (const candidate of liveCerno) {
+    const bg = liveBg.find((b) => !paired.has(b.id) && cernoMatchesBackgroundJob(candidate, b));
+    if (bg) paired.set(bg.id, candidate);
+  }
+  return paired;
+}
+
 export interface CernoVisibilityCallbacks {
   readonly listBgSummaries: () => ReadonlyArray<JobSummary>;
   readonly getBgSummary: (id: string) => JobSummary | undefined;
@@ -278,6 +310,7 @@ export class CernoVisibilityCoordinator {
       worktreePath: summary.binding.worktreePath,
       command: detail?.command,
       logPath: detail?.logPath,
+      startedAtMs: Date.parse(summary.timing.startedAt),
     };
     this.bgMatchCache.set(jobId, next);
     return (
@@ -318,17 +351,16 @@ export class CernoVisibilityCoordinator {
     const bgEntries = [...this.bgMatchCache.values()];
     const nextSuppressedBg = new Set<string>();
     const presentCernoIds = new Set<string>();
-    const nextLiveCernoByBg = new Map<string, CernoJobMatchCandidate>();
+    const candidates = this.cb.listCernoCandidates();
+    const nextLiveCernoByBg = pairLiveCernoWithBg(candidates, bgEntries);
 
-    for (const candidate of this.cb.listCernoCandidates()) {
+    for (const candidate of candidates) {
       presentCernoIds.add(candidate.id);
       const candidateLive = !isTerminalJobState(candidate.state);
       let suppressed = false;
       for (const bg of bgEntries) {
         if (!cernoMatchesBackgroundJob(candidate, bg)) continue;
         if (!isTerminalJobState(bg.state)) {
-          if (candidateLive && !nextLiveCernoByBg.has(bg.id))
-            nextLiveCernoByBg.set(bg.id, candidate);
           suppressed = true;
           break;
         }
@@ -393,20 +425,8 @@ export class CernoVisibilityCoordinator {
       : undefined;
   }
 
-  findLiveCernoForBg(
-    bgSummary: JobSummary,
-    bgDetail: JobDetail,
-  ): CernoJobMatchCandidate | undefined {
-    if (isTerminalJobState(bgSummary.state)) return undefined;
-    return this.cb.listCernoCandidates().find(
-      (c) =>
-        !isTerminalJobState(c.state) &&
-        cernoMatchesBackgroundJob(c, {
-          threadId: bgSummary.binding.threadId,
-          worktreePath: bgSummary.binding.worktreePath,
-          command: bgDetail.command,
-          logPath: bgDetail.logPath,
-        }),
-    );
+  /** The live cerno process paired with a live background job at the last sync. */
+  liveCernoForBg(bgId: string): CernoJobMatchCandidate | undefined {
+    return this.liveCernoByBg.get(bgId);
   }
 }

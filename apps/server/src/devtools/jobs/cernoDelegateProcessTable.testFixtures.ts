@@ -205,3 +205,33 @@ export function procReaders(table: ReadonlyArray<FixtureProcess>) {
     },
   };
 }
+
+/**
+ * The same agent command started again in a second shell while the first run still runs: a new
+ * delegate, real shell and `cerno watch` tree with later start ticks and the same log path.
+ */
+export function withSecondRun(
+  table: ReadonlyArray<FixtureProcess>,
+  pidOffset: number,
+  tickOffset: number,
+): ReadonlyArray<FixtureProcess> {
+  const f = DELEGATE_FIXTURE;
+  const runPids = new Set<number>([
+    f.delegatePid,
+    f.realBashPid,
+    f.delegateMonitorPid,
+    f.watchPid,
+    f.childPid,
+    f.workerPid,
+    f.watchMonitorPid,
+  ]);
+  const second = table
+    .filter((p) => runPids.has(p.pid))
+    .map((p) => ({
+      ...p,
+      pid: p.pid + pidOffset,
+      ppid: runPids.has(p.ppid) ? p.ppid + pidOffset : p.ppid,
+      startTicks: p.startTicks + tickOffset,
+    }));
+  return [...table, ...second];
+}

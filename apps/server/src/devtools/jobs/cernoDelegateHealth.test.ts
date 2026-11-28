@@ -20,6 +20,8 @@ import {
   delegateProcessTable,
   procReaders,
   toPsRows,
+  withSecondRun,
+  type FixtureProcess,
 } from "./cernoDelegateProcessTable.testFixtures.ts";
 import { makeJobRegistry } from "./JobRegistry.ts";
 import type { JobSummary } from "./types.ts";
@@ -40,16 +42,28 @@ afterEach(() => {
 });
 
 /** The sidecar `cerno watch` writes to `$XDG_RUNTIME_DIR/cerno/<pid>.json`, as cerno 2.2 does. */
+interface Verdict {
+  readonly state: string;
+  readonly confidence: number;
+  readonly hang_loop: boolean;
+  readonly cpu_active?: boolean;
+}
+
 function writeWatchSnapshot(
   dir: string,
   input: { readonly cwd: string; readonly logPath: string },
-  verdict: { readonly state: string; readonly confidence: number; readonly hang_loop: boolean },
+  verdict: Verdict,
+  run: { readonly pidOffset: number; readonly tickOffset: number } = {
+    pidOffset: 0,
+    tickOffset: 0,
+  },
 ): void {
+  const pid = F.watchPid + run.pidOffset;
   const payload = {
     schema_version: 1,
-    pid: F.watchPid,
-    child_pid: F.childPid,
-    proc_start_ticks: F.watchStartTicks,
+    pid,
+    child_pid: F.childPid + run.pidOffset,
+    proc_start_ticks: F.watchStartTicks + run.tickOffset,
     started_at_ms: NOW_MS - 7_027,
     updated_at_ms: NOW_MS,
     elapsed_sec: 7.027,
@@ -72,7 +86,7 @@ function writeWatchSnapshot(
     tail: "tick 1\ntick 2\n",
     ...verdict,
   };
-  NodeFS.writeFileSync(NodePath.join(dir, `${F.watchPid}.json`), JSON.stringify(payload), "utf8");
+  NodeFS.writeFileSync(NodePath.join(dir, `${pid}.json`), JSON.stringify(payload), "utf8");
 }
 
 const emptyShell: OrchestrationV2ThreadShellSnapshot = {
@@ -82,20 +96,23 @@ const emptyShell: OrchestrationV2ThreadShellSnapshot = {
   archivedThreads: [],
 };
 
-function commandItemEvent(command: string): OrchestrationV2DomainEvent {
-  const nowUtc = DateTime.makeUnsafe(NOW_MS);
+function commandItemEvent(
+  command: string,
+  item = { id: "item-delegate-watch", startedAtMs: NOW_MS },
+): OrchestrationV2DomainEvent {
+  const nowUtc = DateTime.makeUnsafe(item.startedAtMs);
   return {
     type: "turn-item.updated",
     threadId: ThreadId.make(THREAD_ID),
     occurredAt: nowUtc,
     payload: {
-      id: TurnItemId.make("item-delegate-watch"),
+      id: TurnItemId.make(item.id),
       threadId: ThreadId.make(THREAD_ID),
       runId: "run:1",
       nodeId: "node:1",
       providerThreadId: "pt:1",
       providerTurnId: "turn:1",
-      nativeItemRef: { driver: "antigravity", nativeId: "call_1", strength: "strong" },
+      nativeItemRef: { driver: "antigravity", nativeId: item.id, strength: "strong" },
       parentItemId: null,
       ordinal: 1,
       type: "command_execution",
@@ -122,6 +139,76 @@ function lastUpsert(chunks: ReadonlyArray<string>, id: string): JobSummary | und
   return frames.at(-1);
 }
 
+/** A registry over the fixture table with a live stream subscriber collecting its frames. */
+const openRegistry = Effect.fn("openRegistry")(function* (
+  table: ReadonlyArray<FixtureProcess>,
+  snapDir: string,
+  workDir: string,
+) {
+  const domainEvents = yield* PubSub.unbounded<OrchestrationV2DomainEvent>();
+  const registry = makeJobRegistry({
+    enableShipBridge: false,
+    cernoBridge: {
+      ...procReaders(table),
+      snapshotDirs: [snapDir],
+      platform: "linux",
+      localHostname: "host-a",
+      ciHostsPath: null,
+      expectedUid: null,
+      pollIntervalMs: 60_000,
+      nowMs: () => NOW_MS,
+      isWorkspaceAllowed: async (p) => p.startsWith(workDir),
+    },
+    backgroundBridge: {
+      localHostname: "host-a",
+      ciHostsPath: null,
+      commandDebounceMs: 10,
+      getShellSnapshot: async () => emptyShell,
+      getRunningCommandsForThread: async () => [],
+      streamDomainEvents: Stream.fromPubSub(domainEvents),
+      subscribeCommandOutput: () => Stream.empty,
+      stopThread: async () => ({ ok: true }),
+      isWorkspaceAllowed: async (p) => p.startsWith(workDir),
+    },
+  });
+  const sseAbort = new AbortController();
+  const chunks: string[] = [];
+  const reader = registry.createEventsStream(sseAbort.signal).getReader();
+  const decoder = new TextDecoder();
+  const drain = (async () => {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(decoder.decode(value, { stream: true }));
+      }
+    } catch {
+      // aborted on cleanup
+    }
+  })();
+  yield* Effect.addFinalizer(() =>
+    Effect.promise(async () => {
+      sseAbort.abort();
+      await registry.dispose();
+      await drain;
+    }),
+  );
+  return { registry, chunks, domainEvents };
+});
+
+/** Waits until the thread lists exactly `count` background jobs, oldest first. */
+function waitForBgJobs(
+  registry: ReturnType<typeof makeJobRegistry>,
+  count: number,
+): Promise<ReadonlyArray<JobSummary>> {
+  return vi.waitFor(async () => {
+    const jobs = await registry.listJobs({ threadId: THREAD_ID });
+    expect(jobs.filter((j) => j.id.startsWith("bg:"))).toHaveLength(count);
+    expect(jobs).toHaveLength(count);
+    return jobs.toSorted((x, y) => Date.parse(x.timing.startedAt) - Date.parse(y.timing.startedAt));
+  });
+}
+
 describe("cerno health through the bash delegate", () => {
   it.effect(
     "an agent's cerno watch job keeps its health bar and load when its command item hides it",
@@ -135,55 +222,7 @@ describe("cerno health through the bash delegate", () => {
         const healthy = { state: "RUNNING", confidence: 1, hang_loop: false };
         writeWatchSnapshot(snapDir, { cwd: workDir, logPath }, healthy);
 
-        const domainEvents = yield* PubSub.unbounded<OrchestrationV2DomainEvent>();
-        const registry = makeJobRegistry({
-          enableShipBridge: false,
-          cernoBridge: {
-            ...procReaders(table),
-            snapshotDirs: [snapDir],
-            platform: "linux",
-            localHostname: "host-a",
-            ciHostsPath: null,
-            expectedUid: null,
-            pollIntervalMs: 60_000,
-            nowMs: () => NOW_MS,
-            isWorkspaceAllowed: async (p) => p.startsWith(workDir),
-          },
-          backgroundBridge: {
-            localHostname: "host-a",
-            ciHostsPath: null,
-            commandDebounceMs: 10,
-            getShellSnapshot: async () => emptyShell,
-            getRunningCommandsForThread: async () => [],
-            streamDomainEvents: Stream.fromPubSub(domainEvents),
-            subscribeCommandOutput: () => Stream.empty,
-            stopThread: async () => ({ ok: true }),
-            isWorkspaceAllowed: async (p) => p.startsWith(workDir),
-          },
-        });
-
-        const sseAbort = new AbortController();
-        const chunks: string[] = [];
-        const reader = registry.createEventsStream(sseAbort.signal).getReader();
-        const decoder = new TextDecoder();
-        const drain = (async () => {
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              chunks.push(decoder.decode(value, { stream: true }));
-            }
-          } catch {
-            // aborted on cleanup
-          }
-        })();
-        yield* Effect.addFinalizer(() =>
-          Effect.promise(async () => {
-            sseAbort.abort();
-            await registry.dispose();
-            await drain;
-          }),
-        );
+        const { registry, chunks, domainEvents } = yield* openRegistry(table, snapDir, workDir);
 
         // Only the `cerno watch` has a sidecar: the delegate shells are not cerno jobs.
         const before = yield* Effect.promise(() => registry.listJobs({ refresh: true }));
@@ -194,14 +233,8 @@ describe("cerno health through the bash delegate", () => {
 
         // The provider reports the agent's command; its job hides the cerno job.
         yield* PubSub.publish(domainEvents, commandItemEvent(agentWatchCommand(logPath)));
-        const bg = yield* Effect.promise(() =>
-          vi.waitFor(async () => {
-            const jobs = await registry.listJobs({ threadId: THREAD_ID });
-            expect(jobs).toHaveLength(1);
-            expect(jobs[0]!.id.startsWith("bg:")).toBe(true);
-            return jobs[0]!;
-          }),
-        );
+        const [bg] = yield* Effect.promise(() => waitForBgJobs(registry, 1));
+        if (!bg) throw new Error("no background job");
         expect(bg.cerno).toMatchObject({ state: "RUNNING", pips: 4, label: "Healthy" });
         yield* Effect.promise(() =>
           vi.waitFor(() => expect(lastUpsert(chunks, bg.id)?.cerno?.pips).toBe(4)),
@@ -236,6 +269,118 @@ describe("cerno health through the bash delegate", () => {
         );
         const detail = yield* Effect.promise(() => registry.getJobDetail(bg.id));
         expect(detail?.cerno?.label).toBe("Stalled");
+      }),
+  );
+  it.effect("two runs of one command each keep their own run's verdict, in start order", () =>
+    Effect.gen(function* () {
+      const snapDir = mkTempDir("t3-delegate-snap-");
+      const workDir = mkTempDir("t3-delegate-work-");
+      const logPath = NodePath.join(workDir, "run.log");
+      NodeFS.writeFileSync(logPath, "tick 1\n", "utf8");
+      const second = { pidOffset: 50, tickOffset: 6_000 };
+      const table = withSecondRun(
+        delegateProcessTable({ threadId: THREAD_ID, logPath }),
+        second.pidOffset,
+        second.tickOffset,
+      );
+      // The first run hangs; the agent starts the same command again.
+      const stalled = { state: "STUCK_LOOP", confidence: 0.6, hang_loop: true };
+      writeWatchSnapshot(snapDir, { cwd: workDir, logPath }, stalled);
+      const healthy = { state: "RUNNING", confidence: 1, hang_loop: false };
+      writeWatchSnapshot(snapDir, { cwd: workDir, logPath }, healthy, second);
+      const { registry, chunks, domainEvents } = yield* openRegistry(table, snapDir, workDir);
+      yield* Effect.promise(() => registry.listJobs({ refresh: true }));
+
+      // Published newest first, so pairing cannot lean on arrival or list order.
+      const command = agentWatchCommand(logPath);
+      yield* PubSub.publish(
+        domainEvents,
+        commandItemEvent(command, { id: "item-run-2", startedAtMs: NOW_MS - 60_000 }),
+      );
+      yield* PubSub.publish(
+        domainEvents,
+        commandItemEvent(command, { id: "item-run-1", startedAtMs: NOW_MS - 120_000 }),
+      );
+      const [first, later] = yield* Effect.promise(() => waitForBgJobs(registry, 2));
+      if (!first || !later) throw new Error("expected two background jobs");
+      expect(first.cerno).toMatchObject({ label: "Stalled", pips: 2 });
+      expect(later.cerno).toMatchObject({ label: "Healthy", pips: 4 });
+
+      const firstDetail = yield* Effect.promise(() => registry.getJobDetail(first.id));
+      const laterDetail = yield* Effect.promise(() => registry.getJobDetail(later.id));
+      expect(firstDetail?.cerno?.label).toBe("Stalled");
+      expect(firstDetail?.pidStats?.pid).toBe(F.watchPid);
+      expect(laterDetail?.pidStats?.pid).toBe(F.watchPid + second.pidOffset);
+      expect(laterDetail?.cerno?.label).toBe("Healthy");
+      yield* Effect.promise(() =>
+        vi.waitFor(() => {
+          expect(lastUpsert(chunks, first.id)?.cerno?.label).toBe("Stalled");
+          expect(lastUpsert(chunks, later.id)?.cerno?.label).toBe("Healthy");
+        }),
+      );
+    }),
+  );
+
+  it.effect(
+    "a confidence or summary change re-sends the job, and a gone snapshot drops its health",
+    () =>
+      Effect.gen(function* () {
+        const snapDir = mkTempDir("t3-delegate-snap-");
+        const workDir = mkTempDir("t3-delegate-work-");
+        const logPath = NodePath.join(workDir, "run.log");
+        NodeFS.writeFileSync(logPath, "tick 1\n", "utf8");
+        const table = delegateProcessTable({ threadId: THREAD_ID, logPath });
+        const io = { cwd: workDir, logPath };
+        writeWatchSnapshot(snapDir, io, { state: "RUNNING", confidence: 1, hang_loop: false });
+        const { registry, chunks, domainEvents } = yield* openRegistry(table, snapDir, workDir);
+        yield* Effect.promise(() => registry.listJobs({ refresh: true }));
+        const rescan = () =>
+          Effect.promise(() => registry.listJobs({ refresh: true })).pipe(Effect.asVoid);
+        yield* PubSub.publish(domainEvents, commandItemEvent(agentWatchCommand(logPath)));
+        const [bg] = yield* Effect.promise(() => waitForBgJobs(registry, 1));
+        if (!bg) throw new Error("no background job");
+        yield* Effect.promise(() =>
+          vi.waitFor(() => expect(lastUpsert(chunks, bg.id)?.cerno?.confidence).toBe(1)),
+        );
+
+        // Same pips (4) and label: only the confidence moves.
+        writeWatchSnapshot(snapDir, io, { state: "RUNNING", confidence: 0.93, hang_loop: false });
+        yield* rescan();
+        yield* Effect.promise(() =>
+          vi.waitFor(() => {
+            const sent = lastUpsert(chunks, bg.id)?.cerno;
+            expect(sent).toMatchObject({ pips: 4, label: "Healthy", confidence: 0.93 });
+          }),
+        );
+
+        // Only the summary moves.
+        writeWatchSnapshot(snapDir, io, {
+          state: "RUNNING",
+          confidence: 0.93,
+          hang_loop: false,
+          cpu_active: true,
+        });
+        yield* rescan();
+        yield* Effect.promise(() =>
+          vi.waitFor(() =>
+            expect(lastUpsert(chunks, bg.id)?.cerno?.summary).toBe("RUNNING (93%) · CPU active"),
+          ),
+        );
+
+        // The cerno process goes away: the job is sent again with no health.
+        NodeFS.rmSync(NodePath.join(snapDir, `${F.watchPid}.json`));
+        const [after] = yield* Effect.promise(() =>
+          registry.listJobs({ threadId: THREAD_ID, refresh: true }),
+        );
+        expect(after?.id).toBe(bg.id);
+        expect(after?.cerno).toBeUndefined();
+        yield* Effect.promise(() =>
+          vi.waitFor(() => {
+            const sent = lastUpsert(chunks, bg.id);
+            expect(sent).toBeDefined();
+            expect(sent && "cerno" in sent).toBe(false);
+          }),
+        );
       }),
   );
 });

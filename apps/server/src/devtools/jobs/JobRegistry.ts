@@ -302,11 +302,9 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
       if (visibility?.suppressedBgIds.has(id)) return null;
       const bgDetail = backgroundBridge?.getDetail(id) ?? null;
       if (bgDetail) {
-        if (visibility && backgroundBridge) {
-          const bgSummary = backgroundBridge.getSummary(id);
-          const matched = bgSummary
-            ? visibility.findLiveCernoForBg(bgSummary, bgDetail)
-            : undefined;
+        if (visibility) {
+          // The same one-to-one pairing the summaries use, so the detail shows the same run.
+          const matched = visibility.liveCernoForBg(id);
           if (matched) {
             return {
               ...bgDetail,
