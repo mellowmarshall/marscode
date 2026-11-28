@@ -11,6 +11,7 @@ import type { CiHostGuardRunner } from "@t3tools/ship-queue/hostsToggle";
 import { ciToggleAuditPath } from "@t3tools/ship-queue/ciToggleAudit";
 import { isHostOff, setCiHostAvailability } from "@t3tools/ship-queue/hostOffMarker";
 
+import { GuardGrantBroker } from "../GuardGrantBroker.ts";
 import { readCiToggleAudit } from "./CiToggleAudit.ts";
 
 const OFF_AT = "2026-11-28T11:00:00.000Z";
@@ -148,7 +149,7 @@ describe("ship-queue hosts on for a host turned off with a reason", () => {
   it("refuses an agent's hosts on, naming the reason, who set it and when", async () => {
     const ctx = setup();
     turnOff(ctx.queueRoot, ctx.manifestPath, OFF_REASON);
-    // No approval window is reachable, and the agent cannot approve itself.
+    // No broker is reachable here, so neither request can reach the owner.
     for (const env of [
       AGENT_ENV,
       { ...AGENT_ENV, HOST_GUARD_OVERRIDE: "agent wants CI back on" },
@@ -166,6 +167,48 @@ describe("ship-queue hosts on for a host turned off with a reason", () => {
       ["refused", "ship-queue-cli", false],
     ]);
     expect(audit[0]).toMatchObject({ host: "host-b", on: true, reason: OFF_REASON });
+  });
+
+  it("a reachable broker never lets an agent's own HOST_GUARD_OVERRIDE turn the host on", async () => {
+    const ctx = setup();
+    turnOff(ctx.queueRoot, ctx.manifestPath, OFF_REASON);
+    const socketPath = NodePath.join(ctx.dir, "real-guard.sock");
+    const pendingIds: string[] = [];
+    let onPending: (() => void) | null = null;
+    const broker = new GuardGrantBroker({
+      socketPath,
+      signingStateDir: ctx.dir,
+      resolvePeerThreadId: async () => ({ verified: true, threadId: "thread-1", peerPid: 4300 }),
+    });
+    broker.subscribe((ev) => {
+      if (ev.type !== "pending_added") return;
+      pendingIds.push(ev.request.requestId);
+      onPending?.();
+    });
+    await broker.start("linux");
+    closers.push(async () => broker.close());
+    const pending = new Promise<void>((resolve) => {
+      onPending = resolve;
+    });
+
+    const run = hostsOn(
+      ctx,
+      { ...AGENT_ENV, HOST_GUARD_OVERRIDE: "agent wants CI back on now" },
+      realGuard(ctx.configPath, socketPath),
+    );
+    // The agent's override only asks the owner; while the owner has not answered, CI stays off.
+    await pending;
+    expect(isHostOff(ctx.queueRoot, "host-b")).toBe(true);
+    expect(broker.listPending().map((r) => r.guard)).toEqual(["ci-host-on"]);
+    broker.resolveRequest(pendingIds[0]!, { decision: "deny", reason: "keep it off" });
+
+    const res = await run;
+    expect(res.code).not.toBe(0);
+    expect(res.err).toContain(OFF_REASON);
+    expect(isHostOff(ctx.queueRoot, "host-b")).toBe(true);
+    const audit = readCiToggleAudit(ctx.queueRoot);
+    expect(audit.map((e) => e.outcome)).toEqual(["refused"]);
+    expect(audit.some((e) => e.outcome === "requested" || e.outcome === "applied")).toBe(false);
   });
 
   it("turns the host on after the owner approves the override, and audits it", async () => {

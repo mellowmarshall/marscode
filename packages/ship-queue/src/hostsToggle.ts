@@ -19,21 +19,14 @@ export type CiHostGuardRunner = (input: {
 const GUARD_WAIT_MS = 30 * 60_000;
 
 /**
- * The installed `marscode-host-guard`, found from the passwd home directory (not `$HOME` or
- * `$PATH`, which the caller controls), owned by this user and not writable by others.
+ * The first candidate that is a regular file (after following symlinks), owned by `uid` or root,
+ * and not writable by group or others. This stops environment redirection and other-user or
+ * group/world-writable files; it cannot stop a same-user process that rewrites the guard files.
  */
-function trustedGuardBinary(): string | null {
-  let home = "";
-  try {
-    home = NodeOS.userInfo().homedir;
-  } catch {
-    // no passwd entry: only the system path is a candidate
-  }
-  const candidates = [
-    ...(home ? [NodePath.join(home, ".local", "bin", "marscode-host-guard")] : []),
-    "/usr/local/bin/marscode-host-guard",
-  ];
-  const uid = typeof process.getuid === "function" ? process.getuid() : -1;
+export function pickTrustedGuardBinary(
+  candidates: ReadonlyArray<string>,
+  uid: number,
+): string | null {
   for (const candidate of candidates) {
     try {
       const real = NodeFS.realpathSync(candidate);
@@ -46,6 +39,24 @@ function trustedGuardBinary(): string | null {
     }
   }
   return null;
+}
+
+/** The installed guard, found from the passwd home directory, never from `$HOME` or `$PATH`. */
+function trustedGuardBinary(): string | null {
+  let home = "";
+  try {
+    home = NodeOS.userInfo().homedir;
+  } catch {
+    // no passwd entry: only the system path is a candidate
+  }
+  const candidates = [
+    ...(home ? [NodePath.join(home, ".local", "bin", "marscode-host-guard")] : []),
+    "/usr/local/bin/marscode-host-guard",
+  ];
+  return pickTrustedGuardBinary(
+    candidates,
+    typeof process.getuid === "function" ? process.getuid() : -1,
+  );
 }
 
 export const installedCiHostGuard: CiHostGuardRunner = async (input) => {
