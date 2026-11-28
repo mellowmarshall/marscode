@@ -187,6 +187,8 @@ export async function runPostMergeSync(
       },
       cmdline,
       cwd: job.primary,
+      // The base's sync fetches the merged base from the forge.
+      forge: true,
       timeoutMs: deps.postMergeTimeoutMs ?? DEFAULT_POST_MERGE_TIMEOUT_MS,
       run: deps.run,
     });

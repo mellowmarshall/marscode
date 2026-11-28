@@ -5,9 +5,10 @@ import * as NodePath from "node:path";
 import { shellSingleQuote } from "@t3tools/ssh/command";
 
 import type { ShipDeclaration } from "./declaration.ts";
-import { CI_SCRUB_SECRET_VARS, formatSecretStdinPayload } from "./dopplerBroker.ts";
+import { formatSecretStdinPayload } from "./dopplerBroker.ts";
 import { jobEvidenceDir } from "./jobStore.ts";
 import { sshRemoteCommandRunner, type RemoteCommandRunner } from "./sshExec.ts";
+import { allowlistedStepBaseEnv, buildRemoteEnvAllowlistScript } from "./stepEnv.ts";
 import {
   buildToolchainEnv,
   buildToolchainShellSetup,
@@ -17,19 +18,11 @@ import type { ProcessResult, ProcessRunner } from "./types.ts";
 
 export type StepMode = "plain" | "stage" | "ci" | "post-merge";
 
-/** Ambient execution-hook variables scrubbed from post-merge step environments. */
-const POST_MERGE_SCRUB_VARS: ReadonlyArray<string> = [
-  "BASH_ENV",
-  "ENV",
-  "NODE_OPTIONS",
-  "GIT_DIR",
-  "GIT_WORK_TREE",
-  "GIT_INDEX_FILE",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-];
-
-/** Builtin-only remote secret reader (no single quotes; runs inside remote bash -c). */
+/**
+ * Builtin-only remote secret reader (no single quotes; runs inside remote bash -c). The allowlist
+ * scrub runs first and already drops these names; the leading unsets stay as a second layer so the
+ * reader never inherits a host credential if it is ever run without the scrub.
+ */
 const REMOTE_SECRET_READER =
   'unset CLOUDFLARE_API_TOKEN DOPPLER_TOKEN FLY_API_TOKEN FLY_ACCESS_TOKEN HCLOUD_TOKEN NEON_API_KEY OP_SERVICE_ACCOUNT_TOKEN; for l in $(compgen -v DOPPLER_TOKEN_) $(compgen -v DOPPLER_CONFIGS_); do unset "$l"; done; while IFS= read -r l && [ -n "$l" ]; do case "${l%%=*}" in CLOUDFLARE_API_TOKEN|HCLOUD_TOKEN|NEON_API_KEY|OP_SERVICE_ACCOUNT_TOKEN) export "${l%%=*}=${l#*=}" ;; FLY_API_TOKEN) export FLY_API_TOKEN="${l#*=}" FLY_ACCESS_TOKEN="${l#*=}" ;; DOPPLER_TOKEN_*|DOPPLER_CONFIGS_*) case "${l%%=*}" in *[!A-Z0-9_]*) ;; *) export "${l%%=*}=${l#*=}" ;; esac ;; esac; done; unset l';
 
@@ -62,8 +55,18 @@ export interface LocalStepInput {
   readonly homeDir?: string | undefined;
   readonly secrets?: Readonly<Record<string, string>> | undefined;
   readonly withholdSecrets?: boolean | undefined;
+  /** The step writes to or fetches from the forge (`ship_merge`, post-merge): it gets the forge's credentials. */
+  readonly forge?: boolean | undefined;
+  /** An executable git hook run in place of a declared script: its own path, git's arguments and stdin. */
+  readonly hook?: StepHook | undefined;
   readonly timeoutMs?: number | undefined;
   readonly run: ProcessRunner;
+}
+
+export interface StepHook {
+  readonly path: string;
+  readonly args: ReadonlyArray<string>;
+  readonly stdin: string;
 }
 
 export interface RemoteStepInput {
@@ -124,8 +127,8 @@ export function buildSccacheSocketPath(jobId: string): string {
 }
 
 /**
- * Builds the environment for local step execution using the ONE unified `buildToolchainEnv`.
- * In `ci` mode, scrubs all ambient secret variables and injects only the declared secrets.
+ * Builds the environment for local step execution using the ONE unified `buildToolchainEnv`,
+ * from the worker variables `stepEnv.ts` allows only. In `ci` mode it adds the declared secrets.
  */
 export function buildLocalStepEnv(input: {
   readonly mode: StepMode;
@@ -134,8 +137,10 @@ export function buildLocalStepEnv(input: {
   readonly homeDir?: string | undefined;
   readonly secrets?: Readonly<Record<string, string>> | undefined;
   readonly withholdSecrets?: boolean | undefined;
+  readonly forge?: boolean | undefined;
 }): Record<string, string> {
-  const env = buildToolchainEnv(input.baseEnv ?? process.env, {
+  const base = allowlistedStepBaseEnv(input.baseEnv ?? process.env, { forge: input.forge });
+  const env = buildToolchainEnv(base, {
     homeDir: input.homeDir,
     dataRoot: input.ctx.dataRoot,
     worktreeDir: input.ctx.worktree,
@@ -170,19 +175,10 @@ export function buildLocalStepEnv(input: {
     env.SHIP_QUEUE_JOBS_BEHIND = String(input.ctx.jobsBehind);
   }
 
-  if (input.mode === "ci" || input.mode === "post-merge") {
-    for (const key of CI_SCRUB_SECRET_VARS) delete env[key];
-    for (const key of Object.keys(env)) {
-      if (key.startsWith("DOPPLER_TOKEN_") || key.startsWith("DOPPLER_CONFIGS_")) {
-        delete env[key];
-      }
-    }
-  }
-  if (input.mode === "post-merge") {
-    for (const key of POST_MERGE_SCRUB_VARS) delete env[key];
-  }
   if (input.mode === "ci") {
     env.SHIP_QUEUE_CI = "1";
+    // Test runners read CI (focused tests fail under it); the allowlist drops the worker's own.
+    env.CI = "1";
     if (env.RUSTC_WRAPPER === "sccache") {
       env.CARGO_INCREMENTAL = "0";
     }
@@ -198,7 +194,9 @@ export function buildLocalStepEnv(input: {
 
 /** Runs one declared step locally via the injected `ProcessRunner`. */
 export async function runLocalStep(input: LocalStepInput): Promise<ProcessResult> {
-  const resolved = resolveStepArgv(input.ctx.stepTree, input.cmdline, input.extraArgs);
+  const resolved = input.hook
+    ? ({ ok: true, argv: [input.hook.path, ...input.hook.args] } as const)
+    : resolveStepArgv(input.ctx.stepTree, input.cmdline, input.extraArgs);
   if (!resolved.ok) {
     return { exitCode: 1, stdout: "", stderr: `ship-queue: ${resolved.error}\n` };
   }
@@ -209,6 +207,7 @@ export async function runLocalStep(input: LocalStepInput): Promise<ProcessResult
     homeDir: input.homeDir,
     secrets: input.secrets,
     withholdSecrets: input.withholdSecrets,
+    forge: input.forge,
   });
   const stateDir = env.SHIP_QUEUE_STATE;
   if (stateDir) NodeFS.mkdirSync(stateDir, { recursive: true });
@@ -222,6 +221,7 @@ export async function runLocalStep(input: LocalStepInput): Promise<ProcessResult
     env,
     replaceEnv: true,
     timeoutMs: input.timeoutMs,
+    ...(input.hook ? { stdin: input.hook.stdin } : {}),
   });
 }
 
@@ -248,6 +248,7 @@ export function buildRemoteStepScript(input: {
   const exports = [
     "FAST=1",
     "SHIP_QUEUE_CI=1",
+    "CI=1",
     "SHIP_QUEUE_REMOTE_CI=0",
     `SHIP_QUEUE_JOB=${shellSingleQuote(input.ctx.jobId)}`,
     `SHIP_QUEUE_REPO=${shellSingleQuote(input.ctx.repo)}`,
@@ -256,10 +257,14 @@ export function buildRemoteStepScript(input: {
     `SHIP_QUEUE_BASE_SHA=${shellSingleQuote(input.ctx.baseSha)}`,
     ...(input.ctx.ontoSha ? [`SHIP_QUEUE_ONTO=${shellSingleQuote(input.ctx.ontoSha)}`] : []),
     ...(input.ctx.tipSha ? [`SHIP_QUEUE_TIP=${shellSingleQuote(input.ctx.tipSha)}`] : []),
+    ...(input.ctx.pr !== undefined
+      ? [`SHIP_QUEUE_PR=${shellSingleQuote(String(input.ctx.pr))}`]
+      : []),
   ].join(" ");
 
   const remoteSocketPath = buildSccacheSocketPath(input.ctx.jobId);
   return [
+    buildRemoteEnvAllowlistScript(),
     setup,
     `if [ "\${RUSTC_WRAPPER:-}" = sccache ]; then export CARGO_INCREMENTAL=0 SCCACHE_BASEDIRS=${shellSingleQuote(`${input.remoteWorktree}:`)}"${dataRootShell}" SCCACHE_SERVER_UDS=${shellSingleQuote(remoteSocketPath)}; fi`,
     `cd ${shellSingleQuote(input.remoteWorktree)} || exit 99`,

@@ -121,3 +121,20 @@ export async function resolveBaseBranch(
   if (head?.startsWith(`${remote}/`)) return head.slice(remote.length + 1);
   return "main";
 }
+
+/**
+ * Whether the checkout is exactly `head`: HEAD there, and no tracked change in the index or the
+ * worktree (an install or a step can rewrite tracked files without moving HEAD).
+ */
+export async function checkoutIsPinned(
+  run: ProcessRunner,
+  cwd: string,
+  head: string,
+): Promise<boolean> {
+  if ((await gitOut(run, cwd, ["rev-parse", "HEAD"])) !== head) return false;
+  return (await gitOut(run, cwd, ["status", "--porcelain", "--untracked-files=no"])) === "";
+}
+
+/** A gate pass's key: the base supplies the gate, so a pass holds only for this base and head. */
+export const passKey = (rebase: { readonly onto: string; readonly head: string }): string =>
+  `${rebase.onto} ${rebase.head}`;

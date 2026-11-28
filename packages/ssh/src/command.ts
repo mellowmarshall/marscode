@@ -41,6 +41,8 @@ export interface RunSshCommandOptions extends SshAuthOptions {
   readonly timeoutMs?: number;
   /** Keep the end of long failed-command stdout, where the final cause usually is. */
   readonly keepErrorOutputTail?: boolean;
+  /** Return all of a failed command's (redacted) stdout; the warning log stays capped. */
+  readonly keepFullErrorOutput?: boolean;
 }
 
 function parseSshConfigOutput(stdout: string): Map<string, string> {
@@ -164,11 +166,15 @@ const collectProcessOutput = <E>(
     ),
   );
 
-function redactSshErrorOutput(output: string, keepTail = false): string {
-  const redacted = output.replace(
+function redactSshSecrets(output: string): string {
+  return output.replace(
     /("(?:access_token|bearerToken|credential|pairingToken|token)"\s*:\s*")[^"]+(")/giu,
     "$1[redacted]$2",
   );
+}
+
+function redactSshErrorOutput(output: string, keepTail = false): string {
+  const redacted = redactSshSecrets(output);
   if (redacted.length <= MAX_SSH_ERROR_OUTPUT_LENGTH) return redacted;
   return keepTail
     ? `[truncated]\n${redacted.slice(-MAX_SSH_ERROR_OUTPUT_LENGTH)}`
@@ -349,7 +355,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
     return yield* new SshCommandError({
       command: ["ssh", ...args],
       exitCode,
-      stdout: diagnosticStdout,
+      stdout: input.keepFullErrorOutput ? redactSshSecrets(stdout) : diagnosticStdout,
       stderr,
       message:
         hostKeyVerificationMessage({

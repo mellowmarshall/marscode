@@ -2,11 +2,13 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import { ciOutputPath, combinedOutput, runCiSteps } from "./ciSteps.ts";
+import { ciOutputPath, combinedOutput, runCiSteps, type CiStep } from "./ciSteps.ts";
 import type { RemoteStep } from "./ciRemote.ts";
 import { parseShipDeclaration, type ShipDeclaration } from "./declaration.ts";
 import { extractBaseStepTree } from "./declarationValidation.ts";
-import { git, gitOut } from "./gitQueries.ts";
+import { failureExcerpt } from "./failureExcerpt.ts";
+import { checkoutIsPinned, git, gitOut, passKey } from "./gitQueries.ts";
+import { planPrePush, prePushStep } from "./prePushCi.ts";
 import { appendLog, jobBodyPath, jobDir, mark, updateJob } from "./jobStore.ts";
 import { runLocalStep, type StepJobContext } from "./stepRunner.ts";
 import type { JobRecord, ShipQueueDeps, StepTiming } from "./types.ts";
@@ -14,9 +16,8 @@ import type { JobRecord, ShipQueueDeps, StepTiming } from "./types.ts";
 const MINUTE_MS = 60_000;
 const BODY_TIMEOUT_MS = 5 * MINUTE_MS;
 const INSTALL_TIMEOUT_MS = 30 * MINUTE_MS;
-const CI_TIMEOUT_MS = 90 * MINUTE_MS;
+export const CI_TIMEOUT_MS = 90 * MINUTE_MS;
 const MERGE_TIMEOUT_MS = 10 * MINUTE_MS;
-const EXCERPT_LINES = 40;
 
 export type StepsOutcome =
   | { readonly kind: "pass" }
@@ -25,16 +26,6 @@ export type StepsOutcome =
 
 const stepTreePath = (root: string, id: string) =>
   NodePath.join(jobDir(root, id), "work", "step-tree");
-
-function excerpt(text: string): string {
-  const lines = text.split("\n");
-  return lines.length > EXCERPT_LINES
-    ? [
-        `... (${lines.length - EXCERPT_LINES} earlier lines in the CI output)`,
-        ...lines.slice(-EXCERPT_LINES),
-      ].join("\n")
-    : text;
-}
 
 /**
  * The base's declaration: a branch never changes how it ships. A base with no `.tree-guard.conf`
@@ -101,40 +92,47 @@ export function removeStepTree(root: string, id: string): void {
   NodeFS.rmSync(stepTreePath(root, id), { recursive: true, force: true });
 }
 
+/** The declared `ship_install`, which every worktree that runs CI or the merge gate needs first. */
+export function declaredInstallSteps(decl: ShipDeclaration): RemoteStep[] {
+  const cmdline = decl.install.trim();
+  if (!cmdline) return [];
+  return [{ name: "ship_install", cmdline, withholdSecrets: true, timeoutMs: INSTALL_TIMEOUT_MS }];
+}
+
 /**
  * Runs the declared `ship_body_check`, `ship_install`, and `ship_ci` against the rebased head,
- * install and CI on the host routing picks. A head the steps already passed on is not run again
- * (a resumed job).
+ * install and CI on the host routing picks, then the push's pre-push hook here (the CI of a
+ * `ship_ci=pre-push` repo). A head the steps already passed on is not run again (a resumed job).
  */
 export async function runDeclaredSteps(
   deps: ShipQueueDeps,
   job: JobRecord,
-  rebase: { readonly onto: string; readonly head: string },
+  rebase: { readonly onto: string; readonly head: string; readonly remoteTip?: string | null },
 ): Promise<StepsOutcome> {
   const decl = await readBaseDeclaration(deps, job, rebase.onto);
   if (!decl) return { kind: "pass" };
-  const ciCmd = decl.ci.trim() === "pre-push" ? "" : decl.ci.trim();
+  const log = (text: string) => appendLog(deps.root, job.id, text);
+  const prePush = decl.ci.trim() === "pre-push";
+  const ciCmd = prePush ? "" : decl.ci.trim();
   const ciSteps: RemoteStep[] = [
-    ...(decl.install.trim()
-      ? [
-          {
-            name: "ship_install",
-            cmdline: decl.install.trim(),
-            withholdSecrets: true,
-            timeoutMs: INSTALL_TIMEOUT_MS,
-          },
-        ]
-      : []),
+    ...declaredInstallSteps(decl),
     ...(ciCmd
       ? [{ name: "ship_ci", cmdline: ciCmd, withholdSecrets: false, timeoutMs: CI_TIMEOUT_MS }]
       : []),
   ];
-  if (!decl.bodyCheck.trim() && ciSteps.length === 0) return { kind: "pass" };
-  if (job.steps_tip === rebase.head) {
-    appendLog(deps.root, job.id, `declared steps passed on ${rebase.head.slice(0, 12)} already`);
+  const hook = await planPrePush(deps.run, job, decl, rebase.onto, log);
+  if (hook.kind === "fail") return { kind: "fail", reason: hook.reason };
+  // A pass counts for the hook only when the hook ran in it (`steps_hook_tip`).
+  if (
+    job.steps_tip === passKey(rebase) &&
+    (hook.kind === "none" || job.steps_hook_tip === passKey(rebase))
+  ) {
+    log(`declared steps passed on ${rebase.head.slice(0, 12)} already`);
     return { kind: "pass" };
   }
-  const log = (text: string) => appendLog(deps.root, job.id, text);
+  if (!decl.bodyCheck.trim() && ciSteps.length === 0 && hook.kind === "none") {
+    return { kind: "pass" };
+  }
   const prepared = await prepareStepTree(deps, job, decl, rebase, {
     dataRoot: process.env.SHIP_QUEUE_DATA_ROOT?.trim() ?? "",
   });
@@ -150,6 +148,8 @@ export async function runDeclaredSteps(
       const res = await runLocalStep({
         mode: "stage",
         ctx,
+        // The base's body check asks the forge whether the branch already merged.
+        forge: true,
         cmdline: decl.bodyCheck.trim(),
         extraArgs: [jobBodyPath(deps.root, job.id)],
         timeoutMs: BODY_TIMEOUT_MS,
@@ -160,36 +160,76 @@ export async function runDeclaredSteps(
       updateJob(deps.root, job.id, { steps: [...timings] });
       mark(deps.root, job.id, `STEP name=ship_body_check host=local exit=${res.exitCode} ms=${ms}`);
       if (res.exitCode !== 0) {
-        log(excerpt(combinedOutput(res)));
+        log(failureExcerpt(combinedOutput(res)));
         return { kind: "fail", reason: `ci step=ship_body_check exit=${res.exitCode}` };
       }
     } else if (waiting) {
       timings.push(...(job.steps ?? []));
     }
-    if (ciSteps.length === 0) return passed(deps, job, rebase.head);
-    const ci = await runCiSteps({
-      deps,
-      job,
-      decl,
-      ctx,
-      steps: ciSteps,
-      remoteAllowed: ciCmd !== "",
-      timings,
-    });
-    if (ci.kind === "wait") return { kind: "wait" };
-    if (ci.kind === "cancelled") return { kind: "fail", reason: "cancelled" };
-    if (ci.kind === "fail") {
-      if (ci.failed) log(excerpt(combinedOutput(ci.failed.res)));
-      return { kind: "fail", reason: ci.reason };
+    const runSteps = async (
+      steps: ReadonlyArray<CiStep>,
+      remoteAllowed: boolean,
+      appendOutput: boolean,
+    ): Promise<StepsOutcome | null> => {
+      const ci = await runCiSteps({
+        deps,
+        job,
+        decl,
+        ctx,
+        steps,
+        remoteAllowed,
+        timings,
+        appendOutput,
+      });
+      if (ci.kind === "wait") return { kind: "wait" };
+      if (ci.kind === "cancelled") return { kind: "fail", reason: "cancelled" };
+      if (ci.kind === "fail") {
+        if (ci.failed) log(failureExcerpt(combinedOutput(ci.failed.res)));
+        return { kind: "fail", reason: ci.reason };
+      }
+      return null;
+    };
+    // A pre-push repo's install serves its hook here, so it never leaves this host.
+    if (ciSteps.length > 0) {
+      const stopped = await runSteps(ciSteps, ciCmd !== "", false);
+      if (stopped) return stopped;
     }
-    return passed(deps, job, rebase.head);
+    if (hook.kind === "hook") {
+      // Install ran here: the hook judges the pinned commit only, never files install rewrote.
+      if (!(await checkoutIsPinned(deps.run, job.worktree, rebase.head))) {
+        return { kind: "fail", reason: "checkout_changed_before_hook" };
+      }
+      const step = await prePushStep({
+        run: deps.run,
+        job,
+        onto: rebase.onto,
+        head: rebase.head,
+        remoteTip: rebase.remoteTip ?? null,
+        stepTree: ctx.stepTree,
+        source: hook.source,
+        timeoutMs: CI_TIMEOUT_MS,
+      });
+      if (!step.ok) return { kind: "fail", reason: `steps_extract: ${step.error}` };
+      const stopped = await runSteps([step.step], false, ciSteps.length > 0);
+      if (stopped) return stopped;
+      // The hook judged the checkout: it counts only while that is still the tip the queue pushes.
+      if (!(await checkoutIsPinned(deps.run, job.worktree, rebase.head))) {
+        return { kind: "fail", reason: "head_moved_during_ci" };
+      }
+      updateJob(deps.root, job.id, { steps_hook_tip: passKey(rebase) });
+    }
+    return passed(deps, job, rebase);
   } finally {
     removeStepTree(deps.root, job.id);
   }
 }
 
-function passed(deps: ShipQueueDeps, job: JobRecord, head: string): StepsOutcome {
-  updateJob(deps.root, job.id, { steps_tip: head });
+function passed(
+  deps: ShipQueueDeps,
+  job: JobRecord,
+  rebase: { readonly onto: string; readonly head: string },
+): StepsOutcome {
+  updateJob(deps.root, job.id, { steps_tip: passKey(rebase) });
   return { kind: "pass" };
 }
 
@@ -200,7 +240,7 @@ export type MergeStepOutcome =
 
 /**
  * The declared `ship_merge PR`: 0 merged, 75 the base moved (the job lands again from its
- * rebase), 76 transient. Runs the base's copy here, where the forge credentials are.
+ * rebase), 76 transient. Runs the base's copy here with the forge's credentials (as post-merge does).
  */
 export async function runMergeStep(
   deps: ShipQueueDeps,
@@ -223,6 +263,7 @@ export async function runMergeStep(
       ctx: prepared.ctx,
       cmdline: decl.merge.trim(),
       extraArgs: [String(pr)],
+      forge: true,
       timeoutMs: MERGE_TIMEOUT_MS,
       run: deps.run,
     });

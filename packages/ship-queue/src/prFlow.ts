@@ -6,6 +6,7 @@ import { postOverrideComment } from "./challengeGate.ts";
 import { git } from "./gitQueries.ts";
 import { appendLog, jobBodyPath, jobDir, jobReviewPath, mark, updateJob } from "./jobStore.ts";
 import { markerValue } from "./markers.ts";
+import { runMergeGate } from "./mergeGate.ts";
 import { recordPush } from "./rebaseEngine.ts";
 import { readBaseDeclaration, runMergeStep } from "./shipSteps.ts";
 import type { JobRecord, ShipQueueDeps } from "./types.ts";
@@ -153,8 +154,9 @@ export type LandResult =
   | { readonly kind: "fail"; readonly reason: string };
 
 /**
- * Merges through the repo's declared `ship_merge` when it has one, else through the forge. A
- * declared merge's 75 (base moved) or 76 (transient) leaves the job to land again next tick.
+ * Runs the declared `ship_merge_gate`, then merges through the repo's declared `ship_merge` when it
+ * has one, else through the forge. A gate waiting for a CI host, or a declared merge's 75 (base
+ * moved) or 76 (transient), leaves the job to land again next tick.
  */
 export async function landPhase(
   deps: ShipQueueDeps,
@@ -163,6 +165,11 @@ export async function landPhase(
   rebase: { readonly onto: string; readonly head: string },
 ): Promise<LandResult> {
   const decl = await readBaseDeclaration(deps, job, rebase.onto);
+  if (decl) {
+    const gate = await runMergeGate(deps, job, decl, rebase, pr);
+    if (gate.kind === "wait") return { kind: "retry" };
+    if (gate.kind === "fail") return { kind: "fail", reason: gate.reason };
+  }
   if (!decl?.merge.trim()) {
     const merged = await mergePhase(deps, job, pr, rebase.head);
     return merged.ok ? { kind: "merged" } : { kind: "fail", reason: merged.reason };

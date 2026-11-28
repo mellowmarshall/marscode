@@ -17,7 +17,7 @@ import {
   readJob,
   updateJob,
 } from "./jobStore.ts";
-import { runLocalStep, type StepJobContext } from "./stepRunner.ts";
+import { runLocalStep, type StepHook, type StepJobContext } from "./stepRunner.ts";
 import type { JobRecord, ProcessResult, ShipQueueDeps, StepTiming } from "./types.ts";
 
 const HEARTBEAT_MS = 60_000;
@@ -35,6 +35,11 @@ export type CiStepsOutcome =
   | { readonly kind: "wait" }
   | { readonly kind: "cancelled" }
   | { readonly kind: "fail"; readonly reason: string; readonly failed?: FailedStep | undefined };
+
+/** A declared step; one with a `hook` runs that git hook, on this host only. */
+export interface CiStep extends RemoteStep {
+  readonly hook?: StepHook | undefined;
+}
 
 export interface FailedStep {
   readonly name: string;
@@ -128,18 +133,21 @@ async function placeCi(
 }
 
 /**
- * Runs `steps` (install, CI) where routing says, falling back to this host when a remote host
- * fails before a step's own result. `remoteAllowed` is false for a `ship_ci=pre-push` repo, whose
- * install serves the push here. The output lands in `ci-output.txt` for the challenge.
+ * Runs `steps` (install, CI, a merge gate) where routing says, falling back to this host when a
+ * remote host fails before a step's own result. `remoteAllowed` is false for steps that must run
+ * here (a pre-push hook and the install it judges). The output lands in `outputFile`
+ * (`ci-output.txt`, for the challenge, by default), after what is there when `appendOutput`.
  */
 export async function runCiSteps(input: {
   readonly deps: ShipQueueDeps;
   readonly job: JobRecord;
   readonly decl: ShipDeclaration;
   readonly ctx: StepJobContext;
-  readonly steps: ReadonlyArray<RemoteStep>;
+  readonly steps: ReadonlyArray<CiStep>;
   readonly remoteAllowed: boolean;
   readonly timings: StepTiming[];
+  readonly outputFile?: string | undefined;
+  readonly appendOutput?: boolean | undefined;
 }): Promise<CiStepsOutcome> {
   const { deps, job, decl, steps, timings } = input;
   const log = (text: string) => appendLog(deps.root, job.id, text);
@@ -189,7 +197,7 @@ export async function runCiSteps(input: {
 
   try {
     let ranRemote = false;
-    if (placement.kind === "remote" && placement.host.ssh) {
+    if (placement.kind === "remote" && placement.host.ssh && !steps.some((s) => s.hook)) {
       const remoteHost = placement.host.name;
       const remote = await withHeartbeat(
         log,
@@ -227,6 +235,7 @@ export async function runCiSteps(input: {
             cmdline: step.cmdline,
             secrets,
             withholdSecrets: step.withholdSecrets,
+            hook: step.hook,
             timeoutMs: step.timeoutMs,
             run: deps.run,
           }),
@@ -234,7 +243,9 @@ export async function runCiSteps(input: {
         if (!record(step.name, "local", res, Date.now() - started)) break;
       }
     }
-    NodeFS.writeFileSync(ciOutputPath(deps.root, job.id), outputs.join("\n"), "utf8");
+    const outputFile = input.outputFile ?? ciOutputPath(deps.root, job.id);
+    if (input.appendOutput) NodeFS.appendFileSync(outputFile, outputs.join("\n"), "utf8");
+    else NodeFS.writeFileSync(outputFile, outputs.join("\n"), "utf8");
     const failure = failed as FailedStep | null;
     if (failure) {
       return {

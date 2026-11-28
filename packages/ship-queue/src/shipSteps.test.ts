@@ -1,216 +1,21 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off - Declared steps and the challenge gate over real temporary git repositories and step scripts.
-import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { runShipQueueCli } from "./cli.ts";
-import { jobReviewPath, readJob, readLog, registerWatcher } from "./jobStore.ts";
+import { jobReviewPath, readJob, readLog } from "./jobStore.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
-import { currentProcessIdentity, isProcessAlive } from "./processIdentity.ts";
 import { ciOutputPath } from "./ciSteps.ts";
 import type { RemoteCommandRunner } from "./sshExec.ts";
-import { submitJob } from "./submit.ts";
-import type { ProcessRunner, ShipForge, ShipQueueDeps } from "./types.ts";
+import { fixtureCleanups, makeFixture, SELF, sh } from "./testing/shipStepsFixture.ts";
+import type { ProcessRunner, ShipQueueDeps } from "./types.ts";
 import { WATCH_EXIT, watchJob } from "./watcher.ts";
 import { runJob } from "./worker.ts";
 
-const SELF = currentProcessIdentity();
-const cleanups: Array<() => void> = [];
-
 afterEach(() => {
-  for (const cleanup of cleanups.splice(0)) cleanup();
+  for (const cleanup of fixtureCleanups.splice(0)) cleanup();
 });
-
-function sh(cwd: string, args: ReadonlyArray<string>): string {
-  const res = NodeChildProcess.spawnSync(
-    "git",
-    ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...args],
-    { cwd, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
-  );
-  if (res.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${res.stderr}`);
-  return res.stdout.trim();
-}
-
-const DECLARATION = [
-  "base_ref=origin/main",
-  "ship_repo=sample-repo",
-  "ship_gh_repo=acme-fixture/sample-repo",
-  "ship_body_check=scripts/ship/steps.sh body",
-  "ship_install=scripts/ship/steps.sh install",
-  "ship_ci=scripts/ship/steps.sh ci",
-  "",
-].join("\n");
-
-/** The base's step script: CI fails when the branch carries `ci-fail`; each CI run is counted. */
-const STEPS_SCRIPT = `#!/usr/bin/env bash
-case "$1" in
-  body) grep -q "Closes #" "$2" || { echo "the PR body names no issue"; exit 1; } ;;
-  install) echo "install ok" ;;
-  ci)
-    echo "ci run" >> "\${SHIP_QUEUE_STATE:-/dev/null}/ci-runs"
-    if [ -f ci-fail ]; then for i in $(seq 1 60); do echo "noise line $i"; done; echo "ci: 1 test failed in ci-fail"; exit 3; fi
-    echo "ci: 42 tests passed at $(git rev-parse --short HEAD) base \${SHIP_QUEUE_BASE_REF}" ;;
-  merge)
-    f="$SHIP_QUEUE_STATE/merge-calls"
-    echo "$2 $SHIP_QUEUE_TIP $SHIP_QUEUE_ONTO" >> "$f"
-    if [ "$(wc -l < "$f")" -lt 2 ]; then echo "main moved during the gate" | tee "$SHIP_QUEUE_REASON_FILE"; exit 75; fi
-    echo "merged $2" ;;
-esac
-`;
-
-function testClock() {
-  let seconds = 0;
-  return { now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, seconds++)).toISOString() };
-}
-
-function makeFixture(options: { readonly declaration?: string } = {}) {
-  const tmp = NodeFS.realpathSync(NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "sq-steps-")));
-  cleanups.push(() => NodeFS.rmSync(tmp, { recursive: true, force: true }));
-  const remoteDir = NodePath.join(tmp, "remotes", "acme-fixture", "sample-repo.git");
-  NodeFS.mkdirSync(remoteDir, { recursive: true });
-  sh(remoteDir, ["init", "-q", "--bare", "-b", "main"]);
-  const primary = NodePath.join(tmp, "sample-repo");
-  sh(tmp, ["clone", "-q", remoteDir, primary]);
-  sh(primary, ["config", "user.name", "Fixture Lane"]);
-  sh(primary, ["config", "user.email", "lane@example.invalid"]);
-  NodeFS.mkdirSync(NodePath.join(primary, "scripts", "ship"), { recursive: true });
-  NodeFS.writeFileSync(NodePath.join(primary, "README.md"), "# sample\n");
-  NodeFS.writeFileSync(
-    NodePath.join(primary, ".tree-guard.conf"),
-    `${DECLARATION}${options.declaration ?? ""}`,
-  );
-  NodeFS.writeFileSync(NodePath.join(primary, "scripts", "ship", "steps.sh"), STEPS_SCRIPT);
-  sh(primary, ["add", "-A"]);
-  sh(primary, ["commit", "-q", "-m", "init"]);
-  sh(primary, ["push", "-q", "origin", "HEAD:refs/heads/main"]);
-  sh(primary, ["remote", "set-head", "origin", "main"]);
-
-  const prs = new Map<number, { head: string; base: string; title: string; body: string }>();
-  const merged: number[] = [];
-  const comments: string[] = [];
-  const forgeClone = NodePath.join(tmp, "forge-clone");
-  sh(tmp, ["clone", "-q", remoteDir, forgeClone]);
-  sh(forgeClone, ["config", "user.name", "Fixture Forge"]);
-  sh(forgeClone, ["config", "user.email", "forge@example.invalid"]);
-  const forge: ShipForge = {
-    isPullRequestMerged: async ({ number }) => merged.includes(number),
-    findOpenPullRequest: async ({ head }) => {
-      for (const [number, pr] of prs)
-        if (!merged.includes(number) && pr.head === head) return { number };
-      return null;
-    },
-    createPullRequest: async ({ head, base, title, body }) => {
-      const number = prs.size + 1;
-      prs.set(number, { head, base, title, body });
-      return { number };
-    },
-    mergePullRequest: async ({ number, title }) => {
-      const pr = prs.get(number)!;
-      sh(forgeClone, ["fetch", "-q", "origin"]);
-      sh(forgeClone, ["checkout", "-q", "-B", pr.base, `origin/${pr.base}`]);
-      sh(forgeClone, ["merge", "-q", "--squash", `origin/${pr.head}`]);
-      sh(forgeClone, ["commit", "-q", "-m", `${title} (#${number})`]);
-      sh(forgeClone, ["push", "-q", "origin", `HEAD:refs/heads/${pr.base}`]);
-      merged.push(number);
-      return { exitCode: 0, message: `merged #${number}` };
-    },
-    commentOnPullRequest: async ({ body }) => {
-      comments.push(body);
-    },
-  };
-
-  const reviews: Array<{ ciOutput: string | null }> = [];
-  let verdict = "PASS";
-  const root = NodePath.join(tmp, "queue");
-  const deps: ShipQueueDeps = {
-    root,
-    run: nodeProcessRunner,
-    forge,
-    guard: { inspect: () => undefined, check: async () => ({ ok: false }) },
-    secretScan: async () => [],
-    hygieneScan: async () => ({ kind: "skip", log: "house hygiene: skipped (fixture)" }),
-    // Reads CI output where `playbook challenge` reads it: beside SHIP_QUEUE_BODYFILE.
-    declarationChallenge: async ({ bodyFile, outFile }) => {
-      let ciOutput: string | null = null;
-      try {
-        ciOutput = NodeFS.readFileSync(
-          NodePath.join(NodePath.dirname(bodyFile), "ci-output.txt"),
-          "utf8",
-        );
-      } catch {
-        ciOutput = null;
-      }
-      reviews.push({ ciOutput });
-      const report = `PLAYBOOK REVIEW: ${verdict}\nSummary:\n  fixture review\n`;
-      NodeFS.writeFileSync(outFile, report, "utf8");
-      return { output: `house declaration-challenge: ${verdict}`, report };
-    },
-    clock: testClock(),
-    isProcessAlive,
-    self: SELF,
-    watcherWaitMs: 60_000,
-  };
-
-  const worktree = (branch: string, files: Record<string, string>) => {
-    const wt = NodePath.join(tmp, "worktrees", branch.replace(/\//g, "-"));
-    sh(primary, ["worktree", "add", "-q", "-b", branch, wt, "origin/main"]);
-    for (const [file, text] of Object.entries(files))
-      NodeFS.writeFileSync(NodePath.join(wt, file), text);
-    sh(wt, ["add", "-A"]);
-    sh(wt, ["commit", "-q", "-m", `work on ${branch}`]);
-    return wt;
-  };
-  const submit = async (wt: string, branch: string, withDeps: ShipQueueDeps = deps) => {
-    const res = await submitJob(withDeps, {
-      worktree: wt,
-      branch,
-      title: `ship ${branch}`,
-      body: "Closes #98\n",
-      identity: {},
-    });
-    if (!res.ok) throw new Error(`submit refused: ${res.reason}`);
-    registerWatcher(root, res.id, SELF);
-    return res.id;
-  };
-  const markers = (id: string) =>
-    readLog(root, id)
-      .split("\n")
-      .filter((l) => l && !l.startsWith(" "));
-  const ciRuns = () => {
-    try {
-      return NodeFS.readFileSync(
-        NodePath.join(root, "repos", "acme-fixture", "sample-repo", "ci-runs"),
-        "utf8",
-      )
-        .trim()
-        .split("\n").length;
-    } catch {
-      return 0;
-    }
-  };
-  const stateFile = (name: string) =>
-    NodePath.join(root, "repos", "acme-fixture", "sample-repo", name);
-  return {
-    tmp,
-    root,
-    primary,
-    stateFile,
-    deps,
-    prs,
-    merged,
-    comments,
-    reviews,
-    setVerdict: (v: string) => {
-      verdict = v;
-    },
-    worktree,
-    submit,
-    markers,
-    ciRuns,
-  };
-}
 
 describe("declared steps before merge", () => {
   it("fails a job whose declared CI step fails, with its exit and a log excerpt, and never merges it", async () => {
@@ -228,7 +33,7 @@ describe("declared steps before merge", () => {
     expect(fx.markers(id).some((l) => l.startsWith("PUSH_EXIT="))).toBe(false);
     const log = readLog(fx.root, id);
     expect(log).toContain("  ci: 1 test failed in ci-fail");
-    expect(log).toContain("earlier lines in the CI output");
+    expect(log).toContain("lines left out; the step's output file has them");
     expect(log).not.toContain("noise line 5\n");
     expect(job.steps?.map((s) => [s.name, s.exit])).toEqual([
       ["ship_body_check", 0],
@@ -236,6 +41,33 @@ describe("declared steps before merge", () => {
       ["ship_ci", 3],
     ]);
     expect(fx.reviews).toHaveLength(0);
+  });
+
+  it("keeps the failure from the middle of a long CI output in the log, with the tail", async () => {
+    const fx = makeFixture();
+    const wt = fx.worktree("feat/119-long", { "ci-long": "1\n" });
+    const id = await fx.submit(wt, "feat/119-long");
+
+    expect(await runJob(fx.deps, id)).toBe("ended");
+    expect(readJob(fx.root, id)?.reason).toBe("ci step=ship_ci exit=1");
+    const log = readLog(fx.root, id);
+    for (const line of [
+      " FAIL  src/sum.test.ts > adds two numbers",
+      "AssertionError: expected 2 to be 3",
+      "  at src/sum.test.ts:4:17",
+      "check:changed summary",
+      "  FAIL  test (4 files)",
+      "hygiene: tail line 60",
+    ]) {
+      expect(log).toContain(`  ${line}\n`);
+    }
+    expect(log).not.toContain("tsc suggestion 100\n");
+    expect(log).not.toContain("tsc suggestion after 100\n");
+    expect(log).toContain("lines left out; the step's output file has them");
+    // The output file keeps every line.
+    const output = NodeFS.readFileSync(ciOutputPath(fx.root, id), "utf8");
+    expect(output).toContain("tsc suggestion 100\n");
+    expect(output).toContain("tsc suggestion after 100\n");
   });
 
   it("merges a job whose steps pass, timing each step and handing the CI output to the review", async () => {
