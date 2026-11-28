@@ -18,7 +18,11 @@ import type { ProcessResult, ProcessRunner } from "./types.ts";
 
 export type StepMode = "plain" | "stage" | "ci" | "post-merge";
 
-/** Builtin-only remote secret reader (no single quotes; runs inside remote bash -c). */
+/**
+ * Builtin-only remote secret reader (no single quotes; runs inside remote bash -c). The allowlist
+ * scrub runs first and already drops these names; the leading unsets stay as a second layer so the
+ * reader never inherits a host credential if it is ever run without the scrub.
+ */
 const REMOTE_SECRET_READER =
   'unset CLOUDFLARE_API_TOKEN DOPPLER_TOKEN FLY_API_TOKEN FLY_ACCESS_TOKEN HCLOUD_TOKEN NEON_API_KEY OP_SERVICE_ACCOUNT_TOKEN; for l in $(compgen -v DOPPLER_TOKEN_) $(compgen -v DOPPLER_CONFIGS_); do unset "$l"; done; while IFS= read -r l && [ -n "$l" ]; do case "${l%%=*}" in CLOUDFLARE_API_TOKEN|HCLOUD_TOKEN|NEON_API_KEY|OP_SERVICE_ACCOUNT_TOKEN) export "${l%%=*}=${l#*=}" ;; FLY_API_TOKEN) export FLY_API_TOKEN="${l#*=}" FLY_ACCESS_TOKEN="${l#*=}" ;; DOPPLER_TOKEN_*|DOPPLER_CONFIGS_*) case "${l%%=*}" in *[!A-Z0-9_]*) ;; *) export "${l%%=*}=${l#*=}" ;; esac ;; esac; done; unset l';
 

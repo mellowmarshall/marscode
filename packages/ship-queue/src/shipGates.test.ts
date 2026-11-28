@@ -246,11 +246,44 @@ describe("pre-push CI", () => {
     expect(fx.prs.size).toBe(0);
   });
 
-  it("runs the checkout's own pre-push hook after ship_ci, as the legacy push did", async () => {
+  it("runs the base's hook even when the branch rewrites it", async () => {
+    const fx = makeFixture({ declaration: PRE_PUSH_DECL });
+    addToBase(fx, { ".githooks/pre-push": { text: PRE_PUSH_HOOK, mode: 0o755 } });
+    const wt = fx.worktree("feat/119-hook-swap", {
+      "prepush-fail": "1\n",
+      ".githooks/pre-push": "#!/usr/bin/env bash\nexit 0\n",
+    });
+    const id = await fx.submit(wt, "feat/119-hook-swap");
+
+    expect(await runJob(fx.deps, id)).toBe("ended");
+    expect(readJob(fx.root, id)).toMatchObject({
+      state: "failed",
+      reason: "ci step=pre-push exit=1",
+    });
+    expect(readLog(fx.root, id)).toContain("pre-push: lint failed");
+    expect(fx.prs.size).toBe(0);
+  });
+
+  it("fails a pre-push repo with no ship_hooks_path, even when the checkout has a hook", async () => {
+    const fx = makeFixture({ declaration: "ship_ci=pre-push\n" });
+    const hook = NodePath.join(fx.primary, ".git", "hooks", "pre-push");
+    NodeFS.mkdirSync(NodePath.dirname(hook), { recursive: true });
+    NodeFS.writeFileSync(hook, "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
+    const wt = fx.worktree("feat/119-nohookspath", { "p.txt": "p\n" });
+    const id = await fx.submit(wt, "feat/119-nohookspath");
+
+    expect(await runJob(fx.deps, id)).toBe("ended");
+    expect(readJob(fx.root, id)?.reason).toBe(
+      "ci step=pre-push: declare ship_hooks_path so the hook comes from the base (ship_ci=pre-push)",
+    );
+    expect(fx.prs.size).toBe(0);
+  });
+
+  it("does not run a checkout's own hook when ship_ci is a command", async () => {
     const fx = makeFixture();
     const hook = NodePath.join(fx.primary, ".git", "hooks", "pre-push");
     NodeFS.mkdirSync(NodePath.dirname(hook), { recursive: true });
-    NodeFS.writeFileSync(hook, "#!/usr/bin/env bash\necho 'secret gate: leak found'\nexit 1\n", {
+    NodeFS.writeFileSync(hook, "#!/usr/bin/env bash\necho 'local hook ran'\nexit 1\n", {
       mode: 0o755,
     });
     const wt = fx.worktree("feat/119-repohook", { "h.txt": "h\n" });
@@ -258,17 +291,9 @@ describe("pre-push CI", () => {
 
     expect(await runJob(fx.deps, id)).toBe("ended");
     const job = readJob(fx.root, id)!;
-    expect(job.reason).toBe("ci step=pre-push exit=1");
-    expect(job.steps?.map((s) => [s.name, s.exit])).toEqual([
-      ["ship_body_check", 0],
-      ["ship_install", 0],
-      ["ship_ci", 0],
-      ["pre-push", 1],
-    ]);
-    const output = NodeFS.readFileSync(ciOutputPath(fx.root, id), "utf8");
-    expect(output).toContain("ci: 42 tests passed");
-    expect(output).toContain("secret gate: leak found");
-    expect(fx.prs.size).toBe(0);
+    expect(job.state).toBe("done");
+    expect(job.steps?.map((s) => s.name)).toEqual(["ship_body_check", "ship_install", "ship_ci"]);
+    expect(NodeFS.readFileSync(ciOutputPath(fx.root, id), "utf8")).not.toContain("local hook ran");
   });
 });
 
@@ -326,5 +351,39 @@ describe("ship_merge_gate", () => {
     } finally {
       restore();
     }
+  });
+  it("skips the gate on a merge retry at the same head, and runs it again after a rebase", async () => {
+    const decl =
+      "ship_merge=scripts/ship/steps.sh merge\nship_merge_gate=scripts/ship/steps.sh gate\n";
+    const gateTips = (fx: ReturnType<typeof makeFixture>) =>
+      NodeFS.readFileSync(fx.stateFile("gate-calls"), "utf8").trim().split("\n");
+
+    // Same head: ship_merge exits 75 once, the base does not move, so the head the gate passed on lands.
+    const same = makeFixture({ declaration: decl });
+    const id = await same.submit(
+      same.worktree("feat/119-gate-same", { "s.txt": "s\n" }),
+      "feat/119-gate-same",
+    );
+    expect(await runJob(same.deps, id)).toBe("blocked");
+    expect(await runJob(same.deps, id)).toBe("ended");
+    expect(readJob(same.root, id)).toMatchObject({ state: "done", merge_exit: 0 });
+    expect(gateTips(same)).toHaveLength(1);
+    expect(readLog(same.root, id)).toContain("already");
+
+    // The base moves: the rebased head is new, so the gate judges it again before the merge.
+    const moved = makeFixture({ declaration: decl });
+    const id2 = await moved.submit(
+      moved.worktree("feat/119-gate-moved", { "m.txt": "m\n" }),
+      "feat/119-gate-moved",
+    );
+    expect(await runJob(moved.deps, id2)).toBe("blocked");
+    addToBase(moved, { "other.txt": { text: "other\n" } });
+    expect(await runJob(moved.deps, id2)).toBe("ended");
+    const job = readJob(moved.root, id2)!;
+    expect(job).toMatchObject({ state: "done", merge_exit: 0, gate_tip: job.pushed_sha });
+    const tips = gateTips(moved);
+    expect(tips).toHaveLength(2);
+    expect(tips[0]).not.toBe(tips[1]);
+    expect(tips[1]).toBe(`1 ${job.pushed_sha} ${job.pushed_sha}`);
   });
 });

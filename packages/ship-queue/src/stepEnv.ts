@@ -1,6 +1,9 @@
 // The one allowlist a declared step's environment is built from, local and remote.
 
-/** Worker variables every step may read: the shell, the locale, and the temp directory. */
+/**
+ * Worker variables every step may read: the shell, the locale, the temp directory, trust stores,
+ * and toolchain homes. Proxies stay out: their URLs can carry credentials.
+ */
 const STEP_ENV_NAMES: ReadonlyArray<string> = [
   "PATH",
   "HOME",
@@ -9,6 +12,15 @@ const STEP_ENV_NAMES: ReadonlyArray<string> = [
   "TERM",
   "LANG",
   "TMPDIR",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+  "XDG_CACHE_HOME",
+  "COREPACK_HOME",
+  "JAVA_HOME",
+  "GOPATH",
+  "GOCACHE",
+  "GOMODCACHE",
   "RUSTC_WRAPPER",
   "TURBO_CACHE_DIR",
   "UV_CACHE_DIR",
