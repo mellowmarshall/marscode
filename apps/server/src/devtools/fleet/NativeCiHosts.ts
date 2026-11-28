@@ -96,8 +96,13 @@ function mergeHostReports(prev: FleetHostsReport, next: FleetHostsReport): Fleet
 /** Changes when the file is rewritten, replaced, created or removed; one stat, no read. */
 function fileSignature(filePath: string | null): string {
   if (!filePath) return "none";
-  const st = NodeFS.statSync(filePath, { throwIfNoEntry: false });
-  return st ? `${st.ino}:${st.size}:${st.mtimeMs}` : "missing";
+  try {
+    const st = NodeFS.statSync(filePath, { throwIfNoEntry: false });
+    return st ? `${st.ino}:${st.size}:${st.mtimeMs}` : "missing";
+  } catch {
+    // An untraversable queue root must not break the whole Fleet snapshot.
+    return "unreadable";
+  }
 }
 
 interface ToggleRecord {
