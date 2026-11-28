@@ -15,17 +15,6 @@ export const CI_SECRET_NAMES: ReadonlySet<string> = new Set([
   "OP_SERVICE_ACCOUNT_TOKEN",
 ]);
 
-/** Every secret variable scrubbed from CI step environments before injecting declared values. */
-export const CI_SCRUB_SECRET_VARS: ReadonlyArray<string> = [
-  "CLOUDFLARE_API_TOKEN",
-  "DOPPLER_TOKEN",
-  "FLY_API_TOKEN",
-  "FLY_ACCESS_TOKEN",
-  "HCLOUD_TOKEN",
-  "NEON_API_KEY",
-  "OP_SERVICE_ACCOUNT_TOKEN",
-];
-
 export interface DopplerTokenRecord {
   readonly project: string;
   readonly config: string;

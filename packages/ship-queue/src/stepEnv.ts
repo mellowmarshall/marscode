@@ -1,0 +1,106 @@
+// The one allowlist a declared step's environment is built from, local and remote.
+
+/** Worker variables every step may read: the shell, the locale, and the temp directory. */
+const STEP_ENV_NAMES: ReadonlyArray<string> = [
+  "PATH",
+  "HOME",
+  "USER",
+  "SHELL",
+  "TERM",
+  "LANG",
+  "TMPDIR",
+  "RUSTC_WRAPPER",
+  "TURBO_CACHE_DIR",
+  "UV_CACHE_DIR",
+];
+
+/** Toolchain and cache families; a name in one still drops when it looks like a credential. */
+const STEP_ENV_PREFIXES: ReadonlyArray<string> = [
+  "LC_",
+  "CARGO_",
+  "RUSTUP_",
+  "SCCACHE_",
+  "PNPM_",
+  "npm_config_",
+];
+
+/**
+ * Words that mark a credential inside an allowed family (`CARGO_REGISTRY_TOKEN`,
+ * `npm_config_//registry/:_authToken`, `SCCACHE_GCS_KEY_PATH`). Matched without case.
+ */
+const CREDENTIAL_WORDS: ReadonlyArray<string> = [
+  "token",
+  "secret",
+  "password",
+  "passwd",
+  "credential",
+  "auth",
+  "key",
+];
+
+/**
+ * The forge's own credentials, for the steps whose work is a forge write or fetch: `ship_merge`
+ * (`gh pr merge`) and the post-merge sync (`git fetch`). `gh` keeps its token in the desktop
+ * keyring here, so the keyring's session bus is part of it. No install or CI step gets these.
+ */
+const FORGE_ENV_NAMES: ReadonlyArray<string> = [
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GH_HOST",
+  "GH_ENTERPRISE_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
+  "GH_CONFIG_DIR",
+  "XDG_CONFIG_HOME",
+  "XDG_RUNTIME_DIR",
+  "DBUS_SESSION_BUS_ADDRESS",
+  "SSH_AUTH_SOCK",
+];
+
+function looksLikeCredential(name: string): boolean {
+  const lower = name.toLowerCase();
+  return CREDENTIAL_WORDS.some((word) => lower.includes(word));
+}
+
+function isAllowedStepEnvName(
+  name: string,
+  options: { readonly forge?: boolean | undefined } = {},
+): boolean {
+  if (STEP_ENV_NAMES.includes(name)) return true;
+  if (options.forge && FORGE_ENV_NAMES.includes(name)) return true;
+  return STEP_ENV_PREFIXES.some((p) => name.startsWith(p)) && !looksLikeCredential(name);
+}
+
+/**
+ * The worker variables a local step starts from. The runner adds the toolchain's own values,
+ * the `SHIP_QUEUE_*` context, and the declared secrets after this; nothing else reaches a step.
+ */
+export function allowlistedStepBaseEnv(
+  baseEnv: Readonly<Record<string, string | undefined>>,
+  options: { readonly forge?: boolean | undefined } = {},
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(baseEnv)) {
+    if (value !== undefined && isAllowedStepEnvName(name, options)) out[name] = value;
+  }
+  return out;
+}
+
+/** A case pattern matching `word` in any letter case (bash 3.2 on macOS has no `${v,,}`). */
+function anyCase(word: string): string {
+  return [...word].map((c) => `[${c.toLowerCase()}${c.toUpperCase()}]`).join("");
+}
+
+/**
+ * Bash that unsets every exported variable outside the allowlist, for the first line of a remote
+ * step, before the toolchain setup, the `SHIP_QUEUE_*` exports, and the stdin secret reader add
+ * theirs. Shell bookkeeping (`PWD`, `OLDPWD`, `SHLVL`, `_`) stays. Holds no single quote.
+ */
+export function buildRemoteEnvAllowlistScript(): string {
+  const keep = [...STEP_ENV_NAMES, "PWD", "OLDPWD", "SHLVL", "_"].join("|");
+  const families = STEP_ENV_PREFIXES.map((p) => `${p}*`).join("|");
+  const creds = CREDENTIAL_WORDS.map((w) => `*${anyCase(w)}*`).join("|");
+  return [
+    `for sq_v in $(compgen -e); do case "$sq_v" in ${keep}) ;; ${families}) case "$sq_v" in ${creds}) unset "$sq_v" 2>/dev/null ;; esac ;; *) unset "$sq_v" 2>/dev/null ;; esac; done`,
+    `unset sq_v`,
+  ].join("; ");
+}

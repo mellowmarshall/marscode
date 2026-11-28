@@ -59,6 +59,8 @@ export interface JobRecord {
   /** The rebased head the declared steps passed on, and the latest run's per-step timings. */
   readonly steps_tip?: string | undefined;
   readonly steps?: ReadonlyArray<StepTiming> | undefined;
+  /** The PR head the declared `ship_merge_gate` passed on; a transient merge retry skips it. */
+  readonly gate_tip?: string | undefined;
   /** The CI host a running CI step holds, read by routing as an active lease. */
   readonly ci_lease?: { readonly host: string; readonly routed_at: string } | undefined;
   /** Why no CI host can take the job yet, and when routing last tried. */

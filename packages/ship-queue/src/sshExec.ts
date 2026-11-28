@@ -62,6 +62,8 @@ export const sshRemoteCommandRunner: RemoteCommandRunner = async (
       ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
       ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       batchMode: "yes",
+      // A failed CI step's whole output is its record: the challenge and the failure excerpt read it.
+      keepFullErrorOutput: true,
     });
     return { exitCode: 0, stdout: res.stdout, stderr: res.stderr } satisfies ProcessResult;
   }).pipe(
