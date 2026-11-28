@@ -92,7 +92,7 @@ export function useResizableWidth(options: UseResizableWidthOptions): {
         return nextWidth;
       },
       finish(finalWidth, moved) {
-        if (moved) commitWidth(startStorageKey, finalWidth);
+        if (moved) commitWidth(startStorageKey, Math.round(finalWidth));
         else restoreWidth(host);
       },
       cleanup(committed) {

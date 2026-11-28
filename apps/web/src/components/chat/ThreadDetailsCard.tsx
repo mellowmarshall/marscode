@@ -98,8 +98,13 @@ export function ThreadDetailsCard({
           : { key: measurementKey, heights: { ...heights, [density]: fittingHeight } };
       });
       // Only the laid-out DOM knows the full card height, and the canvas keeps preview
-      // frames clear of it, so it is reported from this measure effect.
-      if (density === "full" && cardWidth !== undefined) {
+      // frames clear of it, so it is reported from this measure effect. Skip mid-drag
+      // widths that have not committed to `cardWidth` yet.
+      if (
+        density === "full" &&
+        cardWidth !== undefined &&
+        (!frame || Math.abs(frame.offsetWidth - cardWidth) <= 1)
+      ) {
         measureDetailsCard?.({
           threadRef: { environmentId, threadId },
           width: cardWidth,

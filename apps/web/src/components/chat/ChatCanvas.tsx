@@ -193,7 +193,8 @@ export function ChatCanvas({
     },
   };
   const { layout } = context;
-  const inlineDetailsCardWidth = model.preferredDetailsCard?.width ?? detailsCardResize.width;
+  const inlineDetailsCardWidth =
+    model.preferredDetailsCard?.width ?? THREAD_DETAILS_CARD_DEFAULT_WIDTH;
   return (
     <ChatCanvasContext value={context}>
       <div

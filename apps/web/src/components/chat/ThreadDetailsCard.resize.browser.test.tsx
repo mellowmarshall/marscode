@@ -2,10 +2,10 @@ import "~/index.css";
 
 import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
 import { useRef, useState } from "react";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { commands, page, userEvent } from "vite-plus/test/browser";
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import { useRightPanelStore } from "../../rightPanelStore";
 import { PopoverCreateHandle } from "../ui/popover";
 import { ChatCanvas } from "./ChatCanvas";
@@ -96,14 +96,36 @@ describe("ThreadDetailsCard resize", () => {
     expect(canvasElement(screen).style.getPropertyValue("--thread-details-panel-width")).toBe(
       "380px",
     );
-    expect(
-      Number.parseFloat(canvasElement(screen).style.getPropertyValue("--chat-lane-inset-end")),
-    ).toBeGreaterThan(0);
+    // At 1280px canvas with a 380px card (x = 888) and 736px chat width, the lane shifts left so
+    // its right edge stays 32px clear of the card (2 * (272 - 120) = 304px insetEnd).
+    expect(canvasElement(screen).style.getPropertyValue("--chat-lane-inset-end")).toBe("304px");
 
     await commands.dragHorizontally(HANDLE, -300);
     await expect.element(handle).toHaveAttribute("aria-valuenow", "480");
     expect(panelWidth(screen)).toBe(480);
     expect(localStorage.getItem(THREAD_DETAILS_CARD_WIDTH_STORAGE_KEY)).toBe("480");
+  });
+
+  it("ignores stationary clicks and abandons an active drag on unmount without persisting", async () => {
+    await using _env = await wideViewportWithoutSavedWidth();
+    await using screen = await render(<Workspace />, { router: false });
+    const handle = screen.container.querySelector<HTMLElement>(HANDLE)!;
+    using _capture = vi.spyOn(handle, "setPointerCapture").mockImplementation(() => {});
+    const pointer = { bubbles: true, pointerId: 1, button: 0 };
+
+    await act(() => {
+      handle.dispatchEvent(new PointerEvent("pointerdown", { ...pointer, clientX: 980 }));
+      handle.dispatchEvent(new PointerEvent("pointerup", { ...pointer, clientX: 980 }));
+    });
+    expect(panelWidth(screen)).toBe(280);
+    expect(localStorage.getItem(THREAD_DETAILS_CARD_WIDTH_STORAGE_KEY)).toBeNull();
+
+    await act(() => {
+      handle.dispatchEvent(new PointerEvent("pointerdown", { ...pointer, clientX: 980 }));
+      handle.dispatchEvent(new PointerEvent("pointermove", { ...pointer, clientX: 880 }));
+    });
+    await screen.unmount();
+    expect(localStorage.getItem(THREAD_DETAILS_CARD_WIDTH_STORAGE_KEY)).toBeNull();
   });
 
   it("resizes from the keyboard and persists each step", async () => {
@@ -154,6 +176,13 @@ describe("ThreadDetailsCard resize", () => {
     await expect.element(handle).toHaveAttribute("aria-valuemax", "368");
     await expect.element(handle).toHaveAttribute("aria-valuenow", "368");
     expect(panelWidth(restored)).toBe(368);
+
+    // Collapsing to popover mode resets the canvas find-bar width variable to the 280px default.
+    await restored.rerender(<Workspace canvasWidth={900} />);
+    await expect.element(handle).not.toBeInTheDocument();
+    expect(canvasElement(restored).style.getPropertyValue("--thread-details-panel-width")).toBe(
+      "280px",
+    );
 
     // Widening back restores the saved 420px width.
     await restored.rerender(<Workspace canvasWidth={1280} />);
