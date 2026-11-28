@@ -5,14 +5,19 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { dataProposalRefusal, gitRuleRefusal } from "./ReaperRulePathChecks.ts";
-
-export interface ReaperPolicyRule {
-  readonly path: string;
-  readonly maxAgeDays: number;
-  readonly keepLatest: number;
-  readonly enabled: boolean;
-}
+import {
+  MIN_AGE_DAYS,
+  normalizeAgeDays,
+  parseReaperPolicyToml,
+  parseReaperPolicyTomlStrict,
+  serializeReaperPolicyToml,
+  type ReaperPolicyRule,
+} from "./ReaperPolicyToml.ts";
+import {
+  dataProposalRefusal,
+  gitRuleRefusal,
+  type GitTracksFiles,
+} from "./ReaperRulePathChecks.ts";
 
 export interface ReaperPolicyDocument {
   readonly policyPath: string;
@@ -30,7 +35,6 @@ const HOST_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const MOUNT_PATH_RE = /^\/[A-Za-z0-9._/@-]{0,128}$/;
 const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
 const MAX_REVIEW_MOUNTS = 16;
-const MIN_AGE_DAYS = 1;
 
 export function defaultReaperPolicyPath(homeDir: string = NodeOS.homedir()): string {
   return NodePath.join(homeDir, ".config", "reaper", "policy.toml");
@@ -72,152 +76,6 @@ function pathsOverlap(a: string, b: string): boolean {
   return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 }
 
-export function stripTomlCommentOutsideQuotes(line: string): string {
-  let quote: '"' | "'" | null = null;
-  let escaped = false;
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line[i]!;
-    if (quote === '"') {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === '"') {
-        quote = null;
-      }
-      continue;
-    }
-    if (quote === "'") {
-      if (ch === "'") quote = null;
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === "#") {
-      return line.slice(0, i).trim();
-    }
-  }
-  return line.trim();
-}
-
-export function unquoteTomlString(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) {
-    return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
-  }
-  if (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-
-function quoteTomlString(raw: string): string {
-  return `"${raw.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
-function normalizeAgeDays(val: number): number {
-  const clamped = Math.max(MIN_AGE_DAYS, Math.min(3650, val));
-  return Math.round(clamped * 100) / 100;
-}
-
-function parseReaperPolicyToml(text: string): ReadonlyArray<ReaperPolicyRule> {
-  const rules: ReaperPolicyRule[] = [];
-  let current: {
-    path?: string;
-    maxAgeDays?: number;
-    keepLatest?: number;
-    enabled?: boolean;
-  } | null = null;
-
-  const flush = () => {
-    if (!current || !current.path) return;
-    rules.push({
-      path: current.path,
-      maxAgeDays:
-        typeof current.maxAgeDays === "number" &&
-        Number.isFinite(current.maxAgeDays) &&
-        current.maxAgeDays >= MIN_AGE_DAYS
-          ? normalizeAgeDays(current.maxAgeDays)
-          : 14,
-      keepLatest:
-        typeof current.keepLatest === "number" && Number.isFinite(current.keepLatest)
-          ? Math.max(0, Math.min(1000, Math.round(current.keepLatest)))
-          : 2,
-      enabled: current.enabled === true,
-    });
-    current = null;
-  };
-
-  for (const rawLine of text.split(/\r?\n/)) {
-    const stripped = stripTomlCommentOutsideQuotes(rawLine);
-    if (!stripped) continue;
-    if (stripped === "[[approved]]") {
-      flush();
-      current = {};
-      continue;
-    }
-    if (stripped.startsWith("[")) {
-      flush();
-      continue;
-    }
-    if (!current) continue;
-    const eq = stripped.indexOf("=");
-    if (eq <= 0) continue;
-    const key = stripped.slice(0, eq).trim();
-    const val = stripped.slice(eq + 1).trim();
-    if (key === "path") current.path = unquoteTomlString(val);
-    else if (key === "max_age_days") current.maxAgeDays = Number(val);
-    else if (key === "keep_latest") current.keepLatest = Number(val);
-    else if (key === "enabled") current.enabled = val === "true";
-  }
-  flush();
-  return rules;
-}
-
-function preserveNonApprovedToml(existingText: string): string {
-  const out: string[] = [];
-  let skippingApproved = false;
-  for (const rawLine of existingText.split(/\r?\n/)) {
-    const stripped = stripTomlCommentOutsideQuotes(rawLine);
-    if (stripped === "[[approved]]") {
-      skippingApproved = true;
-      continue;
-    }
-    if (stripped.startsWith("[")) {
-      skippingApproved = false;
-    }
-    if (!skippingApproved) {
-      out.push(rawLine);
-    }
-  }
-  return out.join("\n").trimEnd();
-}
-
-function serializeReaperPolicyToml(
-  rules: ReadonlyArray<ReaperPolicyRule>,
-  existingText?: string,
-): string {
-  const preserved = existingText ? preserveNonApprovedToml(existingText) : "";
-  const header = preserved
-    ? [preserved, ""]
-    : [
-        "# Approved per-host cleanup policy for agent-tmp-reap.py.",
-        "# Only rules with `enabled = true` are swept; T3 Code's manifest `history` paths",
-        "# are always hard-protected regardless of rules listed here.",
-        "",
-      ];
-  const lines = [...header];
-  for (const rule of rules) {
-    lines.push("[[approved]]");
-    lines.push(`path = ${quoteTomlString(rule.path)}`);
-    lines.push(`max_age_days = ${normalizeAgeDays(rule.maxAgeDays)}`);
-    lines.push(`keep_latest = ${Math.max(0, Math.min(1000, Math.round(rule.keepLatest)))}`);
-    lines.push(`enabled = ${rule.enabled ? "true" : "false"}`);
-    lines.push("");
-  }
-  return `${lines.join("\n").trimEnd()}\n`;
-}
-
 function isRelativeSubpath(root: string, candidate: string, minDepth: number): boolean {
   const rel = NodePath.relative(root, candidate);
   if (!rel || rel.startsWith("..") || NodePath.isAbsolute(rel)) return false;
@@ -225,8 +83,12 @@ function isRelativeSubpath(root: string, candidate: string, minDepth: number): b
 }
 
 /** Allow-list safe cleanup roots matching `agent_reap_storage.py:_is_safe_reap_root` + user caches. */
-function checkAllowedReaperPath(canonicalPath: string, canonicalHome: string): string | null {
-  const gitRefusal = gitRuleRefusal(canonicalPath);
+async function checkAllowedReaperPath(
+  canonicalPath: string,
+  canonicalHome: string,
+  tracksFiles: GitTracksFiles,
+): Promise<string | null> {
+  const gitRefusal = await gitRuleRefusal(canonicalPath, tracksFiles);
   if (gitRefusal) return gitRefusal;
   // Evaluate $HOME rules first so an ephemeral/test $HOME under /tmp still enforces $HOME allow-listing.
   if (canonicalPath === canonicalHome || isRelativeSubpath(canonicalHome, canonicalPath, 1)) {
@@ -277,19 +139,22 @@ function checkAllowedReaperPath(canonicalPath: string, canonicalHome: string): s
 /** The allow-list and git checks again, at sweep time, for a rule saved earlier. */
 export function sweepTimeRuleRefusal(
   canonicalPath: string,
-  homeDir: string = NodeOS.homedir(),
-): string | null {
-  return checkAllowedReaperPath(canonicalPath, resolveCanonicalPath(homeDir, homeDir));
+  homeDir: string,
+  tracksFiles: GitTracksFiles,
+): Promise<string | null> {
+  return checkAllowedReaperPath(canonicalPath, resolveCanonicalPath(homeDir, homeDir), tracksFiles);
 }
 
-export function validateReaperPolicyRules(
+export async function validateReaperPolicyRules(
   rules: ReadonlyArray<ReaperPolicyRule>,
   protectedHistoryRoots: ReadonlyArray<string>,
-  homeDir: string = NodeOS.homedir(),
+  homeDir: string,
+  tracksFiles: GitTracksFiles,
   options: { readonly agentProposal?: boolean } = {},
-):
+): Promise<
   | { readonly ok: true; readonly rules: ReadonlyArray<ReaperPolicyRule> }
-  | { readonly ok: false; readonly error: string } {
+  | { readonly ok: false; readonly error: string }
+> {
   const canonicalHome = resolveCanonicalPath(homeDir, homeDir);
   const canonicalProtected = protectedHistoryRoots.map((root) => ({
     raw: root,
@@ -316,7 +181,7 @@ export function validateReaperPolicyRules(
     }
     const canonical = resolveCanonicalPath(trimmed, homeDir);
     const disallowedReason =
-      checkAllowedReaperPath(canonical, canonicalHome) ??
+      (await checkAllowedReaperPath(canonical, canonicalHome, tracksFiles)) ??
       (options.agentProposal ? dataProposalRefusal(canonical) : null);
     if (disallowedReason) {
       return { ok: false, error: disallowedReason };
@@ -405,6 +270,7 @@ export function validateStorageReviewInput(input: {
   return mounts.length > 0 ? { ok: true, host: hostRaw, mounts } : { ok: true, host: hostRaw };
 }
 
+/** Lenient: an unreadable or malformed file reads as no rules, which can only sweep less. */
 export function readReaperPolicySync(
   protectedHistoryRoots: ReadonlyArray<string>,
   policyPath: string = defaultReaperPolicyPath(),
@@ -419,22 +285,62 @@ export function readReaperPolicySync(
   return { policyPath, rules, protectedHistoryRoots };
 }
 
-export async function writeReaperPolicy(
-  rules: ReadonlyArray<ReaperPolicyRule>,
+const isMissing = (cause: unknown) => (cause as NodeJS.ErrnoException)?.code === "ENOENT";
+
+/**
+ * Strict, for writers that add to the rules: a file that cannot be read or parsed is an error,
+ * so a rewrite never starts from an empty or partial list. A missing file holds no rules.
+ */
+export async function readReaperPolicyStrict(
   protectedHistoryRoots: ReadonlyArray<string>,
-  policyPath: string = defaultReaperPolicyPath(),
-  homeDir: string = NodeOS.homedir(),
+  policyPath: string,
 ): Promise<
   | { readonly ok: true; readonly document: ReaperPolicyDocument }
   | { readonly ok: false; readonly error: string }
 > {
-  const validated = validateReaperPolicyRules(rules, protectedHistoryRoots, homeDir);
+  let text: string;
+  try {
+    text = await NodeFSP.readFile(policyPath, "utf8");
+  } catch (cause) {
+    if (isMissing(cause))
+      return { ok: true, document: { policyPath, rules: [], protectedHistoryRoots } };
+    return { ok: false, error: `Could not read the reaper policy ${policyPath}: ${String(cause)}` };
+  }
+  const parsed = parseReaperPolicyTomlStrict(text);
+  if (!parsed.ok) {
+    return { ok: false, error: `Could not parse the reaper policy ${policyPath}: ${parsed.error}` };
+  }
+  return { ok: true, document: { policyPath, rules: parsed.rules, protectedHistoryRoots } };
+}
+
+export async function writeReaperPolicy(
+  rules: ReadonlyArray<ReaperPolicyRule>,
+  protectedHistoryRoots: ReadonlyArray<string>,
+  policyPath: string,
+  homeDir: string,
+  tracksFiles: GitTracksFiles,
+): Promise<
+  | { readonly ok: true; readonly document: ReaperPolicyDocument }
+  | { readonly ok: false; readonly error: string }
+> {
+  const validated = await validateReaperPolicyRules(
+    rules,
+    protectedHistoryRoots,
+    homeDir,
+    tracksFiles,
+  );
   if (!validated.ok) return validated;
+  // The file's other sections are kept, so one that cannot be read is not overwritten.
   let existingText: string | undefined;
   try {
     existingText = await NodeFSP.readFile(policyPath, "utf8");
-  } catch {
-    existingText = undefined;
+  } catch (cause) {
+    if (!isMissing(cause)) {
+      return {
+        ok: false,
+        error: `Could not read the reaper policy ${policyPath}: ${String(cause)}`,
+      };
+    }
   }
   await NodeFSP.mkdir(NodePath.dirname(policyPath), { recursive: true });
   const tmpPath = `${policyPath}.tmp.${process.pid}.${NodeCrypto.randomUUID()}`;

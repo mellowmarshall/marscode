@@ -1,11 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - Host-local Docker reap rules from the `[docker]` section of the reaper policy file.
 import * as NodeFS from "node:fs";
 
-import {
-  defaultReaperPolicyPath,
-  stripTomlCommentOutsideQuotes,
-  unquoteTomlString,
-} from "../ReaperPolicy.ts";
+import { defaultReaperPolicyPath } from "../ReaperPolicy.ts";
+import { stripTomlCommentOutsideQuotes, unquoteTomlString } from "../ReaperPolicyToml.ts";
 
 /** Patterns capture the owner PID in group 1. */
 export interface DockerReapRules {

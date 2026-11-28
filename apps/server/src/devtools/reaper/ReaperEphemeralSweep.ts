@@ -2,13 +2,16 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
-import { sweepTimeRuleRefusal, type ReaperPolicyRule } from "../ReaperPolicy.ts";
+import { sweepTimeRuleRefusal } from "../ReaperPolicy.ts";
+import type { ReaperPolicyRule } from "../ReaperPolicyToml.ts";
+import type { GitTracksFiles } from "../ReaperRulePathChecks.ts";
 import type { StorageManifestEntry } from "../StorageManifest.ts";
 import { overlapsAny, safeReapRoot } from "./ReaperPathGuard.ts";
 import type { SweepContext } from "./ReaperTempSweep.ts";
 import {
   diskBytes,
   forceRemove,
+  gitDataIn,
   hasRecentEntry,
   lstatDevice,
   onRootDevice,
@@ -79,6 +82,11 @@ async function removeIfStale(
   const real = await NodeFSP.realpath(candidate.path).catch(() => candidate.path);
   if (overlapsAny(real, ctx.historyRoots) || ctx.guard.isProtectedUnder(real, root)) return;
   if (!(await onRootDevice(candidate.path, root, ctx.deviceOf ?? lstatDevice))) return;
+  const gitData = await gitDataIn(candidate.path);
+  if (gitData !== null) {
+    ctx.log(`  Kept stale ${label} ${candidate.path}: it holds ${gitData}`);
+    return;
+  }
   if (candidate.isDir && (await hasRecentEntry(candidate.path, cutoff, { gitIsRecent: true }))) {
     return;
   }
@@ -120,6 +128,7 @@ export async function sweepEphemeralRoots(
 export async function sweepApprovedPolicy(
   rules: ReadonlyArray<ReaperPolicyRule>,
   ctx: EphemeralSweepContext,
+  tracksFiles: GitTracksFiles,
 ): Promise<EphemeralSweepTotals> {
   const totals: EphemeralSweepTotals = { removed: 0, bytes: 0 };
   for (const rule of rules) {
@@ -127,7 +136,7 @@ export async function sweepApprovedPolicy(
     const safe = await safeReapRoot(rule.path, ctx.homeDir);
     if (safe === null || overlapsAny(safe, ctx.historyRoots)) continue;
     // A parent may have become a repo since the rule was saved, or the rule predates a check.
-    const refusal = sweepTimeRuleRefusal(safe, ctx.homeDir);
+    const refusal = await sweepTimeRuleRefusal(safe, ctx.homeDir, tracksFiles);
     if (refusal !== null) {
       ctx.log(`Skipped approved rule ${rule.path}: ${refusal}`);
       continue;

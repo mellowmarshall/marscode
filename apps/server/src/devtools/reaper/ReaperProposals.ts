@@ -25,6 +25,8 @@ import * as Semaphore from "effect/Semaphore";
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ReaperPolicy from "../ReaperPolicy.ts";
+import type { ReaperPolicyRule } from "../ReaperPolicyToml.ts";
+import { makeGitTracksFiles } from "../ReaperRulePathChecks.ts";
 import * as StorageManifest from "../StorageManifest.ts";
 import { manifestHistoryRoots } from "./ReaperPathGuard.ts";
 import { scanProcessPaths } from "./ReaperProcPaths.ts";
@@ -33,6 +35,8 @@ import { previewRule } from "./ReaperRulePreview.ts";
 const MAX_PENDING = 50;
 const MAX_PENDING_PER_THREAD = 20;
 const PREVIEW_TTL_MS = 60_000;
+// Each rule check may run git; a batch of them shares a few processes at a time.
+const RULE_CHECK_CONCURRENCY = 4;
 
 export class ReaperProposalNotFoundError extends Schema.TaggedError<ReaperProposalNotFoundError>()(
   "ReaperProposalNotFoundError",
@@ -79,7 +83,7 @@ export class ReaperProposals extends Context.Service<
     >;
     /** The user's own save of the whole rule list, under the same lock as accept. */
     readonly savePolicy: (
-      rules: ReadonlyArray<ReaperPolicy.ReaperPolicyRule>,
+      rules: ReadonlyArray<ReaperPolicyRule>,
     ) => Effect.Effect<ReaperPolicy.ReaperPolicyDocument, ReaperProposalRefusedError>;
   }
 >()("t3/devtools/reaper/ReaperProposals") {}
@@ -99,6 +103,7 @@ const make = Effect.fn("ReaperProposals.make")(function* (options: {
   const permit = yield* Semaphore.make(1);
   const platform = yield* HostProcess.Platform;
   const uid = (yield* HostProcess.UserId) ?? -1;
+  const tracksFiles = yield* makeGitTracksFiles();
 
   const manifest = settingsService.getSettings.pipe(
     Effect.orElseSucceed(() => ({ providerInstances: {} })),
@@ -174,9 +179,14 @@ const make = Effect.fn("ReaperProposals.make")(function* (options: {
       const scan = yield* Effect.promise(() => scanProcessPaths({ uid, platform }));
       for (const proposal of stale) {
         const preview = yield* Effect.promise(() =>
-          previewRule(proposal, { scan, historyRoots, uid, nowMs, homeDir: options.homeDir }).catch(
-            () => null,
-          ),
+          previewRule(proposal, {
+            scan,
+            historyRoots,
+            uid,
+            nowMs,
+            homeDir: options.homeDir,
+            tracksFiles,
+          }).catch(() => null),
         );
         previews.set(proposal.id, { atMs: nowMs, preview });
       }
@@ -196,18 +206,26 @@ const make = Effect.fn("ReaperProposals.make")(function* (options: {
     const roots = protectedRoots(m);
     const current = ReaperPolicy.readReaperPolicySync(roots, options.policyPath);
     const proposedAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+    const checks = yield* Effect.forEach(
+      input.rules,
+      (rule) =>
+        Effect.promise(() =>
+          ReaperPolicy.validateReaperPolicyRules(
+            [{ ...rule, enabled: false }],
+            roots,
+            options.homeDir,
+            tracksFiles,
+            { agentProposal: true },
+          ),
+        ).pipe(Effect.map((checked) => ({ rule, checked }))),
+      { concurrency: RULE_CHECK_CONCURRENCY },
+    );
     return yield* permit.withPermits(1)(
       Effect.gen(function* () {
         let pending = [...(yield* readStore)];
         const queued: Array<{ id: string; path: string }> = [];
         const refused: Array<{ path: string; reason: string }> = [];
-        for (const rule of input.rules) {
-          const checked = ReaperPolicy.validateReaperPolicyRules(
-            [{ ...rule, enabled: false }],
-            roots,
-            options.homeDir,
-            { agentProposal: true },
-          );
+        for (const { rule, checked } of checks) {
           if (!checked.ok) {
             refused.push({ path: rule.path, reason: checked.error });
             continue;
@@ -253,11 +271,16 @@ const make = Effect.fn("ReaperProposals.make")(function* (options: {
           return yield* new ReaperProposalNotFoundError({ id: input.id });
         }
         if (input.decision === "accept") {
-          const current = ReaperPolicy.readReaperPolicySync(roots, options.policyPath);
+          const current = yield* Effect.promise(() =>
+            ReaperPolicy.readReaperPolicyStrict(roots, options.policyPath),
+          );
+          if (!current.ok) {
+            return yield* new ReaperProposalRefusedError({ id: input.id, reason: current.error });
+          }
           const written = yield* Effect.promise(() =>
             ReaperPolicy.writeReaperPolicy(
               [
-                ...current.rules,
+                ...current.document.rules,
                 {
                   path: proposal.path,
                   maxAgeDays: proposal.maxAgeDays,
@@ -268,6 +291,7 @@ const make = Effect.fn("ReaperProposals.make")(function* (options: {
               roots,
               options.policyPath,
               options.homeDir,
+              tracksFiles,
             ).catch((cause: unknown) => ({ ok: false as const, error: String(cause) })),
           );
           if (!written.ok) {
@@ -284,14 +308,18 @@ const make = Effect.fn("ReaperProposals.make")(function* (options: {
   });
 
   const savePolicy = Effect.fn("ReaperProposals.savePolicy")(function* (
-    rules: ReadonlyArray<ReaperPolicy.ReaperPolicyRule>,
+    rules: ReadonlyArray<ReaperPolicyRule>,
   ) {
     const roots = protectedRoots(yield* manifest);
     const written = yield* permit.withPermits(1)(
       Effect.promise(() =>
-        ReaperPolicy.writeReaperPolicy(rules, roots, options.policyPath, options.homeDir).catch(
-          (cause: unknown) => ({ ok: false as const, error: String(cause) }),
-        ),
+        ReaperPolicy.writeReaperPolicy(
+          rules,
+          roots,
+          options.policyPath,
+          options.homeDir,
+          tracksFiles,
+        ).catch((cause: unknown) => ({ ok: false as const, error: String(cause) })),
       ),
     );
     if (!written.ok) {

@@ -7,8 +7,13 @@ import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
+import { gitCannotAnswer, realGitTracksFiles } from "../ReaperRulePathChecks.testkit.ts";
 import { buildStorageManifest } from "../StorageManifest.ts";
-import { ephemeralRootsFromEntries, sweepEphemeralRoots } from "./ReaperEphemeralSweep.ts";
+import {
+  ephemeralRootsFromEntries,
+  sweepApprovedPolicy,
+  sweepEphemeralRoots,
+} from "./ReaperEphemeralSweep.ts";
 import {
   inside,
   manifestHistoryRoots,
@@ -50,6 +55,22 @@ function writeAged(file: string, ageMs: number, contents = "x"): void {
 function age(target: string, ageMs: number): void {
   const seconds = (NOW_MS - ageMs) / 1000;
   NodeFS.utimesSync(target, seconds, seconds);
+}
+
+function bareRepo(dir: string): void {
+  for (const sub of ["objects/pack", "refs/heads"]) {
+    NodeFS.mkdirSync(NodePath.join(dir, sub), { recursive: true });
+  }
+  NodeFS.writeFileSync(NodePath.join(dir, "HEAD"), "ref: refs/heads/main\n");
+}
+
+/** Every entry below dir aged, deepest first, so only git data can keep a folder. */
+function ageTree(dir: string, ageMs: number): void {
+  for (const entry of NodeFS.readdirSync(dir, { withFileTypes: true })) {
+    const child = NodePath.join(dir, entry.name);
+    if (entry.isDirectory()) ageTree(child, ageMs);
+    age(child, ageMs);
+  }
 }
 
 const ctx = (guard: PathGuard, dryRun = false): SweepContext => ({
@@ -202,6 +223,34 @@ describe.skipIf(platform !== "linux" && platform !== "darwin")("reaper sweeps", 
     expect(NodeFS.existsSync(golden)).toBe(true);
   });
 
+  it("keeps stale clones and bare mirrors in temp roots and exhaust dirs", async () => {
+    const root = tempDir("t3-reaper-tmpgit-");
+    writeAged(NodePath.join(root, "clone-old", ".git", "HEAD"), DAY, "ref: refs/heads/main\n");
+    writeAged(NodePath.join(root, "clone-old", "src", "main.c"), DAY);
+    bareRepo(NodePath.join(root, "mirror-old"));
+    writeAged(NodePath.join(root, "build-old", "out.o"), DAY);
+    writeAged(NodePath.join(root, "stale.log"), DAY);
+    ageTree(root, 3 * DAY);
+    const devRoot = tempDir("t3-reaper-devgit-");
+    const repo = NodePath.join(devRoot, "app");
+    bareRepo(NodePath.join(repo, "scratch-mirror"));
+    NodeFS.mkdirSync(NodePath.join(repo, "audit.git", "objects"), { recursive: true });
+    writeAged(NodePath.join(repo, "bench-old", "out.log"), DAY);
+    ageTree(devRoot, 10 * DAY);
+    const logs: string[] = [];
+    const sweep = { ...ctx(new PathGuard([])), log: (line: string) => void logs.push(line) };
+
+    const tmp = await sweepTmpRoots([root], sweep);
+    const exhaust = await sweepDevExhaust(devRoot, sweep);
+
+    expect(NodeFS.readdirSync(root).toSorted()).toEqual(["clone-old", "mirror-old"]);
+    expect([tmp.dirs, tmp.files]).toEqual([1, 1]);
+    expect(NodeFS.existsSync(NodePath.join(root, "mirror-old", "objects", "pack"))).toBe(true);
+    expect(exhaust).toBe(1);
+    expect(NodeFS.readdirSync(repo).toSorted()).toEqual(["audit.git", "scratch-mirror"]);
+    expect(logs.filter((line) => line.includes("Kept stale"))).toHaveLength(4);
+  });
+
   it("counts without removing in a dry run", async () => {
     const root = tempDir("t3-reaper-dry-");
     const stale = NodePath.join(root, "old.txt");
@@ -277,6 +326,7 @@ describe.skipIf(platform !== "linux" && platform !== "darwin")("reaper sweeps", 
         uid,
         nowMs: NOW_MS,
         homeDir: home,
+        tracksFiles: gitCannotAnswer,
         log: () => undefined,
       });
 
@@ -292,6 +342,38 @@ describe.skipIf(platform !== "linux" && platform !== "darwin")("reaper sweeps", 
     expect(trusted.tmp.removed).toBe(1);
     expect(trusted.exhaust).toBe(1);
     expect(NodeFS.existsSync(staleTmp)).toBe(false);
+  });
+
+  it("keeps stale git data below an approved rule and removes ordinary stale output", async () => {
+    const home = tempDir("t3-reaper-approved-");
+    const cache = NodePath.join(home, ".cache", "acme");
+    bareRepo(NodePath.join(cache, "mirror"));
+    bareRepo(NodePath.join(cache, "vendor", "deps", "lib"));
+    NodeFS.mkdirSync(NodePath.join(cache, "suffixed", "pkg", "upstream.git"), { recursive: true });
+    NodeFS.mkdirSync(NodePath.join(cache, "checkout", "src", ".GIT"), { recursive: true });
+    writeAged(NodePath.join(cache, "worktree-file", ".git"), 30 * DAY, "gitdir: /x\n");
+    writeAged(NodePath.join(cache, "build-old", "obj", "main.o"), 30 * DAY);
+    ageTree(cache, 30 * DAY);
+    const logs: string[] = [];
+    const totals = await sweepApprovedPolicy(
+      [{ path: cache, maxAgeDays: 7, keepLatest: 0, enabled: true }],
+      {
+        ...ctx(new PathGuard([])),
+        log: (line: string) => void logs.push(line),
+        homeDir: home,
+        historyRoots: [],
+      },
+      await realGitTracksFiles(),
+    );
+
+    expect(totals.removed).toBe(1);
+    expect(NodeFS.existsSync(NodePath.join(cache, "build-old"))).toBe(false);
+    for (const kept of ["mirror", "vendor", "suffixed", "checkout", "worktree-file"]) {
+      expect(NodeFS.existsSync(NodePath.join(cache, kept))).toBe(true);
+    }
+    expect(NodeFS.existsSync(NodePath.join(cache, "mirror", "objects", "pack"))).toBe(true);
+    expect(logs.filter((line) => line.includes("Kept stale"))).toHaveLength(5);
+    expect(logs.join("\n")).toContain(`bare git repository ${NodePath.join(cache, "mirror")}`);
   });
 
   it("treats only random mktemp suffixes as mktemp, never words in any case", () => {

@@ -15,6 +15,7 @@ import * as ServerConfig from "../../../config.ts";
 import * as ReaperPolicy from "../../../devtools/ReaperPolicy.ts";
 import * as ReaperProposals from "../../../devtools/reaper/ReaperProposals.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ProcessRunner from "../../../processRunner.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -59,6 +60,7 @@ it.effect("queues the agent's proposed rules and writes accepted ones into the p
     ).pipe(
       Layer.provideMerge(ServerSettings.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "reaper-proposals-" })),
+      Layer.provideMerge(ProcessRunner.layer),
       Layer.provideMerge(NodeServices.layer),
     );
 
@@ -162,6 +164,27 @@ it.effect("queues the agent's proposed rules and writes accepted ones into the p
       });
       expect(duplicate.queued).toEqual([]);
       expect(duplicate.refused[0]?.reason).toContain("already exists");
+
+      // Accept fails closed on a policy it cannot read or parse: no rewrite, proposal kept.
+      const [retry] = (yield* proposals.propose({
+        rules: [{ path: tmpDir, maxAgeDays: 3, keepLatest: 1, deletes: "x", safeBecause: "y" }],
+      })).queued;
+      const corrupt = `[[approved]]\npath = ${cacheDir}\nmax_age_days = soon\n`;
+      NodeFS.writeFileSync(policyPath, corrupt);
+      const refusedCorrupt = yield* proposals
+        .decide({ id: retry!.id, decision: "accept" })
+        .pipe(Effect.flip);
+      expect(refusedCorrupt._tag).toBe("ReaperProposalRefusedError");
+      expect(refusedCorrupt.message).toContain("Could not parse the reaper policy");
+      expect(NodeFS.readFileSync(policyPath, "utf8")).toBe(corrupt);
+      NodeFS.rmSync(policyPath);
+      NodeFS.mkdirSync(policyPath);
+      const refusedUnreadable = yield* proposals
+        .decide({ id: retry!.id, decision: "accept" })
+        .pipe(Effect.flip);
+      expect(refusedUnreadable.message).toContain("Could not read the reaper policy");
+      expect(NodeFS.readdirSync(policyPath)).toEqual([]);
+      expect((yield* proposals.list).map((p) => p.id)).toEqual([retry!.id]);
 
       // A corrupt store is kept as a copy and reads as empty.
       const storePath = NodePath.join(config.stateDir, "reaper", "proposals.json");
