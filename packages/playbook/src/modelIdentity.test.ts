@@ -74,24 +74,64 @@ describe("model identity normalization", () => {
     expect(normalizeEffort(undefined)).toBe("");
   });
 
-  it("uses a structured effort only when the model text has none, never for unknown", () => {
+  it("lets a structured effort win and keeps the name whole when one exists", () => {
     expect(classifyModel("model-a", "provider-a", "High")).toMatchObject({
       model: "model-a",
       effort: "high",
     });
-    expect(classifyModel("model-a-xhigh", "provider-a", "high").effort).toBe("xhigh");
+    expect(classifyModel("model-a-xhigh", "provider-a", "high")).toMatchObject({
+      model: "model-a-xhigh",
+      effort: "high",
+    });
+    expect(classifyModel("model-a (xhigh)", "provider-a", "high")).toMatchObject({
+      model: "model-a",
+      effort: "high",
+    });
+    expect(classifyModel("model-a-xhigh", "provider-a")).toMatchObject({
+      model: "model-a",
+      effort: "xhigh",
+    });
     expect(classifyModel("", "", "high")).toMatchObject({ model: "unknown", effort: "" });
+  });
+
+  it("keeps -max where it is part of the model id", () => {
+    expect(id("gpt-5.1-codex-max")).toBe("gpt-5.1-codex-max|");
+    expect(id("gpt-5-codex-max")).toBe("gpt-5-codex-max|");
+    expect(id("gpt-5-codex-max-high")).toBe("gpt-5-codex-max|high");
+    expect(normalizeModelIdentity("gpt-5.1-codex-max", "xhigh")).toMatchObject({
+      model: "gpt-5.1-codex-max",
+      effort: "xhigh",
+    });
+    expect(id("model-a-max")).toBe("model-a|max");
+  });
+
+  it("ignores default and context notes and accepts tagged ids", () => {
+    expect(id("model-a (default)")).toBe("model-a|");
+    expect(id("model-a (1M context)")).toBe("model-a|");
+    expect(id("model-a (200k context window) (high)")).toBe("model-a|high");
+    expect(id("Claude Opus 5.5 (1M context)")).toBe("claude-opus-5-5|");
+    expect(id("qwen3-coder:480b")).toBe("qwen3-coder:480b|");
+    expect(id("anthropic.claude-opus-4-1-20250805-v1:0")).toBe(
+      "anthropic.claude-opus-4-1-20250805-v1:0|",
+    );
+    expect(id("model-a the configured review model for host-a")).toBe("unknown|");
   });
 });
 
 describe("review stats model grouping", () => {
-  it("never reads actors from review prose", () => {
-    const review = parseStructuredReviewText(
+  it("keeps clean Reviewer lines and turns prose ones into unknown", () => {
+    const prose = parseStructuredReviewText(
       "Reviewer: model-a (high), the configured `ship_queue_review` model, reading the diff.\nVerdict: no blocker\n- [low] nit",
     );
-    expect(review.reviewer.model).toBe("unknown");
-    expect(review.submitter.model).toBe("unknown");
-    expect(review.verdict).toBe("pass");
+    expect(prose.reviewer.model).toBe("unknown");
+    expect(prose.submitter.model).toBe("unknown");
+    expect(prose.verdict).toBe("pass");
+
+    const clean = parseStructuredReviewText(
+      "## Review\n\nReviewer:       claude-opus-5-5 (medium)\n- Submitter: `Model A (xhigh)`\nVerdict: approve\n",
+    );
+    expect(clean.reviewer).toMatchObject({ model: "claude-opus-5-5", effort: "medium" });
+    expect(clean.submitter).toMatchObject({ model: "model-a", effort: "xhigh" });
   });
 
   it("groups stored variants of one model into one model with efforts apart", () => {

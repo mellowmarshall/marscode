@@ -1,7 +1,7 @@
 /**
- * Canonical review-model identity: one spelling per model, with reasoning
- * effort split out. "Model A (high)", "model_a-HIGH" and "vendor/model-a"
- * with effort "high" all become { model: "model-a", effort: "high" }.
+ * Canonical review-model identity: one spelling per model, effort split out
+ * ("Model A (high)" and "model_a-HIGH" -> model-a, high). A structured effort
+ * wins; a trailing effort word leaves the name only when there is none.
  */
 
 const EFFORTS: ReadonlySet<string> = new Set([
@@ -29,12 +29,19 @@ const PROVIDER_WORDS: Readonly<Record<string, string>> = {
   google: "antigravity",
   xai: "grok",
 };
+/** Name endings where "-max" is part of the model id, not an effort. */
+const MAX_IS_NAME_AFTER: ReadonlySet<string> = new Set(["codex"]);
+/** A trailing "(...)" or "[...]" note: an effort, a context tag, or prose. */
+const TRAILING_NOTE_RE = /[([]([^()[\]]*)[)\]]\s*$/;
+/** Trailing "(...)" notes that say nothing about the model's identity; "[...]" tags always drop. */
+const IGNORED_NOTE_RE = /^(?:default|\d+(?:\.\d+)?\s*[km]?\s*(?:token\s+)?context(?:\s+window)?)$/i;
 const ANTHROPIC_RE =
   /^(?:claude-)?(opus|sonnet|haiku|fable)-(\d+)(?:[.-](\d+))?((?:-[a-z0-9.]+)*)$/;
-const MODEL_ID_RE = /^[a-z0-9][a-z0-9.-]*$/;
+const MODEL_ID_RE = /^[a-z0-9][a-z0-9.:-]*$/;
 const MAX_RAW_LENGTH = 96;
 const MAX_ID_LENGTH = 64;
 const MAX_ID_SEGMENTS = 8;
+const MAX_WORDS = 5;
 
 export interface ModelIdentity {
   /** Canonical id, or "unknown" when the text is not a model name. */
@@ -58,22 +65,28 @@ export function normalizeEffort(raw: unknown): string {
   return EFFORTS.has(effort) ? effort : "";
 }
 
-export function normalizeModelIdentity(raw: unknown): ModelIdentity {
+/** RAW's identity; STRUCTURED_EFFORT, a separate effort field, wins over any effort in RAW. */
+export function normalizeModelIdentity(raw: unknown, structuredEffort?: unknown): ModelIdentity {
   let text = typeof raw === "string" ? raw.replace(/[`*"]/g, "").trim() : "";
   if (!text || text.length > MAX_RAW_LENGTH) return UNKNOWN;
 
-  let effort = "";
-  const paren = /\(([^()]*)\)\s*$/.exec(text);
-  if (paren) {
-    effort = normalizeEffort(paren[1]);
-    if (!effort) return UNKNOWN;
-    text = text.slice(0, paren.index).trim();
+  const fieldEffort = normalizeEffort(structuredEffort);
+  let textEffort = "";
+  let note = TRAILING_NOTE_RE.exec(text);
+  while (note) {
+    const [whole, body = ""] = note;
+    const noteEffort = normalizeEffort(body);
+    const ignorable = whole.startsWith("[") || IGNORED_NOTE_RE.test(body.trim());
+    if (!noteEffort && !ignorable) return UNKNOWN;
+    textEffort ||= noteEffort;
+    text = text.slice(0, note.index).trim();
+    note = TRAILING_NOTE_RE.exec(text);
   }
-  text = text.replace(/\[[^\]]*\]\s*$/, "").trim();
   text = text.slice(text.lastIndexOf("/") + 1);
 
   let providerHint = "";
   const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length > MAX_WORDS) return UNKNOWN;
   const leading = words[0] ? PROVIDER_WORDS[words[0]] : undefined;
   if (leading && words.length > 1) {
     providerHint = leading;
@@ -81,10 +94,10 @@ export function normalizeModelIdentity(raw: unknown): ModelIdentity {
   }
 
   const segments = words.join("-").replace(/_/g, "-").split("-").filter(Boolean);
-  const last = segments.length > 1 ? normalizeEffort(segments.at(-1)) : "";
-  if (last) {
+  const last = segments.length > 1 && !fieldEffort ? normalizeEffort(segments.at(-1)) : "";
+  if (last && !(last === "max" && MAX_IS_NAME_AFTER.has(segments.at(-2) ?? ""))) {
     segments.pop();
-    effort ||= last;
+    textEffort ||= last;
   }
 
   let model = segments.join("-");
@@ -101,5 +114,5 @@ export function normalizeModelIdentity(raw: unknown): ModelIdentity {
   ) {
     return UNKNOWN;
   }
-  return { model, effort, providerHint };
+  return { model, effort: fieldEffort || textEffort, providerHint };
 }

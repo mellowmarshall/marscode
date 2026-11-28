@@ -15,6 +15,8 @@ const SUMMARY_COUNT_RE = /\b(\d+)\s+(breaking|critical|high|medium|low|info)\b/g
 const ITEM_SEV_RE =
   /^(?:[-*+]\s+)?(?:\*{0,2}`?)?(?:\[(breaking|critical|high|medium|low|info)\]|(breaking|critical|high|medium|low)(?!-)(?:\s*\d+)?\s*(?::|\s+[-\u2014]|\*{2}\s*[:.\-\u2014])|\b([BCHML])(\d{1,2})\s*[:.\-\u2014)])/i;
 const SEV_FIELD_RE = /\bseverity\s*:\s*(breaking|critical|high|medium|low|info)\b/i;
+const REVIEWER_LINE_RE = /^\s*(?:[-*+>]\s*)*\*{0,2}`?reviewer`?\*{0,2}\s*:\s*(.+)$/i;
+const SUBMITTER_LINE_RE = /^\s*(?:[-*+>]\s*)*\*{0,2}`?(?:submitter|author)`?\*{0,2}\s*:\s*(.+)$/i;
 const VERDICT_LINE_RE = /^\s*(?:[-*+>]\s*)*\*{0,2}`?verdict`?\*{0,2}\s*:\s*(.+)$/i;
 const STANDALONE_VERDICT_RE =
   /^\s*\*{0,2}`?(REQUEST[\s_-]+CHANGES|CHANGES[\s_-]+REQUESTED|APPROVE[D]?|DO\s+NOT\s+SHIP|REJECT(?:ED)?|PASS(?:ED)?|FAIL(?:ED)?|COMMENT)`?\*{0,2}\s*$/i;
@@ -300,11 +302,23 @@ export function parseStructuredReviewText(text: string): {
     }
   }
 
-  // Prose names its models in free text ("Reviewer: <model> (high), the configured
-  // ..."), so actors come only from structured fields; the store fills them in.
+  // A "Reviewer:" line may be prose ("<model> (high), the configured ..."); classifyModel
+  // keeps a clean model name and turns prose into "unknown".
+  let reviewerRaw = "";
+  let submitterRaw = "";
   let verdict = "pass";
   let sawExplicitVerdict = false;
   for (const line of text.split(/\r?\n/)) {
+    const rm = reviewerRaw ? null : REVIEWER_LINE_RE.exec(line);
+    if (rm?.[1]) {
+      reviewerRaw = rm[1].trim();
+      continue;
+    }
+    const sm = submitterRaw ? null : SUBMITTER_LINE_RE.exec(line);
+    if (sm?.[1]) {
+      submitterRaw = sm[1].trim();
+      continue;
+    }
     const vm = VERDICT_LINE_RE.exec(line);
     if (vm?.[1]) {
       verdict = parseVerdictValue(vm[1]);
@@ -319,8 +333,8 @@ export function parseStructuredReviewText(text: string): {
     }
   }
   return {
-    reviewer: UNKNOWN_ACTOR,
-    submitter: UNKNOWN_ACTOR,
+    reviewer: reviewerRaw ? classifyModel(reviewerRaw) : UNKNOWN_ACTOR,
+    submitter: submitterRaw ? classifyModel(submitterRaw) : UNKNOWN_ACTOR,
     verdict,
     counts: parseAdversarialReviewCounts(text),
     reviewThreadId: "",

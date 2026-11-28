@@ -65,7 +65,10 @@ describe("UsageReviewsTable", () => {
 
     const toggle = page.getByRole("button", { name: "model-a" });
     await expect.element(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(document.body.textContent).not.toContain("xhigh");
+    const effortsId = toggle.element().getAttribute("aria-controls");
+    const efforts = effortsId ? document.getElementById(effortsId) : null;
+    expect(efforts?.textContent).toContain("xhigh");
+    await expect.element(page.getByText("xhigh", { exact: true })).not.toBeVisible();
     expect(document.body.textContent).not.toContain("Family A");
     await expect.element(page.getByText("3 models")).toBeVisible();
 
@@ -74,10 +77,10 @@ describe("UsageReviewsTable", () => {
     await expect.element(page.getByText("xhigh", { exact: true })).toBeVisible();
     await expect.element(page.getByText("high", { exact: true })).toBeVisible();
     await expect.element(page.getByText("Family A")).toBeVisible();
-    expect(document.body.textContent).not.toContain("medium");
+    await expect.element(page.getByText("medium", { exact: true })).not.toBeVisible();
 
     await toggle.click();
-    await expect.element(page.getByText("xhigh", { exact: true })).not.toBeInTheDocument();
+    await expect.element(page.getByText("xhigh", { exact: true })).not.toBeVisible();
   });
 
   it.each([976, 432])(

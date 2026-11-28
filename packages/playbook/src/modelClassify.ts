@@ -3,7 +3,7 @@
  * to its family, lab and provider. Shared by the review stats, the
  * challenger's records and the server's review-model routing.
  */
-import { normalizeEffort, normalizeModelIdentity } from "./modelIdentity.ts";
+import { normalizeModelIdentity } from "./modelIdentity.ts";
 
 export interface ClassifiedModel {
   readonly model: string;
@@ -41,15 +41,15 @@ export function normalizeProviderId(raw: unknown): string {
 
 /**
  * RAW_MODEL's canonical identity (see modelIdentity.ts) and its family, lab and
- * provider. An effort in the model text wins over RAW_EFFORT, a structured field.
+ * provider. RAW_EFFORT, a structured field, wins over an effort in the model text.
  */
 export function classifyModel(
   rawModel: string | null | undefined,
   rawProvider?: string | null,
   rawEffort?: string | null,
 ): ClassifiedModel {
-  const identity = normalizeModelIdentity(rawModel);
-  const effort = identity.model === "unknown" ? "" : identity.effort || normalizeEffort(rawEffort);
+  const identity = normalizeModelIdentity(rawModel, rawEffort);
+  const effort = identity.model === "unknown" ? "" : identity.effort;
   const providerHint = rawProvider || identity.providerHint;
   const provider = normalizeProviderId(providerHint);
   const model = identity.model;

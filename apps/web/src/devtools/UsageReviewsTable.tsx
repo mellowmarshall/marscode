@@ -2,7 +2,7 @@
  * Review & Ship stats table: one collapsed row per model, effort rows on demand.
  * Severity columns appear only when the container has room, so it never scrolls sideways.
  */
-import { useState } from "react";
+import { Fragment, useId, useState } from "react";
 import { T, useGT } from "gt-react";
 import { ChevronRightIcon } from "lucide-react";
 
@@ -27,6 +27,7 @@ type SeverityMetricRow = Pick<
 const NUM = "w-px whitespace-nowrap px-2 text-right";
 const AVG_COL = "hidden @md/reviews:table-cell";
 const SEV_COL = "hidden @xl/reviews:table-cell";
+const BODY = "font-mono tabular-nums";
 
 function SeverityRowCells({
   row,
@@ -62,6 +63,7 @@ export function UsageReviewsTable({
   readonly loading: boolean;
 }) {
   const gt = useGT();
+  const idPrefix = useId();
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const groupedModels = stats && side !== "pair" ? groupRowsByModelAndEffort(stats.groups) : [];
   const rowCount = side === "pair" ? (stats?.groups.length ?? 0) : groupedModels.length;
@@ -125,71 +127,79 @@ export function UsageReviewsTable({
               </th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-border/50 font-mono tabular-nums">
-            {!stats || stats.groups.length === 0 ? (
+          {!stats || stats.groups.length === 0 ? (
+            <tbody>
               <tr>
-                <td colSpan={10} className="px-3 py-6 text-center font-sans text-muted-foreground">
+                <td colSpan={10} className="px-3 py-6 text-center text-muted-foreground">
                   <T>No review records match the selected filters.</T>
                 </td>
               </tr>
-            ) : side === "pair" ? (
-              stats.groups.map((row) => (
+            </tbody>
+          ) : side === "pair" ? (
+            <tbody className={BODY}>
+              {stats.groups.map((row) => (
                 <tr key={row.key} className="hover:bg-muted/20">
                   <td className="px-3 py-2 font-sans font-medium text-foreground wrap-anywhere">
                     {row.key}
                   </td>
                   <SeverityRowCells row={row} />
                 </tr>
-              ))
-            ) : (
-              groupedModels.flatMap((grp) => {
-                const open = expanded.has(grp.model);
-                const passRatePct = grp.reviews > 0 ? (100 * grp.passed) / grp.reviews : 0;
-                const avgIssues = grp.reviews > 0 ? grp.total / grp.reviews : 0;
-                return [
-                  <tr key={`model:${grp.model}`} className="hover:bg-muted/20">
-                    <td className="px-1.5 py-1 font-sans">
-                      <button
-                        type="button"
-                        aria-expanded={open}
-                        className="flex w-full min-w-0 cursor-pointer items-start gap-1 rounded px-1.5 py-1 text-left font-medium text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-                        onClick={() => toggle(grp.model)}
-                      >
-                        <ChevronRightIcon
-                          aria-hidden
-                          className={cn(
-                            "mt-px size-3.5 shrink-0 text-muted-foreground",
-                            open && "rotate-90",
-                          )}
-                        />
-                        <span className="min-w-0 wrap-anywhere">{grp.model}</span>
-                      </button>
-                      {open && grp.family ? (
-                        <div className="pb-1 pl-6 font-mono text-3xs text-muted-foreground">
-                          {grp.family}
-                        </div>
-                      ) : null}
-                    </td>
-                    <SeverityRowCells row={{ ...grp, passRatePct, avgIssues }} />
-                  </tr>,
-                  ...(open
-                    ? grp.efforts.map((eff) => (
-                        <tr key={`eff:${grp.model}:${eff.effort}`} className="bg-muted/10">
-                          <td className="py-1.5 pr-3 pl-8 font-sans text-2xs text-muted-foreground">
-                            <Badge size="sm" variant="outline">
-                              {eff.effort && eff.effort !== "default"
-                                ? eff.effort
-                                : gt("default", { $context: "reasoning effort not set" })}
-                            </Badge>
-                          </td>
-                          <SeverityRowCells row={eff} sub />
-                        </tr>
-                      ))
-                    : []),
-                ];
-              })
-            )}
-          </tbody>
+              ))}
+            </tbody>
+          ) : (
+            groupedModels.map((grp, index) => {
+              const open = expanded.has(grp.model);
+              const effortsId = `${idPrefix}-efforts-${index}`;
+              const passRatePct = grp.reviews > 0 ? (100 * grp.passed) / grp.reviews : 0;
+              const avgIssues = grp.reviews > 0 ? grp.total / grp.reviews : 0;
+              return (
+                <Fragment key={grp.model}>
+                  <tbody className={cn(BODY, "border-t border-border/50")}>
+                    <tr className="hover:bg-muted/20">
+                      <td className="px-1.5 py-1 font-sans">
+                        <button
+                          type="button"
+                          aria-expanded={open}
+                          aria-controls={effortsId}
+                          className="flex w-full min-w-0 cursor-pointer items-start gap-1 rounded px-1.5 py-1 text-left font-medium text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                          onClick={() => toggle(grp.model)}
+                        >
+                          <ChevronRightIcon
+                            aria-hidden
+                            className={cn(
+                              "mt-px size-3.5 shrink-0 text-muted-foreground",
+                              open && "rotate-90",
+                            )}
+                          />
+                          <span className="min-w-0 wrap-anywhere">{grp.model}</span>
+                        </button>
+                        {open && grp.family ? (
+                          <div className="pb-1 pl-6 font-mono text-3xs text-muted-foreground">
+                            {grp.family}
+                          </div>
+                        ) : null}
+                      </td>
+                      <SeverityRowCells row={{ ...grp, passRatePct, avgIssues }} />
+                    </tr>
+                  </tbody>
+                  <tbody id={effortsId} hidden={!open} className={BODY}>
+                    {grp.efforts.map((eff) => (
+                      <tr key={eff.effort} className="border-t border-border/50 bg-muted/10">
+                        <td className="py-1.5 pr-3 pl-8 font-sans text-2xs text-muted-foreground">
+                          <Badge size="sm" variant="outline">
+                            {eff.effort && eff.effort !== "default"
+                              ? eff.effort
+                              : gt("default", { $context: "reasoning effort not set" })}
+                          </Badge>
+                        </td>
+                        <SeverityRowCells row={eff} sub />
+                      </tr>
+                    ))}
+                  </tbody>
+                </Fragment>
+              );
+            })
+          )}
         </table>
       </div>
     </section>
