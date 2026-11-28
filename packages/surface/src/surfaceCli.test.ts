@@ -18,11 +18,32 @@ interface Run {
   readonly stderr: string;
 }
 
+/**
+ * The environment every command runs in: none of the caller's ship-queue job
+ * (SHIP_QUEUE_ONTO, its body file) or git settings (GIT_*, global and system
+ * config), and a home of the test's own, so a CI job or a user's setup never
+ * changes what the temp repo says.
+ */
+function isolatedEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const base = Object.fromEntries(
+    Object.entries(process.env).filter(([k]) => !/^(SHIP_QUEUE_|GIT_)/.test(k)),
+  );
+  const home = NodePath.join(tmp, "home");
+  return {
+    ...base,
+    HOME: home,
+    XDG_CONFIG_HOME: NodePath.join(home, ".config"),
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    ...env,
+  };
+}
+
 function run(cmd: string, args: string[], cwd = repo, env: NodeJS.ProcessEnv = {}): Run {
   const res = NodeChildProcess.spawnSync(cmd, args, {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, SHIP_QUEUE_BODYFILE: "", SHIP_QUEUE_JOB: "", ...env },
+    env: isolatedEnv(env),
   });
   return { status: res.status, stdout: res.stdout, stderr: res.stderr };
 }
@@ -49,6 +70,7 @@ beforeEach(() => {
   tmp = NodeFS.realpathSync(NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "surface-test-")));
   repo = NodePath.join(tmp, "mock-repo");
   NodeFS.mkdirSync(repo);
+  NodeFS.mkdirSync(NodePath.join(tmp, "home"));
   git("init", "-q", "-b", "main", repo);
   write("apps/api/src/routes/sample.ts", ROUTES());
   write(
