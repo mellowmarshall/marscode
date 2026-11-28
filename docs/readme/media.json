@@ -12,7 +12,7 @@
       "apps/web/src/index.css",
       "apps/web/src/components/ui/*.tsx"
     ],
-    "hash": "74d285d32204c126"
+    "hash": "41a8d69f742fe802"
   },
   "ship-queue.webp": {
     "sources": [
