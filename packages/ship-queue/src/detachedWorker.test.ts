@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { runShipQueueCli } from "./cli.ts";
 import { readJob, readLog } from "./jobStore.ts";
 import { workerLockPath } from "./processLocks.ts";
+import { withoutAppImageRuntime } from "./workerLauncher.ts";
 
 const CLI = NodePath.join(import.meta.dirname, "cli.ts");
 const cleanups: Array<() => void> = [];
@@ -130,7 +131,7 @@ describe("detached worker", () => {
     // Shadows the host's playbook so the advisory challenge never reaches a live reviewer.
     NodeFS.writeFileSync(
       NodePath.join(bin, "playbook"),
-      '#!/usr/bin/env bash\nwhile [ $# -gt 0 ]; do [ "$1" = --out ] && printf "PLAYBOOK REVIEW: PASS\\n" > "$2"; shift; done\n',
+      '#!/usr/bin/env bash\nenv > "$WORKER_ENV_DUMP"\nwhile [ $# -gt 0 ]; do [ "$1" = --out ] && printf "PLAYBOOK REVIEW: PASS\\n" > "$2"; shift; done\n',
       { mode: 0o755 },
     );
     NodeFS.writeFileSync(NodePath.join(tmp, "body.md"), "Adds z.\n\nCloses #20\n");
@@ -143,6 +144,10 @@ describe("detached worker", () => {
       T3_GUARD_GRANT_SOCKET: "",
       FAKE_GH_STATE: NodePath.join(tmp, "gh-state"),
       FAKE_GH_REMOTE: remote,
+      WORKER_ENV_DUMP: NodePath.join(tmp, "worker-env"),
+      // MarsCode's AppImage runtime: the worker must not carry it past a restart.
+      LD_LIBRARY_PATH: "/tmp/.mount_MarsCoTest/usr/lib",
+      APPDIR: "/tmp/.mount_MarsCoTest",
     };
 
     const submitter = NodeChildProcess.spawnSync(
@@ -185,8 +190,27 @@ describe("detached worker", () => {
     expect(sh(remote, ["log", "--format=%b", "-1", "main"])).toContain("Closes #20");
     expect(NodeFS.existsSync(wt)).toBe(false);
 
+    const workerEnv = NodeFS.readFileSync(NodePath.join(tmp, "worker-env"), "utf8");
+    expect(workerEnv).not.toMatch(/^LD_LIBRARY_PATH=/m);
+    expect(workerEnv).not.toMatch(/^APPDIR=/m);
+
     // The worker releases its claim once the queue is empty, and wrote no failure of its own.
     await gone(workerLockPath(root));
     expect(NodeFS.existsSync(NodePath.join(root, "worker.log"))).toBe(false);
+  });
+});
+
+describe("worker environment", () => {
+  it("drops the AppImage's runtime variables and mount paths, keeping the rest", () => {
+    expect(
+      withoutAppImageRuntime({
+        PATH: "/tmp/.mount_MarsCoX:/tmp/.mount_MarsCoX/usr/sbin:/usr/bin",
+        LD_LIBRARY_PATH: "/tmp/.mount_MarsCoX/usr/lib:/opt/cuda/lib64",
+        APPDIR: "/tmp/.mount_MarsCoX",
+        APPIMAGE: "/opt/MarsCode.AppImage",
+        XDG_DATA_DIRS: "/tmp/.mount_MarsCoX/usr/share",
+        HOME: "/srv/lane",
+      }),
+    ).toEqual({ PATH: "/usr/bin", HOME: "/srv/lane" });
   });
 });
