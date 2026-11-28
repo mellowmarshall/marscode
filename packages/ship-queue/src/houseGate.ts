@@ -199,7 +199,9 @@ export async function houseStages(
   });
   if (grant.ok) {
     updateJob(deps.root, job.id, { granted_digest: digest });
-    appendLog(deps.root, job.id, `protected diff approved: ${bundle.protected_paths.join(", ")}`);
+    // An approval covers the pull request: a job that never waited found an earlier one.
+    const how = job.waiting_for === "action" ? "approved" : "approval reused";
+    mark(deps.root, job.id, `protected diff ${how}: ${bundle.protected_paths.join(", ")}`);
     return { kind: "pass" };
   }
   if (digestChanged || job.waiting_for !== "action") {
