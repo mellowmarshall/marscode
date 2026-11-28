@@ -360,11 +360,14 @@ describe("CI capability/arch routing with in-memory telemetry, battery skip, set
 
 describe("host probe, availability, and MarsCode payload sync", () => {
   it("resolves MarsCode host-sync payload paths (infra/ci-host + bundled packages) and archives/unpacks cleanly", async () => {
+    // The paths come from the commit, not the working tree.
     const repoRoot = NodePath.resolve(import.meta.dirname, "../../..");
-    const paths = resolveHostSyncPaths(repoRoot);
+    const { paths, error } = await resolveHostSyncPaths(nodeProcessRunner, repoRoot, "HEAD");
+    expect(error).toBeUndefined();
     expect(paths).toContain("infra/ci-host");
     expect(paths).toContain("packages/runlog");
     expect(paths).toContain("packages/guard-protocol");
+    expect(paths).toContain("packages/host-guards");
     expect(paths).toContain("packages/playbook");
 
     // Create a tiny real git repo with infra/ci-host and verify syncCiHostPayload archives and pipes base64 tar.
@@ -384,26 +387,66 @@ describe("host probe, availability, and MarsCode payload sync", () => {
     await run(["add", "infra/ci-host/ci-vp.sh"]);
     await run(["commit", "-m", "init"]);
 
-    // Prebuilt CLI bundles ride along at packages/<name>/dist/bin.mjs; a missing one refuses the sync.
-    const cliBundles = mkTempDir("sq-clibundles-");
-    NodeFS.mkdirSync(NodePath.join(cliBundles, "runlog", "dist"), { recursive: true });
-    NodeFS.writeFileSync(NodePath.join(cliBundles, "runlog", "dist", "bin.mjs"), "// runlog\n");
-    const partial = await syncCiHostPayload({
+    // The payload paths come from the synced commit: packages that exist only in the working tree
+    // (not committed) do not count, and a commit without a package whose CLI the payload carries
+    // is refused before anything reaches the host.
+    for (const name of ["runlog", "playbook", "host-guards"]) {
+      NodeFS.mkdirSync(NodePath.join(fakeRepo, "packages", name), { recursive: true });
+      NodeFS.writeFileSync(NodePath.join(fakeRepo, "packages", name, "package.json"), "{}\n");
+    }
+    let lackingRemoteCalls = 0;
+    const lacking = await syncCiHostPayload({
       host: { name: "ci-host-1", ssh: "ci-host-1.example", role: "ci", data_root: "~/data" },
       marscodeRoot: fakeRepo,
-      bundleDir: cliBundles,
+      bundleCacheDir: mkTempDir("sq-bundlecache-lacking-"),
+      deps: {
+        runLocal: nodeProcessRunner,
+        runRemote: async () => {
+          lackingRemoteCalls += 1;
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      },
+    });
+    expect(lacking.ok).toBe(false);
+    expect(lacking.error).toContain(
+      "lacks packages/runlog, packages/playbook, packages/host-guards",
+    );
+    expect(lackingRemoteCalls).toBe(0);
+    await run(["add", "packages"]);
+    await run(["commit", "-m", "packages"]);
+
+    // The payload carries each package's bundle built for exactly this commit. A failed build
+    // (this fake repo has no workspace to install) refuses the sync.
+    const bundleCache = mkTempDir("sq-bundlecache-");
+    const failedBuild = await syncCiHostPayload({
+      host: { name: "ci-host-1", ssh: "ci-host-1.example", role: "ci", data_root: "~/data" },
+      marscodeRoot: fakeRepo,
+      bundleCacheDir: bundleCache,
       deps: { runLocal: nodeProcessRunner },
     });
-    expect(partial.ok).toBe(false);
-    expect(partial.error).toContain("missing CLI bundle(s) playbook");
-    NodeFS.mkdirSync(NodePath.join(cliBundles, "playbook", "dist"), { recursive: true });
-    NodeFS.writeFileSync(NodePath.join(cliBundles, "playbook", "dist", "bin.mjs"), "// playbook\n");
+    expect(failedBuild.ok).toBe(false);
+    expect(failedBuild.error).toContain("bundle build for");
+    // A completed build of this commit is reused from the cache.
+    const head = (
+      await nodeProcessRunner({ command: "git", args: ["rev-parse", "HEAD"], cwd: fakeRepo })
+    ).stdout.trim();
+    for (const name of ["runlog", "playbook", "host-guards"]) {
+      const dist = NodePath.join(bundleCache, head, "packages", name, "dist");
+      NodeFS.mkdirSync(dist, { recursive: true });
+      NodeFS.writeFileSync(NodePath.join(dist, "bin.mjs"), `// ${name}\n`);
+    }
+    // The playbook's design scan rides along with its CLI, built from the same commit.
+    NodeFS.writeFileSync(
+      NodePath.join(bundleCache, head, "packages", "playbook", "dist", "pb_design_scan.mjs"),
+      "// scan\n",
+    );
+    NodeFS.writeFileSync(NodePath.join(bundleCache, head, ".complete"), "");
 
     let receivedStdin = "";
     const synced = await syncCiHostPayload({
       host: { name: "ci-host-1", ssh: "ci-host-1.example", role: "ci", data_root: "~/data" },
       marscodeRoot: fakeRepo,
-      bundleDir: cliBundles,
+      bundleCacheDir: bundleCache,
       deps: {
         runLocal: nodeProcessRunner,
         runRemote: async (_alias, _script, opts) => {
@@ -415,8 +458,13 @@ describe("host probe, availability, and MarsCode payload sync", () => {
     expect(synced.ok).toBe(true);
     expect(synced.paths).toEqual([
       "infra/ci-host",
+      "packages/runlog",
+      "packages/host-guards",
+      "packages/playbook",
       "packages/runlog/dist/bin.mjs",
       "packages/playbook/dist/bin.mjs",
+      "packages/host-guards/dist/bin.mjs",
+      "packages/playbook/dist/pb_design_scan.mjs",
     ]);
     const shipped = await nodeProcessRunner({
       command: "bash",
@@ -429,41 +477,44 @@ describe("host probe, availability, and MarsCode payload sync", () => {
         "infra/ci-host/ci-vp.sh",
         "packages/runlog/dist/bin.mjs",
         "packages/playbook/dist/bin.mjs",
+        "packages/host-guards/dist/bin.mjs",
       ]),
     );
 
-    // The playbook's design scan rides along when its release holds one.
-    NodeFS.writeFileSync(
-      NodePath.join(cliBundles, "playbook", "dist", "pb_design_scan.mjs"),
-      "// scan\n",
-    );
-    let withScanStdin = "";
-    const withScan = await syncCiHostPayload({
-      host: { name: "ci-host-1", ssh: "ci-host-1.example", role: "ci", data_root: "~/data" },
-      marscodeRoot: fakeRepo,
-      bundleDir: cliBundles,
-      deps: {
-        runLocal: nodeProcessRunner,
-        runRemote: async (_alias, _script, opts) => {
-          withScanStdin = opts?.stdin ?? "";
-          return { exitCode: 0, stdout: "", stderr: "" };
-        },
-      },
-    });
-    expect(withScan.paths).toContain("packages/playbook/dist/pb_design_scan.mjs");
     const shippedScan = await nodeProcessRunner({
       command: "bash",
       args: ["-c", "base64 -d | tar -xO packages/playbook/dist/pb_design_scan.mjs"],
       cwd: fakeRepo,
-      stdin: withScanStdin,
+      stdin: receivedStdin,
     });
     expect(shippedScan.stdout).toBe("// scan\n");
+
+    // A cached build that lost one bundle is not reused: it is rebuilt (which fails here), and the
+    // host's payload is never replaced.
+    NodeFS.rmSync(NodePath.join(bundleCache, head, "packages", "playbook", "dist", "bin.mjs"));
+    let remoteCalls = 0;
+    const partial = await syncCiHostPayload({
+      host: { name: "ci-host-1", ssh: "ci-host-1.example", role: "ci", data_root: "~/data" },
+      marscodeRoot: fakeRepo,
+      bundleCacheDir: bundleCache,
+      deps: {
+        runLocal: nodeProcessRunner,
+        runRemote: async () => {
+          remoteCalls += 1;
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      },
+    });
+    expect(partial.ok).toBe(false);
+    expect(partial.error).toContain("bundle build for");
+    expect(remoteCalls).toBe(0);
 
     // Rejects option-like sourceRef before calling git archive.
     const badRef = await syncCiHostPayload({
       host: { name: "ci-host-1", ssh: "ci-host-1.example", role: "ci", data_root: "~/data" },
       marscodeRoot: fakeRepo,
       sourceRef: "--output=/tmp/evil.tar",
+      bundleCacheDir: bundleCache,
       deps: { runLocal: nodeProcessRunner },
     });
     expect(badRef.ok).toBe(false);

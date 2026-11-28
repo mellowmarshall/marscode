@@ -7,6 +7,7 @@ import { rollbackShipQueueDepsAttempt } from "./depsRollback.ts";
 import { scanShipQueueDepsRepo } from "./depsScan.ts";
 import { checkCiHosts, setCiHostAvailability, type HostExecDeps } from "./hostProbe.ts";
 import { provisionCiHost, syncCiHostPayload } from "./hostProvision.ts";
+import { payloadBundleCacheDir } from "./payloadBundles.ts";
 import { buildRenovateCustomManagers, extractPinVersions, loadPinsSpec } from "./pins.ts";
 import { collectRepoToolRequirements } from "./repoRequirements.ts";
 import {
@@ -189,11 +190,17 @@ export async function runHostsSubcommand(
       io.stderr(usage);
       return 64;
     }
+    const marscodeRoot = io.env.MARSCODE_ROOT?.trim() || undefined;
+    if (!marscodeRoot) {
+      io.stderr(
+        "ship-queue hosts provision: warning: MARSCODE_ROOT is not set, so the payload (installers and bundles) is not synced first\n",
+      );
+    }
     const res = await provisionCiHost({
       queueRoot: root,
       hostName,
       manifestPath,
-      marscodeRoot: io.env.MARSCODE_ROOT?.trim() || undefined,
+      marscodeRoot,
       sourceRef: io.env.SHIP_QUEUE_SOURCE_REF?.trim() || undefined,
       onProgress: (line) => io.stdout(`${line}\n`),
     });
@@ -223,7 +230,20 @@ export async function runHostsSubcommand(
       io.stderr(`ship-queue hosts sync: no CI host ${hostName}\n`);
       return 1;
     }
-    const res = await syncCiHostPayload({ host, marscodeRoot, sourceRef, deps: hostDeps });
+    const bundleCacheDir = payloadBundleCacheDir(loaded.manifest.hosts);
+    if (!bundleCacheDir) {
+      io.stderr(
+        "ship-queue hosts sync: the manifest has no local (ssh: null) host to build payload bundles on\n",
+      );
+      return 1;
+    }
+    const res = await syncCiHostPayload({
+      host,
+      marscodeRoot,
+      sourceRef,
+      bundleCacheDir,
+      deps: hostDeps,
+    });
     if (!res.ok) {
       io.stderr(`ship-queue hosts sync: ${res.error ?? "failed"}\n`);
       return 1;

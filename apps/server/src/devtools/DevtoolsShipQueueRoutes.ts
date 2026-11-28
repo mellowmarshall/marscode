@@ -1,6 +1,7 @@
 // Native Ship Queue HTTP routes (deps, status, cancel) backed directly by `@t3tools/ship-queue` + SQLite + Scheduler.
 import { resolveQueueRoot } from "@t3tools/ship-queue/cli";
 import { decideShipQueueDeps, listShipQueueDeps } from "@t3tools/ship-queue/depsEngine";
+import { resolveRegisteredRepoPrimary } from "@t3tools/ship-queue/depsRepoFiles";
 import { scanDueDepsRepos, scanShipQueueDepsRepo } from "@t3tools/ship-queue/depsScan";
 import { DEP_REPORT_ID_RE, DEP_REPO_NAME_RE } from "@t3tools/ship-queue/depsTypes";
 import { reconcileDueToolDrift } from "@t3tools/ship-queue/toolDriftReconcile";
@@ -117,15 +118,48 @@ export const handleShipQueueRoute = Effect.fn("DevtoolsShipQueueRoutes.handle")(
     if (!repo || !DEP_REPO_NAME_RE.test(repo)) {
       return jsonResponse({ error: "Invalid repository name" }, 400);
     }
-    const res = yield* Effect.promise(() => scanShipQueueDepsRepo({ queueRoot }, { repo }));
+    if (!resolveRegisteredRepoPrimary(queueRoot, repo)) {
+      return jsonResponse(
+        {
+          ok: false,
+          exitCode: 2,
+          data: null,
+          error: `repository '${repo}' has no registered primary checkout`,
+        },
+        400,
+      );
+    }
+    // A Renovate lookup can take many minutes: answer once the scan has claimed the repo (or
+    // said why it did not), and let the lookup go on; the client polls status for its report.
+    const claim = yield* Effect.promise(
+      () =>
+        new Promise<{
+          readonly started: boolean;
+          readonly reason?: string;
+          readonly error?: string;
+        }>((resolve) => {
+          scanShipQueueDepsRepo({ queueRoot, onClaim: resolve }, { repo })
+            .then((res) =>
+              resolve({ started: false, error: res.error ?? "the scan could not start" }),
+            )
+            .catch((err: unknown) =>
+              resolve({ started: false, error: err instanceof Error ? err.message : String(err) }),
+            );
+        }),
+    );
+    // No claim at all (the store or the claim failed) is an error, never a skip.
+    if (!claim.started && claim.error !== undefined && claim.reason === undefined) {
+      return jsonResponse({ ok: false, exitCode: 2, data: null, error: claim.error }, 500);
+    }
     return jsonResponse(
       {
-        ok: res.ok,
-        exitCode: res.ok ? 0 : 2,
-        data: res.ok ? { started: true, skipped: res.skipped === true, repo } : null,
-        ...(res.error ? { error: res.error } : {}),
+        ok: true,
+        exitCode: 0,
+        data: claim.started
+          ? { started: true, repo }
+          : { started: false, skipped: true, reason: claim.reason, repo },
       },
-      res.ok ? 200 : 400,
+      200,
     );
   }
 

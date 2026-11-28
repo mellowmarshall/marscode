@@ -390,20 +390,30 @@ export async function respondToDevtoolsApproval(
   const { hold, canApprove, canReject } = entry;
   const shouldScan = decision === "cancel" || (decision === "accept" && !canApprove);
   if (shouldScan) {
-    const res = await fetchDevtoolsJson<{ readonly ok?: boolean; readonly error?: string }>(
-      environmentId,
-      "/ship-queue/deps/scan",
-      {
-        method: "POST",
-        body: { repo: hold.repo },
-      },
-    );
+    const res = await fetchDevtoolsJson<{
+      readonly ok?: boolean;
+      readonly error?: string;
+      readonly data?: { readonly started?: boolean; readonly reason?: string } | null;
+    }>(environmentId, "/ship-queue/deps/scan", {
+      method: "POST",
+      body: { repo: hold.repo },
+    });
     if (!res.ok || res.data?.ok === false) {
       return {
         ok: false,
         error:
           sanitizeApprovalDisplayText(res.data?.error ?? res.error, 240) ||
           m(msg("Failed to start dependency scan.")),
+      };
+    }
+    // A skipped scan (an update attempt is active, or a scan is already running) starts nothing
+    // to wait for: say why instead of polling.
+    if (res.data?.data?.started === false) {
+      return {
+        ok: false,
+        error:
+          sanitizeApprovalDisplayText(res.data.data.reason, 240) ||
+          m(msg("The dependency scan did not start.")),
       };
     }
     markRepoDepsScanning(environmentId, hold.repo, depScanKey(hold));

@@ -10,7 +10,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PKG_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 SHIMS_SRC="$PKG_DIR/shims"
-BUNDLE_SRC="$PKG_DIR/dist/bin.mjs"
+# HOST_GUARDS_BUNDLE: a bundle built elsewhere (tests build one in a temp dir, not in the checkout).
+BUNDLE_SRC="${HOST_GUARDS_BUNDLE:-$PKG_DIR/dist/bin.mjs}"
 EXAMPLE_CFG="$PKG_DIR/host-guards.example.json"
 
 PREFIX="$HOME/.local"
@@ -61,28 +62,22 @@ CLI_WRAPPER="$BIN_DIR/marscode-host-guard"
 SHIM_DEPTH_DST="$INSTALL_DIR/shim-depth.sh"
 PORTS_ENV_DST="$INSTALL_DIR/ports-env.sh"
 
-find_real_bin() {
-  local name="$1"
-  local fallback="$2"
-  local candidate=""
-  IFS=: read -r -a path_parts <<<"${PATH:-/usr/local/bin:/usr/bin:/bin}"
-  for dir in "${path_parts[@]}" /usr/local/bin /usr/bin /bin; do
-    [ -n "$dir" ] || continue
-    candidate="$dir/$name"
-    [ -x "$candidate" ] && [ -f "$candidate" ] || continue
-    if grep -q "MarsCode host" "$candidate" 2>/dev/null || grep -q "devtools host-guards" "$candidate" 2>/dev/null; then
-      continue
-    fi
-    printf '%s\n' "$candidate"
-    return 0
-  done
-  if [ -n "$fallback" ] && [ -x "$fallback" ]; then
-    printf '%s\n' "$fallback"
-    return 0
-  fi
-  return 1
-}
+# Every name this installer writes a shim for, by directory (one list for writing and checking).
+BIN_SHIMS="node git gh pnpm npm yarn bun pip pip3 vp docker python3 uv"
+GUARD_SHIMS="fly flyctl doppler"
 
+# shellcheck source-path=SCRIPTDIR source=install-real-bins.sh
+. "$SCRIPT_DIR/install-real-bins.sh"
+
+# Without --real-node, keep the node the existing shim records (a provision passes --real-node
+# only when the provisioned build should replace it), so a reinstall never switches node to
+# whatever node happens to be first on this run's PATH.
+if [ -z "$REAL_NODE" ] && [ -f "$BIN_DIR/node" ] && is_guard_shim "$BIN_DIR/node"; then
+  recorded="$(sed -n "s/^REAL_NODE='\(.*\)'\$/\1/p" "$BIN_DIR/node" | head -n 1)"
+  if [ -n "$recorded" ] && [ -x "$recorded" ] && ! is_shim_dest "$recorded" && ! is_guard_shim "$recorded"; then
+    REAL_NODE="$recorded"
+  fi
+fi
 [ -n "$REAL_NODE" ] || REAL_NODE="$(find_real_bin node /usr/bin/node || true)"
 [ -n "$REAL_GIT" ] || REAL_GIT="$(find_real_bin git /usr/bin/git || true)"
 [ -n "$REAL_GH" ] || REAL_GH="$(find_real_bin gh /usr/bin/gh || true)"
@@ -100,6 +95,41 @@ if [ ! -f "$BUNDLE_SRC" ]; then
   exit 1
 fi
 
+# An existing guard config must name the roots this install is given (a provision passes the
+# host's own): the installer never rewrites that config, so a different root there would leave the
+# guards protecting the wrong tree while the provision reports success.
+if [ -f "$CONFIG_FILE" ] && { [ -n "$SOURCE_ROOT_ARG" ] || [ -n "$DATA_ROOT_ARG" ]; }; then
+  cfg_roots="$("$REAL_NODE" -e '
+    const c = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+    process.stdout.write((c.sourceRoot || "") + "\n" + (c.dataRoot || "") + "\n");
+  ' "$CONFIG_FILE")" || {
+    printf 'install.sh: fatal: cannot read the roots in %s\n' "$CONFIG_FILE" >&2
+    exit 1
+  }
+  cfg_source="$(printf '%s\n' "$cfg_roots" | sed -n 1p)"
+  cfg_data="$(printf '%s\n' "$cfg_roots" | sed -n 2p)"
+  for pair in "sourceRoot|$cfg_source|$SOURCE_ROOT_ARG" "dataRoot|$cfg_data|$DATA_ROOT_ARG"; do
+    IFS='|' read -r key have want <<<"$pair"
+    if [ -n "$want" ] && ! same_root "$have" "$want"; then
+      printf 'install.sh: fatal: %s in %s is %s, but this host'"'"'s root is %s; set %s to %s there (the installer never rewrites that file)\n' \
+        "$key" "$CONFIG_FILE" "${have:-unset}" "$want" "$key" "$want" >&2
+      exit 1
+    fi
+  done
+fi
+
+# Only after every check passes. An earlier run could move an older shim here as if it were a real binary; drop any such shim.
+if [ "$DRY_RUN" != 1 ] && [ -d "$INSTALL_DIR/real" ]; then
+  for kept_file in "$INSTALL_DIR"/real/*; do
+    if [ -f "$kept_file" ] && is_guard_shim "$kept_file"; then rm -f "$kept_file"; fi
+  done
+fi
+
+# Keep any real binary that sits where its shim goes.
+keep_real "$REAL_NODE"; REAL_NODE="$KEPT_REAL"
+keep_real "$REAL_GIT"; REAL_GIT="$KEPT_REAL"
+keep_real "$REAL_GH"; REAL_GH="$KEPT_REAL"
+
 atomic_install_file() {
   local src="$1" dst="$2" mode="$3"
   if [ "$DRY_RUN" = 1 ]; then
@@ -115,6 +145,15 @@ atomic_install_file() {
 
 atomic_render_shim() {
   local template="$1" dst="$2" real_placeholder="$3" real_val="$4"
+  # Whatever sits at the destination is kept before the shim replaces it, even when PATH chose a
+  # different binary for this shim (for example /usr/bin/git ahead of $BIN_DIR/git). A binary
+  # this run chose was already kept as real/NAME. Any other one gets its own name, because
+  # real/NAME may still be recorded (host-guards.json realGit, realGh) and must not change.
+  local displace=1
+  case "$KEPT_SOURCES" in *" $dst "*) displace=0 ;; esac
+  if [ "$displace" = 1 ] && { [ -f "$dst" ] || [ -L "$dst" ]; } && ! is_guard_shim "$dst"; then
+    keep_displaced "$dst"
+  fi
   if [ "$DRY_RUN" = 1 ]; then
     printf '[dry-run] render shim %s -> %s (real=%s)\n' "$(basename "$template")" "$dst" "$real_val"
     return 0
@@ -134,7 +173,7 @@ atomic_render_shim() {
     fs.writeFileSync(process.argv[2], text, { mode: 0o755 });
   ' "$template" "$tmp" "$real_placeholder" "$real_val" "$CLI_WRAPPER" "$SHIM_DEPTH_DST" "$PORTS_ENV_DST"
   chmod 0755 "$tmp"
-  mv -f "$tmp" "$dst"
+  replace_kept "$tmp" "$dst"
 }
 
 # 1. Install bundled CLI and runtime support scripts atomically
@@ -189,6 +228,7 @@ fi
 
 for pkg_bin in pnpm npm yarn bun pip pip3 vp; do
   real_bin="$(find_real_bin "$pkg_bin" "" || true)"
+  keep_real "$real_bin"; real_bin="$KEPT_REAL"
   if [ -n "$real_bin" ]; then
     atomic_render_shim "$SHIMS_SRC/pkg-shim.sh" "$BIN_DIR/$pkg_bin" "@REAL@" "$real_bin"
   fi
@@ -196,6 +236,7 @@ done
 
 for port_bin in docker python3 uv; do
   real_bin="$(find_real_bin "$port_bin" "" || true)"
+  keep_real "$real_bin"; real_bin="$KEPT_REAL"
   if [ -n "$real_bin" ]; then
     atomic_render_shim "$SHIMS_SRC/ports-shim.sh" "$BIN_DIR/$port_bin" "@REAL@" "$real_bin"
   fi
@@ -203,6 +244,7 @@ done
 
 for cloud_bin in fly flyctl doppler; do
   real_bin="$(find_real_bin "$cloud_bin" "" || true)"
+  keep_real "$real_bin"; real_bin="$KEPT_REAL"
   if [ -n "$real_bin" ]; then
     atomic_render_shim "$SHIMS_SRC/cloud-shim.sh" "$GUARDS_DIR/$cloud_bin" "@REAL@" "$real_bin"
   fi

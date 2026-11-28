@@ -1735,12 +1735,18 @@ describe("DevtoolsHttp routes", () => {
       }),
   );
 
+  // Points evidence at the test's own receipts, and clears the job a ship-queue CI step exports
+  // (PLAYBOOK_EVIDENCE_JOB): these receipts carry no job id, so a set job would reject them.
   const setPlaybookEvidenceDir = (dir: string): (() => void) => {
-    const prev = process.env.PLAYBOOK_EVIDENCE_DIR;
+    const prevDir = process.env.PLAYBOOK_EVIDENCE_DIR;
+    const prevJob = process.env.PLAYBOOK_EVIDENCE_JOB;
     process.env.PLAYBOOK_EVIDENCE_DIR = dir;
+    delete process.env.PLAYBOOK_EVIDENCE_JOB;
     return () => {
-      if (prev === undefined) delete process.env.PLAYBOOK_EVIDENCE_DIR;
-      else process.env.PLAYBOOK_EVIDENCE_DIR = prev;
+      if (prevDir === undefined) delete process.env.PLAYBOOK_EVIDENCE_DIR;
+      else process.env.PLAYBOOK_EVIDENCE_DIR = prevDir;
+      if (prevJob === undefined) delete process.env.PLAYBOOK_EVIDENCE_JOB;
+      else process.env.PLAYBOOK_EVIDENCE_JOB = prevJob;
     };
   };
 
@@ -2197,6 +2203,14 @@ describe("DevtoolsHttp routes", () => {
           body: { repo: "../evil" },
         });
         expect(scanBadRepo.status).toBe(400);
+
+        // An unregistered repo is refused at once; a registered one starts in the background.
+        const scanUnregistered = yield* runHandler(handler, {
+          method: "POST",
+          url: "/api/devtools/ship-queue/deps/scan",
+          body: { repo: "never-registered" },
+        });
+        expect(scanUnregistered.status).toBe(400);
 
         // The legacy DevDeck daemon start route is retired.
         const retiredStart = yield* runHandler(handler, {

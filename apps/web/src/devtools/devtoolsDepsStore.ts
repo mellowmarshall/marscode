@@ -32,7 +32,8 @@ const EMPTY_GET = () => EMPTY_DEPS;
 
 const STALE_REVALIDATE_MS = 15_000;
 const SCAN_POLL_MS = 5_000;
-const MAX_SCAN_POLL_TICKS = 36;
+// A scan runs a Renovate lookup that can take up to 30 minutes; keep polling past that.
+const MAX_SCAN_POLL_TICKS = 420;
 
 interface DepsEntry {
   readonly subscribe: (listener: () => void) => () => void;
