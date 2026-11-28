@@ -2,7 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import { overrideRequestPath } from "./challengeGate.ts";
+import { hasPendingChallengeResume } from "./challengeGate.ts";
 import {
   isEnded,
   jobDir,
@@ -103,11 +103,8 @@ function emitReviewIfPresent(root: string, id: string, write: (line: string) => 
     return;
   }
   if (!review) return;
-  write(`REVIEW job=${id} (the playbook reviewer's outcome):`);
+  write(`REVIEW job=${id}:`);
   for (const line of review.split("\n")) write(`  ${line}`);
-  write(
-    "AGENT: quote this review to the owner in full in your reply now, pass or not; it is posted on the PR too.",
-  );
 }
 
 /**
@@ -176,18 +173,18 @@ export async function watchJob(options: WatchOptions): Promise<number> {
         }
       }
 
-      // Every watch of a challenged job hands the decision back, until an override is pending
-      // or the log shows the challenge already overridden.
+      // Every watch of a challenged job hands the decision back, until a resume is pending
+      // or the log shows the challenge already resumed.
       if (
         job?.state === "waiting" &&
         job.waiting_for === "challenge" &&
-        !NodeFS.existsSync(overrideRequestPath(root, id)) &&
+        !hasPendingChallengeResume(root, id) &&
         !challengeOverridden &&
         !tailShowsOverride()
       ) {
         emitReviewIfPresent(root, id, write);
         write(
-          `watch: job ${id} is CHALLENGED by its playbook review. To ship as is, override within 30 s: ship-queue override ${id} --reason "<why the findings do not hold>" (the reason goes in the job log and the PR body), then: ship-queue watch ${id}. With no override in 30 s the job fails (reason=challenged) and leaves the queue: fix the findings, commit, and submit the branch again.`,
+          `This job has been placed on hold pending your review (30 min TTL). Evaluate each finding. Answer the question "what would a high level SWE do here?"; if you agree with the severity, cancel your job (\`ship-queue cancel ${id}\`), make the appropriate change, and resubmit along with your answer. When in question, favor simplifying the build to its core objective over adding additional coverage or complexity. If you disagree with the findings or they are low-value, use \`ship-queue resume ${id} --reason "<brief rationale>"\` to resume the merge (this also watches until completion).`,
         );
         return WATCH_EXIT.challenged;
       }

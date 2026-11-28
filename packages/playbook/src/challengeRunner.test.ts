@@ -25,15 +25,12 @@ afterEach(cleanupTempDirs);
 const VALID_REPLY = {
   acceptable: true,
   summary: "Clean compliance pass",
-  diagnosis: "Compliant with §1–§15",
   bypass_detected: false,
   playbook_friction: false,
   violations: [],
   rejected_rises: [],
   rises_accepted: false,
   defects: [],
-  analysis: "Checked diff and receipts.",
-  recommendation: "Accept.",
 };
 
 function writeExecutable(dir: string, name: string, script: string): string {
@@ -145,6 +142,9 @@ describe("challengeRunner", () => {
     const effectKeys = Object.keys(PlaybookChallengeReply.fields).toSorted();
     expect(schemaKeys).toEqual(effectKeys);
     expect([...PLAYBOOK_CHALLENGE_JSON_SCHEMA.required].toSorted()).toEqual(effectKeys);
+    expect(schemaKeys).not.toContain("diagnosis");
+    expect(schemaKeys).not.toContain("analysis");
+    expect(schemaKeys).not.toContain("recommendation");
     expect(normalizeCodexEffort("ultrathink")).toBe("xhigh");
     expect(normalizeCodexEffort("minimal")).toBe("low");
     expect(normalizeCodexEffort("bogus")).toBe("medium");

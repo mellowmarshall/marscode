@@ -28,15 +28,12 @@ const RejectedRise = Schema.Struct({
 export const PlaybookChallengeReply = Schema.Struct({
   acceptable: Schema.Boolean,
   summary: Schema.String,
-  diagnosis: Schema.String,
   bypass_detected: Schema.Boolean,
   playbook_friction: Schema.Boolean,
   violations: Schema.optional(Schema.Array(Violation)),
   rejected_rises: Schema.Array(RejectedRise),
   rises_accepted: Schema.Boolean,
   defects: Schema.Array(Defect),
-  analysis: Schema.String,
-  recommendation: Schema.String,
 });
 export type PlaybookChallengeReply = typeof PlaybookChallengeReply.Type;
 
@@ -45,7 +42,6 @@ export const PLAYBOOK_CHALLENGE_JSON_SCHEMA = {
   properties: {
     acceptable: { type: "boolean" },
     summary: { type: "string" },
-    diagnosis: { type: "string" },
     bypass_detected: { type: "boolean" },
     playbook_friction: { type: "boolean" },
     violations: {
@@ -87,21 +83,16 @@ export const PLAYBOOK_CHALLENGE_JSON_SCHEMA = {
         additionalProperties: false,
       },
     },
-    analysis: { type: "string" },
-    recommendation: { type: "string" },
   },
   required: [
     "acceptable",
     "summary",
-    "diagnosis",
     "bypass_detected",
     "playbook_friction",
     "violations",
     "rejected_rises",
     "rises_accepted",
     "defects",
-    "analysis",
-    "recommendation",
   ],
   additionalProperties: false,
 } as const;
@@ -210,33 +201,16 @@ export interface ChallengeMeta {
   readonly timestamp: string;
 }
 
-/** The outcome as the owner reads it (a PR comment, the job log): pass or not, in full. */
+/** Compact outcome report for the agent, job log, and PR comment (metadata stays in the JSON record). */
 export function renderChallengeReport(
-  meta: ChallengeMeta,
+  _meta: ChallengeMeta,
   reply: PlaybookChallengeReply,
   verdict: ChallengeVerdict,
-  rises: string,
+  _rises: string,
 ): string {
-  const rule = "=".repeat(80);
-  const lines = [
-    rule,
-    `PLAYBOOK REVIEW: ${verdict.label}`,
-    `Repo:           ${meta.repo}`,
-    `Branch:         ${meta.branch}`,
-    `Pass:           ${meta.pass}`,
-    `Commit:         ${meta.commit.slice(0, 12)}`,
-    `Base:           ${meta.base.slice(0, 12)}`,
-    `Reviewer:       ${meta.reviewer}`,
-    `Timestamp:      ${meta.timestamp}`,
-    `Bypass Flagged: ${reply.bypass_detected ? "YES" : "No"}`,
-    `Rule Friction:  ${reply.playbook_friction ? "YES" : "No"}`,
-    rule,
-    `Summary:\n  ${reply.summary}`,
-    "",
-    `Diagnosis:\n  ${reply.diagnosis}`,
-  ];
-  if (reply.analysis) lines.push("", `Analysis:\n${reply.analysis}`);
-  if (rises !== NO_RISES) lines.push("", `Budget rises and their reasons:\n${rises}`);
+  const lines = [`PLAYBOOK REVIEW: ${verdict.label}`];
+  const summary = reply.summary.trim();
+  if (summary) lines.push(`Summary: ${summary}`);
   if (verdict.rejected.length > 0) {
     lines.push("", "Rejected reasons:", ...verdict.rejected.map((r) => `- ${r.subject}: ${r.why}`));
   }
@@ -254,7 +228,5 @@ export function renderChallengeReport(
       ...verdict.defects.map((d) => `- ${d.severity}: ${d.file}: ${d.what}`),
     );
   }
-  if (reply.recommendation) lines.push("", `Recommendation:\n  ${reply.recommendation}`);
-  lines.push(rule);
   return lines.join("\n");
 }

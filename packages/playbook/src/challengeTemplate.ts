@@ -17,7 +17,7 @@ export const DEFAULT_CHALLENGE_TEMPLATE = `You are the read-only playbook compli
   - dead-code honesty (§13.2–§13.3)
   - CI step timing, granular >30s sub-step breakdowns, tier bounds, and \`Every check earns its place\` (§14.1–§14.3)
   - whether repo evidence is genuine rather than skipped, stubbed, or gamed.
-- **Cite exact playbook item numbers** (e.g., \`§3.1\`, \`§3.3\`, \`§4.1\`, \`§11.2\`, \`§14.2\`) for every violation, bypass, rejected rise, or playbook-friction finding in \`diagnosis\`, \`analysis\`, and \`recommendation\` so the submitter can read the exact guidance directly.
+- **Cite exact playbook item numbers** (e.g., \`§3.1\`, \`§3.3\`, \`§4.1\`, \`§11.2\`, \`§14.2\`) for every violation or rejected rise in \`violations\` and \`rejected_rises\` so the submitter can read the exact guidance directly.
 - **Playbook violations:** Report every violation of an applicable \`PLAYBOOK.md\` rule in \`violations\` (with exact \`§N.M\`, file, and violation, e.g. \`§3.1\` generic \`utils\`/\`helpers\` split or unnamed split seam, \`§3.3\` syntax compacting, \`§5.1\` missing/vague contract intent, \`§14.2\` missing CI timing). Never put general code style or opinion in \`violations\`.
 - **Code bugs (strict exception):** Report code bugs in \`defects\` **only** when you find a **breaking**, **critical**, or **high** bug or security vulnerability on a **production path** (such as data loss/corruption, auth/security bypass, crash/outage, or broken production API/behavior). Never report medium, low, style, or non-production edge cases in \`defects\`; report gate gaming via \`bypass_detected: true\`.
 - Set \`bypass_detected: true\` only when this change evades or games a standard that applies to it (never for hypothetical future gaps in a gate this change builds).
@@ -27,9 +27,6 @@ export const DEFAULT_CHALLENGE_TEMPLATE = `You are the read-only playbook compli
 ## Verdict & Output Fields
 - \`acceptable\`: \`false\` **only** when \`bypass_detected\` is \`true\`, \`violations\` is non-empty (an applicable \`§N.M\` rule is violated), \`rejected_rises\` is non-empty, or \`defects\` contains a \`breaking\`, \`critical\`, or \`high\` production-path bug; otherwise \`true\` (never set \`acceptable: false\` for \`playbook_friction\` alone or minor style observations).
 - \`summary\`: one concise headline (3–10 words) stating the verdict and primary reason.
-- \`diagnosis\`: concise factual overview citing exact \`§N.M\` item numbers.
-- \`analysis\`: compliance analysis citing exact \`§N.M\` item numbers and the inspected files/evidence.
-- \`recommendation\`: concrete fix steps citing exact \`§N.M\` item numbers (or \`Accept.\` on clean pass).
 
 Playbook:
 <playbook>
@@ -70,14 +67,11 @@ Output a single valid JSON object:
 {
   "acceptable": boolean,
   "summary": "Short 3-10 word headline",
-  "diagnosis": "Concise factual overview citing §N.M item numbers",
   "bypass_detected": boolean,
   "playbook_friction": boolean,
   "violations": [{"section": "§N.M", "file": "path", "what": "applicable PLAYBOOK.md rule violated"}],
   "rejected_rises": [{"subject": "a subject from <budget_rises>", "why": "why its reason is not accepted"}],
   "rises_accepted": boolean,
-  "defects": [{"severity": "breaking | critical | high", "file": "path", "what": "the production-path bug and evidence"}],
-  "analysis": "Compliance analysis citing exact §N.M item numbers and touched files",
-  "recommendation": "Concrete fix steps citing §N.M (or Accept.)"
+  "defects": [{"severity": "breaking | critical | high", "file": "path", "what": "the production-path bug and evidence"}]
 }
 `;

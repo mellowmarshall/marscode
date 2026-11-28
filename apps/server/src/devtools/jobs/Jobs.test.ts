@@ -1018,6 +1018,19 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
     );
     expect(adapted?.source).toBe("ship-queue");
     expect(adapted?.phaseLabel).toBe("Shipping");
+
+    const heldRaw = {
+      id: "10963",
+      repo: "devtools",
+      branch: "fix/hold",
+      state: "waiting",
+      waiting_for: "challenge",
+      challenged_tip: "abcdef1234567890",
+      title: "Fix on hold",
+    };
+    const held = adaptShipQueueJob(heldRaw, "host-a", 1, readShipJobLogFacts(heldRaw, jobsRoot));
+    expect(held?.state).toBe("waiting");
+    expect(held?.phaseLabel).toBe("On hold");
   });
 
   it("adapts the headless ship-queue's own status --json records", async () => {

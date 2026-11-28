@@ -51,6 +51,17 @@ describe("resolveShipJobPhase", () => {
     ).toBe("shipping");
   });
 
+  it("classifies live jobs waiting on a challenge hold as hold", () => {
+    expect(
+      resolveShipJobPhase({
+        id: "45",
+        state: "waiting",
+        waiting_for: "challenge",
+        challenged_tip: "abcdef1234567890",
+      }),
+    ).toBe("hold");
+  });
+
   it("returns null for terminal job states", () => {
     for (const state of ["done", "failed", "cancelled"]) {
       expect(
@@ -144,6 +155,30 @@ describe("resolveThreadShipStatus", () => {
     ).toEqual({
       phase: "deploying",
       startedAt: "2026-11-21T13:00:00Z",
+    });
+  });
+
+  it("resolves hold phase for a thread with a challenged job on hold", () => {
+    const jobs: ShipQueueJob[] = [
+      {
+        id: "250",
+        thread_id: "thread-hold",
+        state: "waiting",
+        waiting_for: "challenge",
+        submitted_at: "2026-11-21T13:10:00Z",
+      },
+    ];
+    expect(
+      resolveThreadShipStatus({
+        jobs,
+        threadId: "thread-hold",
+        branch: "feat/hold",
+        worktreePath: null,
+        gitCwd: null,
+      }),
+    ).toEqual({
+      phase: "hold",
+      startedAt: "2026-11-21T13:10:00Z",
     });
   });
 

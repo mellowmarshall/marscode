@@ -22,14 +22,11 @@ afterEach(cleanupTempDirs);
 const REPLY: PlaybookChallengeReply = {
   acceptable: true,
   summary: "Meets the standards",
-  diagnosis: "ok",
   bypass_detected: false,
   playbook_friction: false,
   rejected_rises: [],
   rises_accepted: false,
   defects: [],
-  analysis: "",
-  recommendation: "Accept.",
 };
 
 function branch() {

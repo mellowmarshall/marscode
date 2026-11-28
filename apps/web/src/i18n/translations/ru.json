@@ -3336,15 +3336,11 @@
   "001dec08c2317790": "Time",
   "cfe852e6915a8053": "Exit",
   "49d335fa940504e7": "the owner's approval",
-  "9090b7cfdb576834": "a fix or an override of the challenged review",
   "18c96440b53c5c81": "a watcher",
   "3d7ce8fbcbc9b345": "push {code}",
   "c496c2b846720fc9": "merge {code}",
   "0e1949c855866b04": "Reason",
   "4cd3a0ae6907eec5": "Review",
-  "441bcfb06715c36e": "Challenged; overridden at {time}",
-  "c9ee0fafd39fa40c": "Challenged; overridden",
-  "9e27f7f5147a9894": "Challenged at {sha}; waiting for a fix or an override",
   "d74cd134cfb5d17e": "Challenged at {sha}",
   "7a2b97d4ab6e8f29": "Post-merge sync",
   "74d7c4bc908110f1": "exit 0",
@@ -13573,5 +13569,11 @@
   "faa3bb26abb39c93": "Не удалось создать гид по ревью",
   "b7df38b7d8792d78": "Открыть гид",
   "9e91e9a77b664e4e": "Не удалось запустить гид по ревью",
-  "1b65526f861f4853": "Изменить размер сведений о треде"
+  "1b65526f861f4853": "Изменить размер сведений о треде",
+  "9837d16c709b6933": "на удержании, ожидает проверки агента",
+  "cdff7f7150ba9422": "Возобновлено после проверки в {time}",
+  "d86f2c3ca75c6a8a": "Возобновлено после проверки",
+  "46bccd0a3f49ea83": "На удержании на {sha}; ожидает проверки агента",
+  "de570747e1e7cdfa": "На удержании",
+  "df91b8434eafba23": "На удержании"
 }

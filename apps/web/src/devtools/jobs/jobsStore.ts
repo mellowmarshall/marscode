@@ -49,7 +49,7 @@ export interface SharedJobsSnapshot {
   readonly status: DevtoolsResourceStatus;
 }
 
-export type ThreadJobPhase = "deploying" | "shipping" | "job";
+export type ThreadJobPhase = "deploying" | "hold" | "shipping" | "job";
 
 export interface ThreadJobStatus {
   readonly jobId: string;
@@ -127,6 +127,7 @@ function resolveThreadJobStatusFromList(input: {
 }): ThreadJobStatus | null {
   const wt = normPath(input.worktreePath);
   const cwd = normPath(input.gitCwd);
+  let hold: JobSummary | null = null;
   let shipping: JobSummary | null = null;
   let managedBest: JobSummary | null = null;
 
@@ -134,7 +135,9 @@ function resolveThreadJobStatusFromList(input: {
     if (!isJobLive(job)) continue;
     if (!matchJobToThread(job, input.threadId, input.branch, wt, cwd)) continue;
     if (job.source === "ship-queue") {
-      if (job.phaseLabel.toLowerCase() === "deploying") {
+      const phaseLower = job.phaseLabel.toLowerCase();
+      const waitingFor = (job.shipJob?.waiting_for ?? "").trim().toLowerCase();
+      if (phaseLower === "deploying") {
         return {
           jobId: job.id,
           source: "ship-queue",
@@ -145,12 +148,27 @@ function resolveThreadJobStatusFromList(input: {
           hasProgress: false,
         };
       }
+      if (phaseLower === "on hold" || waitingFor === "challenge") {
+        if (!hold) hold = job;
+        continue;
+      }
       if (!shipping) shipping = job;
     } else if (!managedBest || (job.anomaly && !managedBest.anomaly)) {
       managedBest = job;
     }
   }
 
+  if (hold) {
+    return {
+      jobId: hold.id,
+      source: "ship-queue",
+      kind: hold.kind,
+      phase: "hold",
+      label: m(msg("On hold")),
+      startedAt: hold.timing.startedAt || null,
+      hasProgress: false,
+    };
+  }
   if (shipping) {
     return {
       jobId: shipping.id,

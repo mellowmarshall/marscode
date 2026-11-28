@@ -598,6 +598,46 @@ describe("deriveShipJobSteps", () => {
     expect(shouldHideRedundantStatusBadge("failed")).toBe(false);
     expect(shouldHideRedundantStatusBadge("done")).toBe(false);
   });
+
+  it("renders a challenged job on hold with CI done, yellow push waiting, and shipJobCiHost badge", () => {
+    const heldJob: ShipQueueJob = {
+      id: "1070",
+      state: "waiting",
+      waiting_for: "challenge",
+      challenged_tip: "abcdef1234567890",
+      steps_tip: "abcdef1234567890",
+      steps: [
+        { name: "ship_body_check", host: "local", exit: 0, ms: 300 },
+        { name: "ship_ci", host: "ci-host-builder-02", exit: 0, ms: 24_000 },
+      ],
+    };
+    expect(resolveShipJobDisplayState(heldJob)).toBe("on hold");
+    expect(shipQueueStatusVariant(resolveShipJobDisplayState(heldJob))).toBe("warning");
+    expect(shouldHideRedundantStatusBadge(resolveShipJobDisplayState(heldJob))).toBe(false);
+
+    const steps = deriveShipJobSteps(heldJob, LABELS);
+    expect(steps.map((s) => [s.id, s.state])).toEqual([
+      ["queued", "done"],
+      ["watcher", "done"],
+      ["ci", "done"],
+      ["push", "waiting"],
+      ["pr", "pending"],
+      ["merge", "pending"],
+    ]);
+    expect(steps.find((s) => s.id === "ci")?.badge).toBe("ci-host-builder-02");
+    expect(steps.find((s) => s.id === "push")?.detail).toBe("on hold pending agent review");
+
+    // A live CI lease also feeds the CI host badge without legacy route.host.
+    const leasedSteps = deriveShipJobSteps(
+      {
+        id: "1071",
+        state: "running",
+        ci_lease: { host: "ci-host-builder-03" },
+      },
+      LABELS,
+    );
+    expect(leasedSteps.find((s) => s.id === "ci")?.badge).toBe("ci-host-builder-03");
+  });
 });
 
 describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {

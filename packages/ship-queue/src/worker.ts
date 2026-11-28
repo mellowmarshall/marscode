@@ -2,7 +2,9 @@
 import {
   challengeGate,
   challengeUnanswered,
+  isChallengeHoldIdle,
   isParkedOnChallenge,
+  overrideMatchesPatch,
   postOverrideComment,
   takeChallengeOverride,
 } from "./challengeGate.ts";
@@ -225,14 +227,14 @@ export async function runJob(deps: ShipQueueDeps, id: string): Promise<JobStep> 
     if (!(await ownerActionGranted(deps, job))) return "blocked";
     appendLog(deps.root, id, `owner approval landed at ${deps.clock.now()}; resuming`);
   } else if (isParkedOnChallenge(job)) {
-    // Only an override within the window keeps a challenged job: otherwise it fails and leaves
-    // the queue, so it never holds its repo's turn while the agent fixes and resubmits.
+    // A challenged job waits on hold up to 30 min without blocking later jobs in the repo;
+    // once resumed it advances, and once expired it fails and leaves the queue.
     if (!takeChallengeOverride(deps, job)) {
       if (!challengeUnanswered(deps, job)) return "blocked";
       appendLog(
         deps.root,
         id,
-        "no override within 30 s of the challenge; fix the findings and resubmit",
+        "no resume within 30 min of the challenge; fix the findings and resubmit",
       );
       return stop("challenged");
     }
@@ -296,8 +298,17 @@ export async function runJob(deps: ShipQueueDeps, id: string): Promise<JobStep> 
   if (steps.kind === "fail") return stop(steps.reason);
   if (cancelled()) return "ended";
 
-  await reviewHead(deps, requireJob(deps.root, id), rebase);
-  if ((await challengeGate(deps, requireJob(deps.root, id), rebase)) === "wait") return "blocked";
+  const reviewTarget = requireJob(deps.root, id);
+  if (await overrideMatchesPatch(deps, reviewTarget, rebase)) {
+    appendLog(
+      deps.root,
+      id,
+      `playbook review skipped on ${rebase.head.slice(0, 12)}: patch-id matches resumed review (${reviewTarget.challenge_override?.reason})`,
+    );
+  } else {
+    await reviewHead(deps, reviewTarget, rebase);
+    if ((await challengeGate(deps, requireJob(deps.root, id), rebase)) === "wait") return "blocked";
+  }
   if (cancelled()) return "ended";
 
   const push = await pushPhase(deps, requireJob(deps.root, id), rebase.head, rebase.remoteTip);
@@ -318,6 +329,19 @@ export async function runJob(deps: ShipQueueDeps, id: string): Promise<JobStep> 
   return finishMergedJob(deps, requireJob(deps.root, id), pr.value, rebase.head);
 }
 
+/**
+ * Next runnable job for a repo: an already-running job finishes before a queued or
+ * newly-resumed job jumps ahead of it; unexpired idle challenge holds are skipped.
+ */
+function nextRepoJob(
+  deps: ShipQueueDeps,
+  jobs: ReadonlyArray<JobRecord>,
+  skipped?: ReadonlySet<string>,
+): JobRecord | undefined {
+  const runnable = jobs.filter((job) => !skipped?.has(job.id) && !isChallengeHoldIdle(deps, job));
+  return runnable.find((job) => job.state === "running") ?? runnable[0];
+}
+
 async function drainRepo(
   deps: ShipQueueDeps,
   repo: string,
@@ -325,8 +349,10 @@ async function drainRepo(
   blocked: string[],
 ): Promise<void> {
   const selfVersion = deps.workerVersion?.version;
+  const skipped = new Set<string>();
   for (;;) {
-    const head = openJobsByRepo(deps.root).get(repo)?.[0];
+    const jobs = openJobsByRepo(deps.root).get(repo) ?? [];
+    const head = nextRepoJob(deps, jobs, skipped);
     if (!head) return;
     const currentVersion = readCurrentWorkerVersion(deps.root)?.version;
     if (!jobMatchesWorkerVersion(head, selfVersion, currentVersion)) return;
@@ -344,6 +370,11 @@ async function drainRepo(
     }
     if (step === "blocked") {
       blocked.push(head.id);
+      const fresh = readJob(deps.root, head.id);
+      if (fresh && isChallengeHoldIdle(deps, fresh)) {
+        skipped.add(head.id);
+        continue;
+      }
       return;
     }
     ended.push(head.id);
@@ -352,7 +383,8 @@ async function drainRepo(
 
 /**
  * One pass of due work, shaped for `Scheduler.register`: each repo's queue is drained in order
- * under its landing lock until it empties or its head job waits. Repos run concurrently, and
+ * under its landing lock until it empties or its head job waits (skipping unexpired challenge
+ * holds so later jobs in the same repo continue running). Repos run concurrently, and
  * version-pinned workers only advance jobs matching their pinned runtime version.
  */
 export async function runDueWork(deps: ShipQueueDeps): Promise<DueWorkResult> {
@@ -363,7 +395,7 @@ export async function runDueWork(deps: ShipQueueDeps): Promise<DueWorkResult> {
   const currentVersion = readCurrentWorkerVersion(deps.root)?.version;
   await Promise.all(
     [...openJobsByRepo(deps.root).entries()].map(async ([repo, jobs]) => {
-      const head = jobs[0];
+      const head = nextRepoJob(deps, jobs);
       if (!head || !jobMatchesWorkerVersion(head, selfVersion, currentVersion)) {
         return;
       }

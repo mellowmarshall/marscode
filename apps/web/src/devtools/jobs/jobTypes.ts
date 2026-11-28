@@ -355,16 +355,19 @@ export function adaptLegacyShipQueuePayload(payload: ShipQueueStatusPayload): {
       (typeof raw.sync_exit === "number" && Number.isFinite(raw.sync_exit)) ||
       (typeof raw.sync_exit === "string" && raw.sync_exit.trim() !== "");
     const rawStage = (raw.stage ?? "").trim().toLowerCase();
+    const waitingFor = (raw.waiting_for ?? "").trim().toLowerCase();
     const phaseLabel =
-      state === "running" &&
-      !hasSync &&
-      (rawStage === "deploy" ||
-        rawStage === "deploying" ||
-        /^POST_MERGE\b/i.test(marker) ||
-        s === "deploy" ||
-        s === "deploying")
-        ? "Deploying"
-        : "Shipping";
+      state === "waiting" && waitingFor === "challenge"
+        ? "On hold"
+        : state === "running" &&
+            !hasSync &&
+            (rawStage === "deploy" ||
+              rawStage === "deploying" ||
+              /^POST_MERGE\b/i.test(marker) ||
+              s === "deploy" ||
+              s === "deploying")
+          ? "Deploying"
+          : "Shipping";
     let startedAt = raw.submitted_at ?? "";
     if (!startedAt || !Number.isFinite(Date.parse(startedAt))) {
       const m = JOB_KEY_EPOCH_RE.exec(raw.key ?? "");

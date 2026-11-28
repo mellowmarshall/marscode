@@ -218,4 +218,93 @@ describe("SidebarThreadRow with active bounded job", () => {
       0.9,
     );
   });
+
+  it("shows yellow On hold status when a thread's ship-queue job is on challenge hold", async () => {
+    using _cleanup = useJobsStoreReset();
+    const envId = EnvironmentId.make("local-sidebar-ship-hold");
+    const threadId = ThreadId.make("thread-ship-hold-1");
+    const projectId = ProjectId.make("proj-ship-hold");
+
+    applyJobsStreamEvent(envId, "upsert", {
+      id: "ship:1099",
+      revision: 1,
+      source: "ship-queue",
+      kind: "ship",
+      title: "feat: review hold",
+      phaseLabel: "On hold",
+      state: "waiting",
+      binding: { threadId, host: "host-a" },
+      timing: { startedAt: "2026-11-22T11:18:10.366Z" },
+      cancellable: true,
+      shipJob: {
+        id: "1099",
+        state: "waiting",
+        waiting_for: "challenge",
+        challenged_tip: "abcdef1234567890",
+      },
+    });
+
+    const thread = makeThreadFixture({
+      id: threadId,
+      environmentId: envId,
+      projectId,
+      title: "Ship hold thread",
+      branch: "feat/hold",
+    });
+
+    await using _screen = await render(
+      <TooltipProvider delay={0}>
+        <ul style={{ width: "240px", padding: "8px", listStyle: "none" }}>
+          <SortableThreadRow
+            sortableId="thread-ship-hold-1"
+            sortableDisabled
+            contextDrag={false}
+            thread={thread}
+            variant="folder-multiline"
+            variantAction="settle"
+            settlementSupported
+            snoozeSupported={false}
+            pinningSupported={false}
+            isPinned={false}
+            dropVerb={null}
+            dragOverPinned={false}
+            sweepAction={null}
+            snoozeWakeLabelText={null}
+            wokeAt={null}
+            isActive
+            isRouteThread
+            readOpensPullRequestsInRightPanel={() => false}
+            jumpLabel={null}
+            environmentLabel={null}
+            environmentMachine="linux"
+            project={null}
+            projectDisplayName="Sample Repo"
+            providerEntryByInstanceId={new Map()}
+            timestampFormat="locale"
+            onThreadClick={() => {}}
+            onThreadActivate={() => {}}
+            onStartRename={() => {}}
+            onRenameTitleChange={() => {}}
+            onCommitRename={() => {}}
+            onCancelRename={() => {}}
+            isRenaming={false}
+            renamingTitle=""
+            onContextMenu={() => {}}
+            onSettle={() => {}}
+            onActionSweepStart={() => {}}
+            onUnsettle={() => {}}
+            onSnooze={() => {}}
+            onUnsnooze={() => {}}
+            onUnpin={() => {}}
+            onAcknowledgeWoke={() => {}}
+          />
+        </ul>
+      </TooltipProvider>,
+    );
+
+    const row = page.getByTestId("sidebar-row-folder");
+    const holdLabel = row.getByText("On hold", { exact: true });
+    await expect.element(holdLabel).toBeVisible();
+    expect(holdLabel.element().parentElement?.className).toContain("text-warning-foreground");
+  });
 });

@@ -22,7 +22,7 @@
       "apps/web/src/index.css",
       "apps/web/src/components/ui/*.tsx"
     ],
-    "hash": "4054193e5ba9bee8"
+    "hash": "499a01e3f254fdbf"
   },
   "ship-queue.gif": {
     "sources": [
@@ -32,7 +32,7 @@
       "apps/web/src/index.css",
       "apps/web/src/components/ui/*.tsx"
     ],
-    "hash": "4054193e5ba9bee8"
+    "hash": "499a01e3f254fdbf"
   },
   "reaper.webp": {
     "sources": [
@@ -87,7 +87,7 @@
       "apps/web/src/components/ui/*.tsx",
       "apps/web/test/readme/readmeMediaCapture.tsx"
     ],
-    "hash": "0ee2d690b2c1f448"
+    "hash": "2c9cf9cfff73d9a0"
   },
   "approval-glow.gif": {
     "sources": [
@@ -102,7 +102,7 @@
       "apps/web/src/components/ui/*.tsx",
       "apps/web/test/readme/readmeMediaCapture.tsx"
     ],
-    "hash": "0ee2d690b2c1f448"
+    "hash": "2c9cf9cfff73d9a0"
   },
   "permission-key.webp": {
     "sources": [
@@ -117,7 +117,7 @@
       "apps/web/src/components/ui/*.tsx",
       "apps/web/test/readme/readmeMediaCapture.tsx"
     ],
-    "hash": "0ee2d690b2c1f448"
+    "hash": "2c9cf9cfff73d9a0"
   },
   "fleet-icon.webp": {
     "sources": [
@@ -141,7 +141,7 @@
       "apps/web/src/components/ui/*.tsx",
       "apps/web/test/readme/readmeMediaCapture.tsx"
     ],
-    "hash": "17b8cb3129b49716"
+    "hash": "3ed8cf4997ff5f16"
   },
   "job-health.gif": {
     "sources": [
@@ -154,7 +154,7 @@
       "apps/web/src/components/ui/*.tsx",
       "apps/web/test/readme/readmeMediaCapture.tsx"
     ],
-    "hash": "17b8cb3129b49716"
+    "hash": "3ed8cf4997ff5f16"
   },
   "approval-plan.webp": {
     "sources": [
@@ -179,6 +179,6 @@
       "apps/web/src/components/ui/*.tsx",
       "apps/web/test/readme/readmeMediaCapture.tsx"
     ],
-    "hash": "7b0fbc8099b76806"
+    "hash": "9d8837bdb0cad41c"
   }
 }

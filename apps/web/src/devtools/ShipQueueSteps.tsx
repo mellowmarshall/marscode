@@ -8,6 +8,7 @@ import { msg } from "gt-react";
 import { m } from "~/i18n/messages";
 import type { ShipQueueJob } from "./devtoolsClient";
 import { parseShipJobStartMs, resolveShipJobEndMs } from "./shipJobTiming";
+import { shipJobCiHost } from "./shipQueueJobFacts";
 
 const SAFE_GH_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 // Log stages a worker reaches only after STARTED (`@t3tools/ship-queue/markers`).
@@ -97,6 +98,9 @@ export function resolveShipJobDisplayState(job: ShipQueueJob): string {
   const stageLower = (job.stage ?? "").trim().toLowerCase();
   const syncExit = exitNum(job.sync_exit);
   if (isShipQueueJobLive(job)) {
+    if ((job.waiting_for ?? "").trim().toLowerCase() === "challenge") {
+      return "on hold";
+    }
     // Match DevDeck: "deploying" only from POST_MERGE until SYNC_EXIT=,
     // never merely from MERGE_EXIT=0; after SYNC_EXIT= while still live, show "post-merge".
     if (stageLower === "deployed" || syncExit === 0) {
@@ -183,6 +187,8 @@ export function deriveShipJobSteps(
   const isDone = rawState === "done";
   const isFailed = rawState === "failed" || rawState === "cancelled";
   const isQueued = rawState === "queued";
+  const isOnChallengeHold =
+    !isDone && !isFailed && (job.waiting_for ?? "").trim().toLowerCase() === "challenge";
   const isParked = !isDone && !isFailed && Boolean(job.parked?.for);
   const needsRoot =
     !isDone &&
@@ -215,11 +221,17 @@ export function deriveShipJobSteps(
 
   const reachedPostCi =
     !isFailedRound2Ci && (pushExit !== null || hasPr || mergeExit !== null || isDone);
-  const ciPassed = reachedPostCi || (isTruthyFlag(job.ci_done) && !isFailed);
+  const ciCompletedForHold =
+    isOnChallengeHold &&
+    (Boolean(job.steps_tip) ||
+      Boolean(job.challenged_tip) ||
+      (job.steps ?? []).some((step) => step.name === CI_STEP_NAME && step.exit === 0));
+  const ciPassed = reachedPostCi || ciCompletedForHold || (isTruthyFlag(job.ci_done) && !isFailed);
   const started =
     !isParked &&
     !isQueued &&
     (rawState === "running" ||
+      isOnChallengeHold ||
       ciPassed ||
       isTruthyFlag(job.ci_done) ||
       Boolean(job.route?.host) ||
@@ -269,7 +281,7 @@ export function deriveShipJobSteps(
 
   if (ciPassed && !isRetryingRound2) {
     states[2] = "done";
-  } else if (needsRoot) {
+  } else if (needsRoot || isOnChallengeHold) {
     states[2] = "waiting";
   } else if ((started || isRetryingRound2) && !isFailed) {
     states[2] = "active";
@@ -279,6 +291,8 @@ export function deriveShipJobSteps(
 
   if (isFailedRound2Ci) {
     // Round-2 CI failed before push/merge; Round-1 push/PR/merge exits are stale.
+  } else if (isOnChallengeHold) {
+    states[3] = "waiting";
   } else if (pushExit !== null && pushExit !== 0) {
     states[3] = "failed";
   } else if ((pushExit === 0 || hasPr || mergeExit !== null || isDone) && !isRetryingRound2) {
@@ -293,7 +307,7 @@ export function deriveShipJobSteps(
     states[4] = "failed";
   } else if (hasPr && states[3] !== "failed") {
     states[4] = "done";
-  } else if (pushExit === 0 && !isFailed && !isDone) {
+  } else if (pushExit === 0 && !isFailed && !isDone && !isOnChallengeHold) {
     states[4] = "active";
   } else if (isFailed && pushExit === 0 && !hasPr && mergeExit === null) {
     states[4] = "failed";
@@ -307,7 +321,7 @@ export function deriveShipJobSteps(
     states[5] = "waiting";
   } else if (mergeExit !== null && mergeExit !== 0) {
     states[5] = "failed";
-  } else if (hasPr && !isFailed && !isDone) {
+  } else if (hasPr && !isFailed && !isDone && !isOnChallengeHold) {
     states[5] = "active";
   } else if (isFailed && hasPr) {
     states[5] = "failed";
@@ -369,7 +383,7 @@ export function deriveShipJobSteps(
     }
   }
 
-  const hostBadge = job.route?.host ? String(job.route.host) : undefined;
+  const hostBadge = shipJobCiHost(job) ?? undefined;
   const prBadge = hasPr ? `#${job.pr}` : undefined;
 
   const steps: DerivedShipStep[] = [
@@ -411,8 +425,9 @@ export function deriveShipJobSteps(
       id: "push",
       label: labels.push,
       state: states[3]!,
-      detail:
-        states[3] === "failed"
+      detail: isOnChallengeHold
+        ? m(msg("on hold pending agent review"))
+        : states[3] === "failed"
           ? reason || m(msg("exit {code}"), { code: pushExit ?? "" })
           : undefined,
     },

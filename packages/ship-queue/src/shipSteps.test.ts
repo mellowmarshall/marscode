@@ -3,7 +3,11 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { overrideRequestPath } from "./challengeGate.ts";
+import {
+  CHALLENGE_WAIT_MS,
+  overrideRequestPath,
+  requestChallengeOverride,
+} from "./challengeGate.ts";
 import { runShipQueueCli } from "./cli.ts";
 import { jobReviewPath, mark, readJob, readLog } from "./jobStore.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
@@ -12,7 +16,7 @@ import type { RemoteCommandRunner } from "./sshExec.ts";
 import { fixtureCleanups, makeFixture, SELF, sh } from "./testing/shipStepsFixture.ts";
 import type { ProcessRunner, ShipQueueDeps } from "./types.ts";
 import { WATCH_EXIT, watchJob } from "./watcher.ts";
-import { runDueWork, runJob } from "./worker.ts";
+import { hasOpenJobsForWorker, runDueWork, runJob } from "./worker.ts";
 
 afterEach(() => {
   for (const cleanup of fixtureCleanups.splice(0)) cleanup();
@@ -107,7 +111,7 @@ describe("declared steps before merge", () => {
 });
 
 describe("challenge gate", () => {
-  it("stops a CHALLENGED job before merge until the agent overrides it with a reason", async () => {
+  it("holds a CHALLENGED job until resumed with a reason, watches through merge, and supports safe retries", async () => {
     const fx = makeFixture();
     fx.setVerdict("CHALLENGED");
     const wt = fx.worktree("feat/98-challenged", { "x.txt": "x\n" });
@@ -116,6 +120,7 @@ describe("challenge gate", () => {
     expect(await runJob(fx.deps, id)).toBe("blocked");
     const parked = readJob(fx.root, id)!;
     expect(parked).toMatchObject({ state: "waiting", waiting_for: "challenge" });
+    expect(hasOpenJobsForWorker(fx.root)).toBe(true);
     expect(fx.markers(id).at(-1)).toBe(`CHALLENGED job=${id} report=${jobReviewPath(fx.root, id)}`);
     expect(fx.prs.size).toBe(0);
     // The worker's next ticks keep it parked without running CI or the review again.
@@ -138,21 +143,51 @@ describe("challenge gate", () => {
     expect(await watch()).toBe(WATCH_EXIT.challenged);
     // A watch armed again before any decision hands it back again instead of hanging.
     expect(await watch()).toBe(WATCH_EXIT.challenged);
-    expect(watched.join("\n")).toContain("PLAYBOOK REVIEW: CHALLENGED");
-    expect(watched.join("\n")).toContain(`ship-queue override ${id} --reason`);
+    const watchText = watched.join("\n");
+    expect(watchText).toContain("PLAYBOOK REVIEW: CHALLENGED");
+    expect(watchText).not.toContain("AGENT: quote this review");
+    expect(watchText).toContain(
+      "This job has been placed on hold pending your review (30 min TTL).",
+    );
+    expect(watchText).toContain("what would a high level SWE do here?");
+    expect(watchText).toContain(`ship-queue cancel ${id}`);
+    expect(watchText).toContain(`ship-queue resume ${id} --reason "<brief rationale>"`);
 
     const out: string[] = [];
-    const cli = (argv: ReadonlyArray<string>) =>
+    const err: string[] = [];
+    const startedWorkers: string[] = [];
+    const cli = (argv: ReadonlyArray<string>, waitForChange?: () => Promise<void>) =>
       runShipQueueCli(argv, {
         deps: fx.deps,
-        io: { stdout: (t) => out.push(t), stderr: (t) => out.push(t), env: {}, cwd: fx.tmp },
+        io: { stdout: (t) => out.push(t), stderr: (t) => err.push(t), env: {}, cwd: fx.tmp },
+        startWorker: (_root, jobId) => {
+          startedWorkers.push(jobId ?? "");
+          return "worker=test";
+        },
+        ...(waitForChange ? { waitForChange: () => waitForChange } : {}),
       });
-    expect(await cli(["override", id])).toBe(64);
-    expect(
-      await cli(["override", id, "--reason", "the flagged helper is test-only\nnot shipped"]),
-    ).toBe(0);
 
-    expect(await runJob(fx.deps, id)).toBe("ended");
+    // Missing JOB exits 64 without mutating state and hints currently held job IDs.
+    expect(await cli(["resume"])).toBe(64);
+    expect(err.join("")).toContain(`jobs currently on hold: ${id}`);
+    expect(readJob(fx.root, id)).toMatchObject({ state: "waiting", waiting_for: "challenge" });
+
+    // Missing --reason exits 64 without mutating state.
+    expect(await cli(["resume", id])).toBe(64);
+    expect(NodeFS.existsSync(overrideRequestPath(fx.root, id))).toBe(false);
+
+    // Calling resume records rationale, starts worker, and watches through merge to exit 0.
+    let workerTicks = 0;
+    const resumeExit = await cli(
+      ["resume", id, "--reason", "the flagged helper is test-only\nnot shipped"],
+      async () => {
+        workerTicks += 1;
+        if (workerTicks > 2) throw new Error("expected job to finish");
+        await runJob(fx.deps, id);
+      },
+    );
+    expect(resumeExit).toBe(WATCH_EXIT.done);
+    expect(startedWorkers).toContain(id);
     const job = readJob(fx.root, id)!;
     expect(job.state).toBe("done");
     expect(job.challenge_override?.reason).toBe("the flagged helper is test-only not shipped");
@@ -165,8 +200,59 @@ describe("challenge gate", () => {
     expect(fx.merged).toEqual([1]);
     expect(fx.ciRuns()).toBe(1);
     expect(fx.reviews).toHaveLength(1);
-    // An override applies only to a job that waits on its review.
-    expect(await cli(["override", id, "--reason", "again"])).toBe(1);
+    // Resume applies only to an open job on hold (or already resumed and running).
+    expect(await cli(["resume", id, "--reason", "again"])).toBe(1);
+  });
+
+  it("treats repeat resume calls as idempotent when pending or already running and attaches the watcher", async () => {
+    const fx = makeFixture();
+    fx.setVerdict("CHALLENGED");
+    const wt = fx.worktree("feat/179-idempotent", { "i.txt": "i\n" });
+    const id = await fx.submit(wt, "feat/179-idempotent");
+    expect(await runJob(fx.deps, id)).toBe("blocked");
+
+    // Pre-write a pending resume request (first attempt recorded it, then caller retried).
+    expect(requestChallengeOverride(fx.root, id, "first rationale", fx.deps.clock).ok).toBe(true);
+    let ran = false;
+    const retryOut: string[] = [];
+    const retryCode = await runShipQueueCli(["resume", id, "--reason", "retry rationale"], {
+      deps: fx.deps,
+      io: { stdout: (t) => retryOut.push(t), stderr: () => {}, env: {}, cwd: fx.tmp },
+      startWorker: () => "worker=test",
+      waitForChange: () => async () => {
+        if (ran) throw new Error("expected job to finish");
+        ran = true;
+        await runJob(fx.deps, id);
+      },
+    });
+    expect(retryCode).toBe(WATCH_EXIT.done);
+    expect(retryOut.join("")).toContain("resume already pending; watching");
+    expect(readJob(fx.root, id)?.challenge_override?.reason).toBe("first rationale");
+
+    // Also idempotent when the job already resumed and is running (e.g. mid-merge retry).
+    const fx2 = makeFixture({ declaration: "ship_merge=scripts/ship/steps.sh merge\n" });
+    fx2.setVerdict("CHALLENGED");
+    const wt2 = fx2.worktree("feat/179-running", { "r2.txt": "r2\n" });
+    const id2 = await fx2.submit(wt2, "feat/179-running");
+    expect(await runJob(fx2.deps, id2)).toBe("blocked");
+    expect(requestChallengeOverride(fx2.root, id2, "ship it", fx2.deps.clock).ok).toBe(true);
+    // First runJob takes the override, pushes, opens PR, hits merge exit 75 -> still running!
+    expect(await runJob(fx2.deps, id2)).toBe("blocked");
+    expect(readJob(fx2.root, id2)).toMatchObject({ state: "running" });
+    let ran2 = false;
+    const out2: string[] = [];
+    const code2 = await runShipQueueCli(["override", id2, "--reason", "ship it"], {
+      deps: fx2.deps,
+      io: { stdout: (t) => out2.push(t), stderr: () => {}, env: {}, cwd: fx2.tmp },
+      startWorker: () => "worker=test",
+      waitForChange: () => async () => {
+        if (ran2) throw new Error("expected job2 to finish");
+        ran2 = true;
+        await runJob(fx2.deps, id2);
+      },
+    });
+    expect(code2).toBe(WATCH_EXIT.done);
+    expect(out2.join("")).toContain("already resumed; watching");
   });
 
   it("keeps a watch following a challenged job once its log shows the override", async () => {
@@ -190,15 +276,12 @@ describe("challenge gate", () => {
       waitForChange: async () => {
         ticks += 1;
         if (ticks > 1) throw new Error("the watch should have reached DONE");
-        await runShipQueueCli(["override", id, "--reason", "the flagged helper is test-only"], {
-          deps: fx.deps,
-          io: { stdout: () => {}, stderr: () => {}, env: {}, cwd: fx.tmp },
-        });
+        requestChallengeOverride(fx.root, id, "the flagged helper is test-only", fx.deps.clock);
         await runJob(fx.deps, id);
       },
     });
     expect(exit).toBe(WATCH_EXIT.done);
-    expect(watched.join("\n")).not.toContain(`watch: job ${id} is CHALLENGED`);
+    expect(watched.join("\n")).not.toContain("This job has been placed on hold");
   });
 
   it("lets a resubmit of the branch replace the challenged job", async () => {
@@ -216,6 +299,100 @@ describe("challenge gate", () => {
     expect(readJob(fx.root, first)).toMatchObject({ state: "failed", reason: "superseded" });
     expect(await runJob(fx.deps, second)).toBe("ended");
     expect(readJob(fx.root, second)?.state).toBe("done");
+  });
+
+  it("skips reviewHead after rebasing a resumed job onto a newer main when patch-id matches", async () => {
+    const fx = makeFixture();
+    fx.setVerdict("CHALLENGED");
+    const wt = fx.worktree("feat/179-rebase-resume", { "feature.txt": "v1\n" });
+    const id = await fx.submit(wt, "feat/179-rebase-resume");
+
+    expect(await runJob(fx.deps, id)).toBe("blocked");
+    expect(fx.ciRuns()).toBe(1);
+    expect(fx.reviews).toHaveLength(1);
+
+    // Another PR lands on main while this job is on hold.
+    NodeFS.writeFileSync(NodePath.join(fx.primary, "unrelated.txt"), "main moved\n");
+    sh(fx.primary, ["add", "unrelated.txt"]);
+    sh(fx.primary, ["commit", "-q", "-m", "unrelated landing on main"]);
+    sh(fx.primary, ["push", "-q", "origin", "HEAD:refs/heads/main"]);
+
+    expect(requestChallengeOverride(fx.root, id, "low-value finding", fx.deps.clock).ok).toBe(true);
+    expect(await runJob(fx.deps, id)).toBe("ended");
+    expect(readJob(fx.root, id)).toMatchObject({ state: "done" });
+    // CI re-ran on the rebased head, but reviewHead was skipped because patch-id matched.
+    expect(fx.ciRuns()).toBe(2);
+    expect(fx.reviews).toHaveLength(1);
+    expect(readLog(fx.root, id)).toContain("playbook review skipped on");
+    expect(fx.merged).toEqual([1]);
+  });
+
+  it("does not trip quietMs while a resumed job waits for the repo lock behind another running job", async () => {
+    const fx = makeFixture();
+    fx.setVerdict("CHALLENGED");
+    let nowMs = Date.UTC(2026, 0, 1);
+    const deps: ShipQueueDeps = { ...fx.deps, clock: { now: () => new Date(nowMs).toISOString() } };
+    const wt1 = fx.worktree("feat/179-quiet-1", { "q1.txt": "1\n" });
+    const id1 = await fx.submit(wt1, "feat/179-quiet-1", deps);
+    expect(await runJob(deps, id1)).toBe("blocked");
+
+    // Job 2 is actively running in the same repo.
+    const wt2 = fx.worktree("feat/179-quiet-2", { "q2.txt": "2\n" });
+    const id2 = await fx.submit(wt2, "feat/179-quiet-2", deps);
+    fx.setVerdict("PASS");
+
+    expect(requestChallengeOverride(fx.root, id1, "waiting behind job 2", deps.clock).ok).toBe(
+      true,
+    );
+    let tick = 0;
+    const watched: string[] = [];
+    const exit = await watchJob({
+      root: fx.root,
+      id: id1,
+      self: SELF,
+      clock: deps.clock,
+      quietMs: 30_000,
+      write: (line) => watched.push(line),
+      waitForChange: async () => {
+        tick += 1;
+        // Advance far past quietMs while job 1 waits for its turn behind job 2.
+        nowMs += 45_000;
+        if (tick === 2) {
+          await runJob(deps, id2);
+          await runJob(deps, id1);
+        } else if (tick > 3) {
+          throw new Error("expected resumed job to finish");
+        }
+      },
+    });
+    expect(exit).toBe(WATCH_EXIT.done);
+    expect(watched.join("\n")).not.toContain("QUIET job=");
+  });
+
+  it("lets an already-running job finish before a newly-resumed earlier job jumps ahead", async () => {
+    const fx = makeFixture({ declaration: "ship_merge=scripts/ship/steps.sh merge\n" });
+    fx.setVerdict("CHALLENGED");
+    const wt1 = fx.worktree("feat/179-order-1", { "o1.txt": "1\n" });
+    const id1 = await fx.submit(wt1, "feat/179-order-1");
+    const wt2 = fx.worktree("feat/179-order-2", { "o2.txt": "2\n" });
+    const id2 = await fx.submit(wt2, "feat/179-order-2");
+
+    // Job 1 parks on hold; job 2 starts, pushes, opens PR, and hits merge exit 75 (still running).
+    expect(await runJob(fx.deps, id1)).toBe("blocked");
+    fx.setVerdict("PASS");
+    const pass1 = await runDueWork(fx.deps);
+    expect(pass1.blocked).toEqual([id2]);
+    expect(readJob(fx.root, id2)).toMatchObject({ state: "running", merge_retries: 1 });
+
+    // Resume job 1 while job 2 is already in progress; job 2 must finish before job 1 lands.
+    expect(
+      requestChallengeOverride(fx.root, id1, "resumed behind running job", fx.deps.clock).ok,
+    ).toBe(true);
+    const pass2 = await runDueWork(fx.deps);
+    expect(pass2.ended[0]).toBe(id2);
+    expect(readJob(fx.root, id2)).toMatchObject({ state: "done" });
+    // Job 1 runs right after job 2 finishes (hitting merge exit 75 on its first try, then finishing).
+    expect(readJob(fx.root, id1)).toMatchObject({ state: "done" });
   });
 });
 
@@ -384,7 +561,7 @@ describe("declared merge and routing waits", () => {
 });
 
 describe("unanswered challenge", () => {
-  it("honors an override made inside 30 s even when the worker reads it later", async () => {
+  it("honors a resume made inside 30 min even when the worker reads it later", async () => {
     const fx = makeFixture();
     fx.setVerdict("CHALLENGED");
     let nowMs = Date.UTC(2026, 0, 1);
@@ -392,15 +569,10 @@ describe("unanswered challenge", () => {
     const wt = fx.worktree("feat/98-timely", { "t.txt": "t\n" });
     const id = await fx.submit(wt, "feat/98-timely", deps);
     expect(await runJob(deps, id)).toBe("blocked");
-    nowMs += 29_000;
-    const cli = (argv: ReadonlyArray<string>) =>
-      runShipQueueCli(argv, {
-        deps,
-        io: { stdout: () => {}, stderr: () => {}, env: {}, cwd: fx.tmp },
-      });
-    expect(await cli(["override", id, "--reason", "made in time"])).toBe(0);
-    // The worker's next tick lands after the window: the timely request still counts.
-    nowMs += 3_000;
+    nowMs += CHALLENGE_WAIT_MS - 60_000;
+    expect(requestChallengeOverride(fx.root, id, "made in time", deps.clock).ok).toBe(true);
+    // The worker's next tick lands after the 30 min window: the timely request still counts.
+    nowMs += 120_000;
     expect(await runJob(deps, id)).toBe("ended");
     expect(readJob(fx.root, id)).toMatchObject({ state: "done" });
     expect(fx.merged).toEqual([1]);
@@ -409,7 +581,7 @@ describe("unanswered challenge", () => {
     ).toContain(`"job":"${id}"`);
   });
 
-  it("refuses an override made after 30 s, even before the worker fails the job", async () => {
+  it("refuses a resume made after 30 min, even before the worker fails the job", async () => {
     const fx = makeFixture();
     fx.setVerdict("CHALLENGED");
     let nowMs = Date.UTC(2026, 0, 1);
@@ -417,17 +589,17 @@ describe("unanswered challenge", () => {
     const wt = fx.worktree("feat/98-late", { "l.txt": "l\n" });
     const id = await fx.submit(wt, "feat/98-late", deps);
     expect(await runJob(deps, id)).toBe("blocked");
-    nowMs += 31_000;
-    // The job still waits (no worker tick yet), but the window is over.
+    nowMs += CHALLENGE_WAIT_MS + 1_000;
+    // The job still waits (no worker tick yet), but the 30 min hold is over.
     expect(readJob(fx.root, id)).toMatchObject({ state: "waiting", waiting_for: "challenge" });
     const out: string[] = [];
     expect(
-      await runShipQueueCli(["override", id, "--reason", "too late"], {
+      await runShipQueueCli(["resume", id, "--reason", "too late"], {
         deps,
         io: { stdout: (t) => out.push(t), stderr: (t) => out.push(t), env: {}, cwd: fx.tmp },
       }),
     ).toBe(1);
-    expect(out.join("")).toContain("override window is over");
+    expect(out.join("")).toContain("30 min review hold is over");
     // A request file written behind the CLI's back is not honored either.
     NodeFS.writeFileSync(
       overrideRequestPath(fx.root, id),
@@ -438,7 +610,7 @@ describe("unanswered challenge", () => {
     expect(fx.merged).toEqual([]);
   });
 
-  it("fails a CHALLENGED job with no override within 30 s, and the repo's next job starts", async () => {
+  it("does not block later jobs in the same repo while a challenged job is on hold, then expires it after 30 min", async () => {
     const fx = makeFixture();
     fx.setVerdict("CHALLENGED");
     let nowMs = Date.UTC(2026, 0, 1);
@@ -447,32 +619,33 @@ describe("unanswered challenge", () => {
     const id = await fx.submit(wt, "feat/98-silent", deps);
     const nextWt = fx.worktree("feat/98-next", { "n.txt": "n\n" });
     const next = await fx.submit(nextWt, "feat/98-next", deps);
-    const started = (job: string) => fx.markers(job).some((m) => m.startsWith("STARTED"));
 
-    // The worker loop runs each repo's head job: the challenged head holds the repo's turn.
-    await runDueWork(deps);
+    // First job gets challenged and parks on hold; flip verdict to PASS and ensure job 2 runs immediately.
+    await runJob(deps, id);
     expect(readJob(fx.root, id)).toMatchObject({ state: "waiting", waiting_for: "challenge" });
     fx.setVerdict("PASS");
-    nowMs += 29_000;
-    await runDueWork(deps);
-    expect(readJob(fx.root, id)).toMatchObject({ state: "waiting" });
-    expect(started(next)).toBe(false);
 
-    // No override within 30 s: the job fails, leaves the queue, and the next job runs.
-    nowMs += 2_000;
+    // Job 2 runs and merges while job 1 remains parked on hold well inside the 30 min TTL.
+    await runDueWork(deps);
+    expect(readJob(fx.root, next)).toMatchObject({ state: "done" });
+    expect(readJob(fx.root, id)).toMatchObject({ state: "waiting", waiting_for: "challenge" });
+    expect(hasOpenJobsForWorker(fx.root)).toBe(true);
+
+    // At 29 min, job 1 is still on hold.
+    nowMs += 29 * 60_000;
+    await runDueWork(deps);
+    expect(readJob(fx.root, id)).toMatchObject({ state: "waiting", waiting_for: "challenge" });
+
+    // Past 30 min TTL: the worker expires the abandoned hold under the repo lock.
+    nowMs += 2 * 60_000;
     await runDueWork(deps);
     expect(readJob(fx.root, id)).toMatchObject({ state: "failed" });
     expect(fx.markers(id).at(-1)).toBe("FAILED reason=challenged");
-    for (let tick = 0; tick < 5 && readJob(fx.root, next)?.state !== "done"; tick += 1) {
-      nowMs += 2_000;
-      await runDueWork(deps);
-    }
-    expect(readJob(fx.root, next)).toMatchObject({ state: "done" });
 
-    // An override after the window is refused: the job is over.
+    // A resume after expiration is refused: the job is over.
     const out: string[] = [];
     expect(
-      await runShipQueueCli(["override", id, "--reason", "too late"], {
+      await runShipQueueCli(["resume", id, "--reason", "too late"], {
         deps,
         io: { stdout: (t) => out.push(t), stderr: (t) => out.push(t), env: {}, cwd: fx.tmp },
       }),

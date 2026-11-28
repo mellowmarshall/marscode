@@ -99,14 +99,11 @@ describe("playbook CLI", () => {
     const reply = {
       acceptable: true,
       summary: "Meets the standards",
-      diagnosis: "ok",
       bypass_detected: false,
       playbook_friction: false,
       rejected_rises: [],
       rises_accepted: false,
       defects: [],
-      analysis: "",
-      recommendation: "Accept.",
     };
     const responseFile = NodePath.join(state, "reply.txt");
     NodeFS.writeFileSync(responseFile, `model said:\n${JSON.stringify(reply)}\n`);
@@ -120,10 +117,19 @@ describe("playbook CLI", () => {
     );
     expect(res.code).toBe(0);
     expect(res.out).toContain("PLAYBOOK REVIEW: PASS");
-    expect(NodeFS.readFileSync(out, "utf8")).toContain("Reviewer:       response-file");
+    expect(NodeFS.readFileSync(out, "utf8")).toContain("Summary: Meets the standards");
+    expect(NodeFS.readFileSync(out, "utf8")).not.toContain("Reviewer:");
     expect(NodeFS.readdirSync(NodePath.join(state, "playbook", "sample-repo"))).toContain(
       "feat_cli.1.challenge.json",
     );
+    expect(
+      JSON.parse(
+        NodeFS.readFileSync(
+          NodePath.join(state, "playbook", "sample-repo", "feat_cli.1.challenge.json"),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({ reviewer: "response-file" });
     const stats = await cli(repo.root, ["stats", "--json"], {
       XDG_STATE_HOME: state,
       SHIP_QUEUE_ROOT: NodePath.join(state, "queue"),
@@ -175,9 +181,16 @@ printf '{"type":"turn.completed"}\\n'
     });
     expect(liveRes.code).toBe(0);
     expect(liveRes.out).toContain("PLAYBOOK REVIEW: PASS");
-    expect(NodeFS.readFileSync(liveOut, "utf8")).toContain(
-      "Reviewer:       gpt-6.2-astra (medium)",
-    );
+    expect(NodeFS.readFileSync(liveOut, "utf8")).toContain("Summary: Meets the standards");
+    expect(NodeFS.readFileSync(liveOut, "utf8")).not.toContain("Reviewer:");
+    expect(
+      JSON.parse(
+        NodeFS.readFileSync(
+          NodePath.join(state, "playbook", "sample-repo", "feat_cli.2.challenge.json"),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({ reviewer: "gpt-6.2-astra (medium)" });
   });
 
   it("challenge reviews a ship-queue job that has no ci-output.txt", async () => {
@@ -192,14 +205,11 @@ printf '{"type":"turn.completed"}\\n'
     const reply = {
       acceptable: true,
       summary: "Meets the standards",
-      diagnosis: "ok",
       bypass_detected: false,
       playbook_friction: false,
       rejected_rises: [],
       rises_accepted: false,
       defects: [],
-      analysis: "",
-      recommendation: "Accept.",
     };
     NodeFS.writeFileSync(
       NodePath.join(binDir, "codex"),
