@@ -191,7 +191,8 @@ export async function runCiSteps(input: {
     run: deps.run,
     worktree: input.ctx.worktree,
     tip: input.ctx.tipSha ?? "HEAD",
-    repo: decl.repo || input.ctx.ghRepo?.split("/").at(-1) || input.ctx.repo,
+    // The full `owner/name`, so two owners' repos of one name never share a project prefix.
+    repo: input.ctx.ghRepo || input.ctx.repo,
     jobId: job.id,
     decl,
   });

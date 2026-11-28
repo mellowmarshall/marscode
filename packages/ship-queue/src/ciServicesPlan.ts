@@ -1,5 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off - the project prefix hashes the repo name.
 // What a job's CI services are (`ship_ci_service`, `ship_ci_env`): the compose project, files, and
 // service names the job starts, the image pins they must carry, and the tools routing asks for.
+import * as NodeCrypto from "node:crypto";
+
 import { COMPOSE_FILES, COMPOSE_OVERRIDES, resolveComposeFiles } from "./ciNeeds.ts";
 import { parseShipDeclaration, type ShipDeclaration } from "./declaration.ts";
 import { git, gitOut } from "./gitQueries.ts";
@@ -28,9 +31,16 @@ export interface CiServicePlan {
   readonly envFile: string;
 }
 
-/** The legacy queue's project prefix: lowercase, every other character a dash. */
+/**
+ * The repo's project prefix, `sq-<name>-<hash>-`. The hash (8 hex of SHA-256 of the lowercased
+ * repo name as the job gives it) keeps apart repos whose names map to the same characters
+ * (`app.api`, `app-api`), so the leftover cleanup, which matches this exact prefix, stops only
+ * its own repo's projects.
+ */
 export function composeProjectPrefix(repo: string): string {
-  return `sq-${repo.toLowerCase().replace(/[^a-z0-9]/g, "-")}-`;
+  const lower = repo.toLowerCase();
+  const hash = NodeCrypto.createHash("sha256").update(lower).digest("hex").slice(0, 8);
+  return `sq-${lower.replace(/[^a-z0-9]/g, "-")}-${hash}-`;
 }
 
 /** Every service name the plan may start, base order first, for routing and the log. */

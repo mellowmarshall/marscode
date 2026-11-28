@@ -133,6 +133,11 @@ export async function startCiServices(
       reason: `the CI never pulls an unpinned image: pin a tag other than latest, or a digest, for ${unpinned.join(", ")}`,
     };
   }
+  // `compose up` with no service name starts every service of the file: start nothing instead.
+  if (selected.services.length === 0) {
+    log("no declared service is left to start");
+    return { kind: "up", services: [], env: {} };
+  }
   const added = plan.added.length > 0 ? ` (${plan.added.join(" ")} added by the branch)` : "";
   log(
     `starting the declared services (compose project ${plan.project}, ${plan.composeFiles.join(" ")}): ${selected.services.join(" ")}${added}`,

@@ -13,6 +13,7 @@ import {
   serviceToolSpecs,
   unpinnedServiceImages,
   composeConfigServices,
+  composeProjectPrefix,
   type CiServicePlan,
 } from "./ciServicesPlan.ts";
 import { startCiServices, stopCiServices, type ServiceShell } from "./ciServicesRun.ts";
@@ -114,8 +115,8 @@ describe("ship_ci_service declaration", () => {
     expect(planned).toEqual({
       ok: true,
       plan: {
-        project: "sq-sample-repo-1001",
-        projectPrefix: "sq-sample-repo-",
+        project: `${composeProjectPrefix("Sample.Repo")}1001`,
+        projectPrefix: composeProjectPrefix("Sample.Repo"),
         composeFiles: ["compose.yaml", "compose.override.yml"],
         required: ["postgres", "redis"],
         optional: [],
@@ -262,6 +263,31 @@ describe("services lifecycle", () => {
     });
   });
 
+  it("starts nothing when no declared service is left, and never runs a bare compose up", async () => {
+    // Only optional services, and the compose configuration has none of them.
+    const { calls, shell } = scripted({
+      config: ok(JSON.stringify({ services: { other: { image: "busybox:1.36" } } })),
+    });
+    const log: string[] = [];
+    const res = await startCiServices(
+      shell,
+      { ...PLAN, required: [], optional: ["postgres"], added: [] },
+      (t) => log.push(t),
+    );
+    expect(res).toMatchObject({ kind: "up", services: [] });
+    expect(calls).toEqual(["config"]);
+    expect(log).toEqual(["no declared service is left to start"]);
+  });
+
+  it("keeps apart the projects of repos whose names differ only in punctuation", () => {
+    const dotted = composeProjectPrefix("acme/app.api");
+    const dashed = composeProjectPrefix("acme/app-api");
+    expect(dotted).toMatch(/^sq-acme-app-api-[0-9a-f]{8}-$/);
+    expect(dashed).toMatch(/^sq-acme-app-api-[0-9a-f]{8}-$/);
+    expect(dotted).not.toBe(dashed);
+    expect(composeProjectPrefix("Acme/App.Api")).toBe(dotted);
+  });
+
   it("stops a start that failed its health wait", async () => {
     const { calls, shell } = scripted({
       up: { exitCode: 1, stdout: "", stderr: "container sq-x-postgres-1 is unhealthy" },
@@ -337,7 +363,7 @@ describe("services and env in a job's steps", () => {
     });
     expect(order).toEqual(["config", "up", "install", "ci", "down"]);
     const log = readLog(fx.root, id);
-    expect(log).toContain(`compose project sq-sample-repo-${id}`);
+    expect(log).toMatch(new RegExp(`compose project sq-[a-z-]*sample-repo-[0-9a-f]{8}-${id}\\b`));
     expect(log).not.toContain("UNPROVEN: ship_ci_service");
     expect(log).not.toContain("UNPROVEN: ship_ci_env");
     const output = NodeFS.readFileSync(NodePath.join(fx.root, "jobs", id, "ci-output.txt"), "utf8");
@@ -360,7 +386,7 @@ describe("services and env in a job's steps", () => {
     expect(readLog(fx.root, id)).toContain("=== ci-services:");
   });
 
-  it("sources the env file in a local step without replacing the queue's own names", async () => {
+  it("reads the env file as data in a local step without replacing the queue's own names", async () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(process.env.TMPDIR ?? "/tmp", "sq-ci-env-"));
     try {
       const file = NodePath.join(dir, "ci.env");
@@ -377,6 +403,34 @@ describe("services and env in a job's steps", () => {
         replaceEnv: true,
       });
       expect(res.stdout.trim()).toBe("postgres://127.0.0.1:15432/ci 1001");
+      // The file comes from the branch: it is read as data and never run. A command line, or a
+      // value that would expand, stops the step, so it cannot end the shell before the CI command.
+      const marker = NodePath.join(dir, "ran");
+      for (const text of ["A=1\nexit 0\n", `A=$(touch ${marker})\n`, 'A="x$HOME"\n']) {
+        NodeFS.writeFileSync(file, text);
+        const hostile = wrapArgvWithCiEnv(file, ["bash", "-c", "echo ci-ran"]);
+        const refused = await nodeProcessRunner({
+          command: hostile[0]!,
+          args: hostile.slice(1),
+          cwd: dir,
+        });
+        expect(refused.exitCode).toBe(1);
+        expect(refused.stdout).not.toContain("ci-ran");
+        expect(refused.stderr).toContain("has a line that is not NAME=value");
+      }
+      expect(NodeFS.existsSync(marker)).toBe(false);
+      // What real env files hold: comments, export, unset, quoted literals.
+      NodeFS.writeFileSync(
+        file,
+        "# ports\nunset OLD_A OLD_B\nexport PG_PORT=15432\nNAME='a b'\nURL=\"redis://127.0.0.1:16379\"\n",
+      );
+      const plain = wrapArgvWithCiEnv(file, ["bash", "-c", 'echo "$PG_PORT|$NAME|$URL"']);
+      const loaded = await nodeProcessRunner({
+        command: plain[0]!,
+        args: plain.slice(1),
+        cwd: dir,
+      });
+      expect(loaded.stdout.trim()).toBe("15432|a b|redis://127.0.0.1:16379");
       const gone = wrapArgvWithCiEnv(NodePath.join(dir, "none.env"), ["true"]);
       const missing = await nodeProcessRunner({ command: "bash", args: gone.slice(1), cwd: dir });
       expect(missing.exitCode).toBe(1);

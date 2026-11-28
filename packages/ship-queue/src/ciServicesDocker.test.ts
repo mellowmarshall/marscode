@@ -5,7 +5,7 @@ import * as NodeNet from "node:net";
 import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { planCiServices, type CiServicePlan } from "./ciServicesPlan.ts";
+import { composeProjectPrefix, planCiServices, type CiServicePlan } from "./ciServicesPlan.ts";
 import { localServiceShell, startCiServices, stopCiServices } from "./ciServicesRun.ts";
 import { parseShipDeclaration } from "./declaration.ts";
 import { readJob, readLog } from "./jobStore.ts";
@@ -184,12 +184,10 @@ describe.skipIf(SKIP !== null)(
       const started = await startCiServices(shell, second, (t) => log.push(t));
       expect(started).toMatchObject({
         kind: "up",
-        env: { SHIP_QUEUE_CI_COMPOSE_PROJECT: "sq-svc-test-repo-9002" },
+        env: { SHIP_QUEUE_CI_COMPOSE_PROJECT: second.project },
       });
       expect(projectContainers(first.project)).toBe("");
-      expect(log.join("\n")).toContain(
-        "stopped the leftover services project sq-svc-test-repo-9001",
-      );
+      expect(log.join("\n")).toContain(`stopped the leftover services project ${first.project}`);
       expect(["S", "N"]).toContain(await postgresAnswers(port));
 
       await stopCiServices(shell, second, (t) => log.push(t));
@@ -229,7 +227,7 @@ esac
         const deps = where === "remote" ? remoteDeps(fx) : fx.deps;
         const wt = fx.worktree(`feat/149-docker-${where}`, { "d.txt": "d\n" });
         const id = await fx.submit(wt, `feat/149-docker-${where}`, deps);
-        const project = `sq-sample-repo-${id}`;
+        const project = `${composeProjectPrefix(readJob(fx.root, id)!.repo)}${id}`;
         projectsLeft.push(project);
 
         expect(await runJob(deps, id)).toBe("ended");
