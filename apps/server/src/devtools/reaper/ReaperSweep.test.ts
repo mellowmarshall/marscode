@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
@@ -26,6 +27,7 @@ import {
   isMktempName,
   sweepDevExhaust,
   sweepTmpRoots,
+  tmpCandidateRoots,
   type SweepContext,
 } from "./ReaperTempSweep.ts";
 
@@ -249,6 +251,63 @@ describe.skipIf(platform !== "linux" && platform !== "darwin")("reaper sweeps", 
     expect(exhaust).toBe(1);
     expect(NodeFS.readdirSync(repo).toSorted()).toEqual(["audit.git", "scratch-mirror"]);
     expect(logs.filter((line) => line.includes("Kept stale"))).toHaveLength(4);
+  });
+
+  it("skips a temp root that is itself a bare repository and still sweeps a plain one", async () => {
+    const devRoot = tempDir("t3-reaper-baretmp-");
+    const bareTmp = NodePath.join(devRoot, "mirrors", "tmp");
+    NodeChildProcess.execFileSync("git", ["init", "--bare", "-q", bareTmp]);
+    const plainTmp = NodePath.join(devRoot, "app", "tmp");
+    writeAged(NodePath.join(plainTmp, "stale.log"), 3 * DAY);
+    ageTree(devRoot, 3 * DAY);
+    const before = NodeFS.readdirSync(bareTmp).toSorted();
+    expect(before).toEqual(expect.arrayContaining(["HEAD", "objects", "refs"]));
+    const logs: string[] = [];
+    const sweep = { ...ctx(new PathGuard([])), log: (line: string) => void logs.push(line) };
+    const roots = (await tmpCandidateRoots(platform, {}, devRoot)).filter((r) =>
+      inside(r, devRoot),
+    );
+    expect(roots).toEqual([plainTmp, bareTmp]);
+
+    const result = await sweepTmpRoots(roots, sweep);
+
+    expect(NodeFS.readdirSync(bareTmp).toSorted()).toEqual(before);
+    expect(NodeFS.existsSync(NodePath.join(plainTmp, "stale.log"))).toBe(false);
+    expect(result.roots).toEqual([plainTmp]);
+    expect([result.dirs, result.files]).toEqual([0, 1]);
+    expect(logs).toContain(
+      `  Skipped temp root ${bareTmp}: it holds bare git repository ${bareTmp}`,
+    );
+  });
+
+  it("skips exhaust roots that are themselves bare repositories", async () => {
+    const devRoot = tempDir("t3-reaper-bareexhaust-");
+    const bareRepoDir = NodePath.join(devRoot, "mirror");
+    NodeChildProcess.execFileSync("git", ["init", "--bare", "-q", bareRepoDir]);
+    writeAged(NodePath.join(bareRepoDir, "scratch-run", "out.log"), 10 * DAY);
+    const app = NodePath.join(devRoot, "app");
+    const bareEvidence = NodePath.join(app, "evidence");
+    NodeChildProcess.execFileSync("git", ["init", "--bare", "-q", bareEvidence]);
+    writeAged(NodePath.join(app, "scratch-old", "out.log"), 10 * DAY);
+    ageTree(devRoot, 10 * DAY);
+    const before = {
+      mirror: NodeFS.readdirSync(bareRepoDir).toSorted(),
+      evidence: NodeFS.readdirSync(bareEvidence).toSorted(),
+    };
+    const logs: string[] = [];
+    const sweep = { ...ctx(new PathGuard([])), log: (line: string) => void logs.push(line) };
+
+    const removed = await sweepDevExhaust(devRoot, sweep);
+
+    expect(removed).toBe(1);
+    expect(NodeFS.existsSync(NodePath.join(app, "scratch-old"))).toBe(false);
+    expect(NodeFS.readdirSync(bareRepoDir).toSorted()).toEqual(before.mirror);
+    expect(NodeFS.readdirSync(bareEvidence).toSorted()).toEqual(before.evidence);
+    expect(before.evidence).toEqual(expect.arrayContaining(["HEAD", "objects", "refs"]));
+    expect(logs.filter((line) => line.includes("Skipped exhaust root"))).toEqual([
+      `  Skipped exhaust root ${bareEvidence}: it holds bare git repository ${bareEvidence}`,
+      `  Skipped exhaust root ${bareRepoDir}: it holds bare git repository ${bareRepoDir}`,
+    ]);
   });
 
   it("counts without removing in a dry run", async () => {

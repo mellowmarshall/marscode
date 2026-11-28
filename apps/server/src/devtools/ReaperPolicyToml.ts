@@ -91,30 +91,48 @@ function finishRule(current: PartialRule & { path: string }): ReaperPolicyRule {
   };
 }
 
-/**
- * Rules from the file text. Lenient mode skips what it cannot read; strict mode returns an
- * error instead, for writers that must never rebuild the file from a partial rule list.
- */
-function parseRules(
-  text: string,
-  strict: boolean,
-):
+/** Single tables the policy file may hold beside its `[[approved]]` rules. */
+const KNOWN_TABLES = new Set(["docker", "cargo", "retention"]);
+const HEADER_RE = /^\[(\[)?([a-z_]+)\](\])?$/;
+
+/** What a stripped line starting with `[` is: the rule header, a known table, or neither. */
+function headerOf(stripped: string): "approved" | "table" | "invalid" | null {
+  if (!stripped.startsWith("[")) return null;
+  const match = HEADER_RE.exec(stripped);
+  if (match === null || (match[1] === undefined) !== (match[3] === undefined)) return "invalid";
+  if (match[1] !== undefined) return match[2] === "approved" ? "approved" : "invalid";
+  return KNOWN_TABLES.has(match[2]!) ? "table" : "invalid";
+}
+
+type ParseResult =
   | { readonly ok: true; readonly rules: ReadonlyArray<ReaperPolicyRule> }
-  | { readonly ok: false; readonly error: string } {
+  | { readonly ok: false; readonly error: string };
+
+/**
+ * Rules from the file text, less any rule with a line it cannot read, so a sweep never runs a
+ * rule with lost keys, plus the first error, which strict readers refuse.
+ */
+function parseRules(text: string): {
+  readonly rules: ReadonlyArray<ReaperPolicyRule>;
+  readonly error: string | null;
+} {
   const rules: ReaperPolicyRule[] = [];
   let current: PartialRule | null = null;
+  let ruleBroken = false;
   let error: string | null = null;
   const fail = (lineNo: number, why: string) => {
     error ??= `Reaper policy line ${lineNo}: ${why}`;
+    if (current !== null) ruleBroken = true;
   };
   const flush = (lineNo: number) => {
     if (current === null) return;
     if (current.path === undefined) {
-      if (strict) fail(lineNo, "an [[approved]] rule has no path");
-    } else {
+      fail(lineNo, "an [[approved]] rule has no path");
+    } else if (!ruleBroken) {
       rules.push(finishRule({ ...current, path: current.path }));
     }
     current = null;
+    ruleBroken = false;
   };
 
   const lines = text.split(/\r?\n/);
@@ -122,54 +140,81 @@ function parseRules(
     const lineNo = index + 1;
     const stripped = stripTomlCommentOutsideQuotes(rawLine);
     if (!stripped) continue;
-    if (stripped === "[[approved]]") {
+    const header = headerOf(stripped);
+    if (header === "approved") {
       flush(lineNo);
       current = {};
       continue;
     }
-    if (stripped.startsWith("[")) {
+    if (header === "table") {
       flush(lineNo);
+      continue;
+    }
+    if (header === "invalid") {
+      fail(lineNo, `unknown or malformed section header ${stripped}`);
       continue;
     }
     if (current === null) continue;
     const rule: PartialRule = current;
     const eq = stripped.indexOf("=");
     if (eq <= 0) {
-      if (strict) fail(lineNo, "expected key = value");
+      fail(lineNo, "expected key = value");
       continue;
     }
     const key = stripped.slice(0, eq).trim();
     const val = stripped.slice(eq + 1).trim();
     const number = val === "" ? Number.NaN : Number(val);
-    if (strict && Object.hasOwn(KEY_FIELDS, key) && rule[KEY_FIELDS[key]!] !== undefined) {
+    if (Object.hasOwn(KEY_FIELDS, key) && rule[KEY_FIELDS[key]!] !== undefined) {
       fail(lineNo, `duplicate key ${key}`);
     }
     if (key === "path") {
-      if (strict && !isQuoted(val)) fail(lineNo, "path must be a quoted string");
+      if (!isQuoted(val)) fail(lineNo, "path must be a quoted string");
       rule.path = unquoteTomlString(val);
     } else if (key === "max_age_days" || key === "keep_latest") {
-      if (strict && !Number.isFinite(number)) fail(lineNo, `${key} must be a number`);
+      if (!Number.isFinite(number)) fail(lineNo, `${key} must be a number`);
       if (key === "max_age_days") rule.maxAgeDays = number;
       else rule.keepLatest = number;
     } else if (key === "enabled") {
-      if (strict && val !== "true" && val !== "false")
-        fail(lineNo, "enabled must be true or false");
+      if (val !== "true" && val !== "false") fail(lineNo, "enabled must be true or false");
       rule.enabled = val === "true";
-    } else if (strict) {
+    } else {
       fail(lineNo, `unknown key ${key} in an [[approved]] rule`);
     }
   }
   flush(lines.length);
-  return error === null ? { ok: true, rules } : { ok: false, error };
+  return { rules, error };
+}
+
+export function sameReaperPolicyRules(
+  a: ReadonlyArray<ReaperPolicyRule>,
+  b: ReadonlyArray<ReaperPolicyRule>,
+): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (rule, i) =>
+        rule.path === b[i]!.path &&
+        rule.maxAgeDays === b[i]!.maxAgeDays &&
+        rule.keepLatest === b[i]!.keepLatest &&
+        rule.enabled === b[i]!.enabled,
+    )
+  );
 }
 
 export function parseReaperPolicyToml(text: string): ReadonlyArray<ReaperPolicyRule> {
-  const parsed = parseRules(text, false);
-  return parsed.ok ? parsed.rules : [];
+  return parseRules(text).rules;
 }
 
-export function parseReaperPolicyTomlStrict(text: string) {
-  return parseRules(text, true);
+/** Strict, and only when the rules survive a write and a second read unchanged. */
+export function parseReaperPolicyTomlStrict(text: string): ParseResult {
+  const parsed = parseRules(text);
+  if (parsed.error !== null) return { ok: false, error: parsed.error };
+  const again = parseRules(serializeReaperPolicyToml(parsed.rules, text));
+  if (again.error !== null || !sameReaperPolicyRules(parsed.rules, again.rules)) {
+    const why = again.error === null ? "" : `: ${again.error}`;
+    return { ok: false, error: `Reaper policy rules do not round-trip unchanged${why}` };
+  }
+  return { ok: true, rules: parsed.rules };
 }
 
 function preserveNonApprovedToml(existingText: string): string {
@@ -177,13 +222,12 @@ function preserveNonApprovedToml(existingText: string): string {
   let skippingApproved = false;
   for (const rawLine of existingText.split(/\r?\n/)) {
     const stripped = stripTomlCommentOutsideQuotes(rawLine);
-    if (stripped === "[[approved]]") {
+    const header = headerOf(stripped);
+    if (header === "approved") {
       skippingApproved = true;
       continue;
     }
-    if (stripped.startsWith("[")) {
-      skippingApproved = false;
-    }
+    if (header === "table") skippingApproved = false;
     if (!skippingApproved) {
       out.push(rawLine);
     }

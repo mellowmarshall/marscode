@@ -109,6 +109,24 @@ export async function gitDataIn(target: string): Promise<string | null> {
   return null;
 }
 
+/**
+ * Why a sweep root must not be swept at all, or null: it is git data by name, a bare repo
+ * (whose `HEAD`, `objects` and `refs` a per-child check sees one at a time), or a checkout
+ * (a `.git` child). Its children's subtrees still need gitDataIn each. Unreadable is unsafe.
+ */
+export async function gitDataAtRoot(root: string): Promise<string | null> {
+  if (gitDataName(NodePath.basename(root), true)) return `git data ${root}`;
+  let children: Array<NodeFS.Dirent>;
+  try {
+    children = await NodeFSP.readdir(root, { withFileTypes: true });
+  } catch {
+    return `unreadable folder ${root}`;
+  }
+  if (bareRepoLayout(children)) return `bare git repository ${root}`;
+  const dotGit = children.find((c) => c.name.toLowerCase() === ".git");
+  return dotGit === undefined ? null : `git data ${NodePath.join(root, dotGit.name)}`;
+}
+
 /** Allocated bytes under target; a hard-linked file counts once. */
 export async function diskBytes(target: string): Promise<number> {
   let total = 0;

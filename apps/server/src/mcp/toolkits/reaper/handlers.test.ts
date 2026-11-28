@@ -177,6 +177,26 @@ it.effect("queues the agent's proposed rules and writes accepted ones into the p
       expect(refusedCorrupt._tag).toBe("ReaperProposalRefusedError");
       expect(refusedCorrupt.message).toContain("Could not parse the reaper policy");
       expect(NodeFS.readFileSync(policyPath, "utf8")).toBe(corrupt);
+      // A malformed header must not end a rule early: its later keys would be lost on rewrite.
+      const brokenHeader = [
+        "[[approved]]",
+        `path = "${cacheDir}"`,
+        "enabled = true",
+        "[broken",
+        "max_age_days = 365",
+        "",
+      ].join("\n");
+      NodeFS.writeFileSync(policyPath, brokenHeader);
+      expect(ReaperPolicy.readReaperPolicySync([], policyPath).rules).toEqual([]);
+      const refusedHeader = yield* proposals
+        .decide({ id: retry!.id, decision: "accept" })
+        .pipe(Effect.flip);
+      expect(refusedHeader.message).toContain("malformed section header [broken");
+      const refusedSave = yield* proposals
+        .savePolicy([{ path: cacheDir, maxAgeDays: 365, keepLatest: 2, enabled: true }])
+        .pipe(Effect.flip);
+      expect(refusedSave.message).toContain("Could not parse the reaper policy");
+      expect(NodeFS.readFileSync(policyPath, "utf8")).toBe(brokenHeader);
       NodeFS.rmSync(policyPath);
       NodeFS.mkdirSync(policyPath);
       const refusedUnreadable = yield* proposals

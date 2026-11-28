@@ -10,6 +10,7 @@ import {
   normalizeAgeDays,
   parseReaperPolicyToml,
   parseReaperPolicyTomlStrict,
+  sameReaperPolicyRules,
   serializeReaperPolicyToml,
   type ReaperPolicyRule,
 } from "./ReaperPolicyToml.ts";
@@ -342,9 +343,26 @@ export async function writeReaperPolicy(
       };
     }
   }
+  if (existingText !== undefined) {
+    const current = parseReaperPolicyTomlStrict(existingText);
+    if (!current.ok) {
+      return {
+        ok: false,
+        error: `Could not parse the reaper policy ${policyPath}: ${current.error}`,
+      };
+    }
+  }
+  const output = serializeReaperPolicyToml(validated.rules, existingText);
+  const reread = parseReaperPolicyTomlStrict(output);
+  if (!reread.ok || !sameReaperPolicyRules(reread.rules, validated.rules)) {
+    return {
+      ok: false,
+      error: `Refused to write the reaper policy ${policyPath}: the rules do not read back unchanged`,
+    };
+  }
   await NodeFSP.mkdir(NodePath.dirname(policyPath), { recursive: true });
   const tmpPath = `${policyPath}.tmp.${process.pid}.${NodeCrypto.randomUUID()}`;
-  await NodeFSP.writeFile(tmpPath, serializeReaperPolicyToml(validated.rules, existingText), {
+  await NodeFSP.writeFile(tmpPath, output, {
     encoding: "utf8",
     mode: 0o644,
   });
