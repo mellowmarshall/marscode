@@ -47,34 +47,6 @@ function dataRootOf(cacheDir: string): string | undefined {
     : undefined;
 }
 
-/**
- * Clears what a killed build left: `.build.*` directories older than the build timeout, and
- * the primary repo's worktree records whose directories are gone.
- */
-async function clearStaleBuilds(
-  run: ProcessRunner,
-  marscodeRoot: string,
-  cacheDir: string,
-): Promise<void> {
-  let entries: ReadonlyArray<string> = [];
-  try {
-    entries = NodeFS.readdirSync(cacheDir);
-  } catch {
-    return;
-  }
-  const cutoff = Date.now() - BUILD_TIMEOUT_MS;
-  for (const entry of entries.filter((name) => name.startsWith(".build."))) {
-    const full = NodePath.join(cacheDir, entry);
-    try {
-      if (NodeFS.statSync(full).mtimeMs < cutoff)
-        NodeFS.rmSync(full, { recursive: true, force: true });
-    } catch {
-      // Another build may have removed it already.
-    }
-  }
-  await run({ command: "git", args: ["-C", marscodeRoot, "worktree", "prune"], cwd: marscodeRoot });
-}
-
 /** `<local data root>/ship-queue-ci/payload-bundles`, from the manifest's local (ssh: null) host. */
 export function payloadBundleCacheDir(
   hosts: ReadonlyArray<CiHostEntry>,
@@ -110,7 +82,6 @@ export async function buildPayloadBundles(input: {
     NodeFS.rmSync(dir, { recursive: true, force: true });
   }
   const run = input.run ?? nodeProcessRunner;
-  await clearStaleBuilds(run, input.marscodeRoot, input.cacheDir);
   const script = [
     "set -euo pipefail",
     "root=$1; sha=$2; cache=$3; keep=$4; lockwait=$5; shift 5",
@@ -118,7 +89,11 @@ export async function buildPayloadBundles(input: {
     // One build at a time per cache: concurrent installs race on the managed toolchain download
     // and fall back to the wrong package manager. A waiter reuses the build that finished first.
     'exec 9> "$cache/.lock"',
-    'if command -v flock > /dev/null 2>&1; then flock -w "$lockwait" 9 || { echo "another payload bundle build held the lock for $lockwait s" >&2; exit 1; }; fi',
+    "locked=0",
+    'if command -v flock > /dev/null 2>&1; then flock -w "$lockwait" 9 || { echo "another payload bundle build held the lock for $lockwait s" >&2; exit 1; }; locked=1; fi',
+    // Only the lock holder clears what a killed build left (its .build.* directory and worktree
+    // record): while it holds the lock no other build can be running, whatever its age.
+    'if [ "$locked" = 1 ]; then rm -rf "$cache"/.build.*; git -C "$root" worktree prune > /dev/null 2>&1 || true; fi',
     '[ ! -f "$cache/$sha/.complete" ] || exit 0',
     'w=$(mktemp -d "$cache/.build.XXXXXX")',
     // Remove the build first, then drop its worktree record: a kill mid-trap leaves at most a

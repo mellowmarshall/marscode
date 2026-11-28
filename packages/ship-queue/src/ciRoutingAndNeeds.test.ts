@@ -360,11 +360,14 @@ describe("CI capability/arch routing with in-memory telemetry, battery skip, set
 
 describe("host probe, availability, and MarsCode payload sync", () => {
   it("resolves MarsCode host-sync payload paths (infra/ci-host + bundled packages) and archives/unpacks cleanly", async () => {
+    // The paths come from the commit, not the working tree.
     const repoRoot = NodePath.resolve(import.meta.dirname, "../../..");
-    const paths = resolveHostSyncPaths(repoRoot);
+    const { paths, error } = await resolveHostSyncPaths(nodeProcessRunner, repoRoot, "HEAD");
+    expect(error).toBeUndefined();
     expect(paths).toContain("infra/ci-host");
     expect(paths).toContain("packages/runlog");
     expect(paths).toContain("packages/guard-protocol");
+    expect(paths).toContain("packages/host-guards");
     expect(paths).toContain("packages/playbook");
 
     // Create a tiny real git repo with infra/ci-host and verify syncCiHostPayload archives and pipes base64 tar.
@@ -383,6 +386,34 @@ describe("host probe, availability, and MarsCode payload sync", () => {
     );
     await run(["add", "infra/ci-host/ci-vp.sh"]);
     await run(["commit", "-m", "init"]);
+
+    // The payload paths come from the synced commit: packages that exist only in the working tree
+    // (not committed) do not count, and a commit without a package whose CLI the payload carries
+    // is refused before anything reaches the host.
+    for (const name of ["runlog", "playbook", "host-guards"]) {
+      NodeFS.mkdirSync(NodePath.join(fakeRepo, "packages", name), { recursive: true });
+      NodeFS.writeFileSync(NodePath.join(fakeRepo, "packages", name, "package.json"), "{}\n");
+    }
+    let lackingRemoteCalls = 0;
+    const lacking = await syncCiHostPayload({
+      host: { name: "ci-host-1", ssh: "ci-host-1.example", role: "ci", data_root: "~/data" },
+      marscodeRoot: fakeRepo,
+      bundleCacheDir: mkTempDir("sq-bundlecache-lacking-"),
+      deps: {
+        runLocal: nodeProcessRunner,
+        runRemote: async () => {
+          lackingRemoteCalls += 1;
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      },
+    });
+    expect(lacking.ok).toBe(false);
+    expect(lacking.error).toContain(
+      "lacks packages/runlog, packages/playbook, packages/host-guards",
+    );
+    expect(lackingRemoteCalls).toBe(0);
+    await run(["add", "packages"]);
+    await run(["commit", "-m", "packages"]);
 
     // The payload carries each package's bundle built for exactly this commit. A failed build
     // (this fake repo has no workspace to install) refuses the sync.
@@ -427,6 +458,9 @@ describe("host probe, availability, and MarsCode payload sync", () => {
     expect(synced.ok).toBe(true);
     expect(synced.paths).toEqual([
       "infra/ci-host",
+      "packages/runlog",
+      "packages/host-guards",
+      "packages/playbook",
       "packages/runlog/dist/bin.mjs",
       "packages/playbook/dist/bin.mjs",
       "packages/host-guards/dist/bin.mjs",

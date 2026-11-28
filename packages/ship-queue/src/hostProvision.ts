@@ -10,6 +10,7 @@ import { nodeProcessRunner } from "./nodeProcess.ts";
 import {
   buildPayloadBundles,
   missingPayloadBundles,
+  PAYLOAD_BUNDLE_PACKAGES,
   PAYLOAD_BUNDLE_PATHS,
   payloadBundleCacheDir,
 } from "./payloadBundles.ts";
@@ -20,6 +21,7 @@ import {
   SELF_SUDO_TOKEN,
 } from "./rootGrant.ts";
 import { buildToolchainShellSetup, formatDataRootShell } from "./toolchainEnv.ts";
+import type { ProcessRunner } from "./types.ts";
 
 const REMOTE_PAYLOAD_DIR = "$HOME/.local/share/ship-queue-ci/marscode-ci-host";
 const BUNDLED_PACKAGE_CANDIDATES: ReadonlyArray<string> = [
@@ -29,15 +31,33 @@ const BUNDLED_PACKAGE_CANDIDATES: ReadonlyArray<string> = [
   "packages/playbook",
 ];
 
-/** Resolves the list of MarsCode repository paths to archive for `hosts sync` (`infra/ci-host` + present bundled packages). */
-export function resolveHostSyncPaths(marscodeRoot: string): ReadonlyArray<string> {
-  const paths: string[] = ["infra/ci-host"];
-  for (const rel of BUNDLED_PACKAGE_CANDIDATES) {
-    if (NodeFS.existsSync(NodePath.join(marscodeRoot, rel))) {
-      paths.push(rel);
-    }
+/**
+ * The MarsCode paths to archive for `hosts sync`, read from the synced commit itself (never the
+ * checkout's working tree): `infra/ci-host` and each bundled package that commit has. The commit
+ * must have `infra/ci-host` and every package whose CLI the payload carries, so a payload never
+ * pairs a built CLI with a missing installer.
+ */
+export async function resolveHostSyncPaths(
+  run: ProcessRunner,
+  marscodeRoot: string,
+  sha: string,
+): Promise<{ readonly paths: ReadonlyArray<string>; readonly error?: string | undefined }> {
+  const wanted = ["infra/ci-host", ...BUNDLED_PACKAGE_CANDIDATES];
+  const ls = await run({
+    command: "git",
+    args: ["-C", marscodeRoot, "ls-tree", "--name-only", sha, "--", ...wanted],
+    cwd: marscodeRoot,
+  });
+  if (ls.exitCode !== 0) {
+    return { paths: [], error: ls.stderr.trim() || `git ls-tree failed at ${sha}` };
   }
-  return paths;
+  const present = new Set(ls.stdout.split("\n").filter(Boolean));
+  const paths = wanted.filter((rel) => present.has(rel));
+  const required = ["infra/ci-host", ...PAYLOAD_BUNDLE_PACKAGES.map((p) => `packages/${p}`)];
+  const missing = required.filter((rel) => !present.has(rel));
+  return missing.length > 0
+    ? { paths, error: `commit ${sha} lacks ${missing.join(", ")}, which the payload needs` }
+    : { paths };
 }
 
 /** The one line an installer prints when it kept another install's CLI (ci-marscode-cli.sh). */
@@ -59,7 +79,7 @@ export async function syncCiHostPayload(input: {
   readonly paths: ReadonlyArray<string>;
   readonly error?: string | undefined;
 }> {
-  const paths = resolveHostSyncPaths(input.marscodeRoot);
+  let paths: ReadonlyArray<string> = [];
   const ref = (input.sourceRef ?? "HEAD").trim();
   if (!ref || ref.startsWith("-") || /[\s\0]/.test(ref)) {
     return { ok: false, paths, error: `invalid sourceRef: ${JSON.stringify(input.sourceRef)}` };
@@ -81,6 +101,9 @@ export async function syncCiHostPayload(input: {
     return { ok: false, paths, error: rev.stderr.trim() || `unknown ref ${ref}` };
   }
   const sha = rev.stdout.trim();
+  const selected = await resolveHostSyncPaths(runLocal, input.marscodeRoot, sha);
+  paths = selected.paths;
+  if (selected.error) return { ok: false, paths, error: selected.error };
   const built = await buildPayloadBundles({
     marscodeRoot: input.marscodeRoot,
     sha,
