@@ -745,7 +745,11 @@ const SIDE_CHAT_STATE_LABELS = {
 /** What a side chat tab's dot shows and its title's accessible name says. */
 function sideChatTabState(shell: EnvironmentThreadShell | null) {
   if (shell === null) return null;
-  if (shell.hasPendingApprovals || shell.pendingSubagentRequest === "approval") {
+  if (
+    shell.hasPendingApprovals ||
+    shell.hasPendingSecretRequest === true ||
+    shell.pendingSubagentRequest === "approval"
+  ) {
     return "needs approval";
   }
   if (shell.hasPendingUserInput || shell.pendingSubagentRequest === "user_input") {

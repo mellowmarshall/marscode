@@ -174,6 +174,18 @@ describe("resolveBackgroundThreadRequest", () => {
       source: { pendingRuntimeRequest: parentQuestion === null ? null : question(parentQuestion) },
     });
 
+  it("announces a pending secret as an approval keyed by the card's id", () => {
+    expect(
+      resolveBackgroundThreadRequest({
+        hasPendingApprovals: false,
+        hasPendingUserInput: true,
+        hasPendingSecretRequest: true,
+        pendingSubagentRequest: null,
+        source: { pendingRuntimeRequest: question("secret-card") },
+      }),
+    ).toEqual({ request: "approval", requestId: "secret-card" });
+  });
+
   it("raises a subagent's request on the parent without borrowing the parent's request id", () => {
     expect(childApproval(null)).toEqual({ request: "approval", requestId: null });
     // The parent's own questions come and go while the child's approval waits.

@@ -69,17 +69,46 @@ export function startThreadNotifications(
 ): () => void {
   const pending = new Map<
     string,
-    { environmentId: EnvironmentId; threadId: ThreadId; notification: Notification }
+    {
+      environmentId: EnvironmentId;
+      threadId: ThreadId;
+      notification: Notification;
+      kind: ThreadNotificationKind;
+    }
   >();
   const watched = new Map<EnvironmentId, WatchedEnvironment>();
+  // Threads waiting on an approval or a secret, by environment; the window flashes while one does.
+  const approvals = new Map<EnvironmentId, ReadonlySet<ThreadId>>();
+  let flashing = false;
+  // Every new request flashes again, since focusing the window stops the last flash.
+  const setWindowAttention = (active: boolean) => {
+    if (!active && !flashing) return;
+    flashing = active;
+    void window.desktopBridge?.setWindowAttention?.(active).catch(() => undefined);
+  };
+  const syncWindowAttention = () => {
+    if (flashing && [...approvals.values()].every((threads) => threads.size === 0)) {
+      setWindowAttention(false);
+    }
+  };
 
   const trackNotification = (
     environmentId: EnvironmentId,
     threadId: ThreadId,
     notification: Notification,
+    kind: ThreadNotificationKind,
   ) => {
     pending.get(notification.tag)?.notification.close();
-    pending.set(notification.tag, { environmentId, threadId, notification });
+    pending.set(notification.tag, { environmentId, threadId, notification, kind });
+    setNotificationBadge(pending.size);
+  };
+  // An answered request takes its notification with it; a completion stays.
+  const closeAnsweredNotification = (environmentId: EnvironmentId, threadId: ThreadId) => {
+    const tag = threadNotificationTag(environmentId, threadId);
+    const entry = pending.get(tag);
+    if (entry?.kind !== "input") return;
+    entry.notification.close();
+    pending.delete(tag);
     setNotificationBadge(pending.size);
   };
   // Toast ids by thread key, so hiding or opening a thread, or removing its environment, closes them.
@@ -142,6 +171,7 @@ export function startThreadNotifications(
         .has(threadKey({ environmentId, threadId: thread.id }))
     )
       return;
+    if (kind === "input" && status === "approval") setWindowAttention(true);
     const { notificationMode: mode, inAppNotificationsEnabled } = getClientSettings();
     const active = activeThread();
     const title =
@@ -217,7 +247,7 @@ export function startThreadNotifications(
         // Windows drops clicks after a toast moves into Notification Center.
         requireInteraction: kind === "completion" && isWindowsPlatform(navigator.platform),
       });
-      trackNotification(environmentId, thread.id, notification);
+      trackNotification(environmentId, thread.id, notification, kind);
       notification.addEventListener("click", () => {
         notification.close();
         window.focus();
@@ -303,8 +333,20 @@ export function startThreadNotifications(
     entry.reconnecting = false;
     entry.previous = next;
     entry.gate.retain(new Set(next.keys()));
+    approvals.set(
+      environmentId,
+      new Set(
+        [...next.values()]
+          .filter((state) => state.status === "approval" && state.thread.archivedAt === null)
+          .map((state) => state.thread.id),
+      ),
+    );
+    syncWindowAttention();
     const now = Date.now();
     for (const [prior, state] of changed) {
+      if (prior?.attention != null && state.attention !== prior.attention) {
+        closeAnsweredNotification(environmentId, state.thread.id);
+      }
       entry.gate.observe(state.thread.id, prior, state, {
         archived: state.thread.archivedAt !== null,
         quiet: state.raw.latestRunStopRequested === true,
@@ -356,6 +398,8 @@ export function startThreadNotifications(
       unsubscribeRequests();
       unsubscribeDelegated();
       entry.gate.clear();
+      approvals.delete(environmentId);
+      syncWindowAttention();
     };
     return entry;
   };
@@ -451,5 +495,6 @@ export function startThreadNotifications(
     watched.clear();
     stopModeListeners();
     closeToasts(() => true);
+    setWindowAttention(false);
   };
 }

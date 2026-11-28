@@ -252,6 +252,24 @@ describe("resolveSidebarThreadStatus", () => {
     ).toBe("approval");
   });
 
+  it("treats a pending secret request like an approval, in red with the approval pill", () => {
+    const secret = { ...idle, hasPendingUserInput: true, hasPendingSecretRequest: true, runtime };
+    expect(resolveSidebarThreadStatus(secret)).toBe("approval");
+    expect(resolveSidebarThreadStatus({ ...secret, pendingGuestMessageCount: 1 })).toBe("approval");
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...secret,
+          hasActionableProposedPlan: false,
+          interactionMode: "default",
+          latestRun: null,
+        },
+      })?.label,
+    ).toBe("Pending Approval");
+    // Answering or declining the card ends it, so the thread goes back to work.
+    expect(resolveSidebarThreadStatus({ ...idle, runtime })).toBe("working");
+  });
+
   it("shows a waiting guest message as a Request, below the agent's own requests", () => {
     expect(resolveSidebarThreadStatus({ ...idle, pendingGuestMessageCount: 1, runtime })).toBe(
       "request",

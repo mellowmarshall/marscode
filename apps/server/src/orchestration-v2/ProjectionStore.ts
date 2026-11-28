@@ -1829,6 +1829,7 @@ function secretRequestAsPendingInput(
     createdAt: item.startedAt ?? item.updatedAt,
     blocking: true,
     userOnly: true,
+    ...(item.type === "secret_request" ? { secret: true } : {}),
   };
 }
 

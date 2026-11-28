@@ -178,6 +178,8 @@ export interface EnvironmentThreadShell {
   readonly latestUserAuthoredMessageAt?: string | null;
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
+  /** A secret card waits on the user; it asks for attention like an approval. */
+  readonly hasPendingSecretRequest?: boolean;
   readonly pendingUserInputAt?: string | null;
   readonly pendingSubagentRequest?: PendingSubagentRequest | null;
   /** Guest messages waiting for the owner to send or dismiss. */
@@ -277,6 +279,16 @@ export function scopeProject(
 
 export type PendingSubagentRequest = "approval" | "user_input";
 
+/** A secret card holds its agent on the user, so it needs the user like an approval. */
+export function isPendingSecretRequest(
+  thread: Pick<OrchestrationV2ThreadShell, "pendingRuntimeRequest">,
+) {
+  return (
+    thread.pendingRuntimeRequest?.kind === "user_input" &&
+    thread.pendingRuntimeRequest.secret === true
+  );
+}
+
 export function presentThreadShell(
   environmentId: EnvironmentId,
   thread: OrchestrationV2ThreadShell,
@@ -337,6 +349,7 @@ export function presentThreadShell(
       thread.pendingRuntimeRequest.kind !== "auth_refresh",
     // Async questions count too, so a thread with any open question leaves Working.
     hasPendingUserInput: thread.pendingRuntimeRequest?.kind === "user_input",
+    hasPendingSecretRequest: isPendingSecretRequest(thread),
     pendingUserInputAt:
       thread.pendingRuntimeRequest?.kind === "user_input"
         ? iso(thread.pendingRuntimeRequest.createdAt)
