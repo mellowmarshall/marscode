@@ -79,7 +79,7 @@ function PreviewPanelShellFrame(
   const returnedFocus = useRef(false);
   const focusOrigin = useRef<HTMLElement | null>(null);
   const lastBlurred = useRef<EventTarget | null>(null);
-  const { width, handlers, observeRow } = props.inlineSize;
+  const { width, minWidth, maxWidth, setWidth, handlers, observeRow } = props.inlineSize;
   // Width animates only for an open or close. Any other width change disables
   // the transition in the same commit that changes the width, so the browser
   // never starts one; the next open or close re-enables it in its own commit,
@@ -189,7 +189,16 @@ function PreviewPanelShellFrame(
       data-preview-panel-mode={props.mode}
       data-preview-panel-maximized={maximized ? "true" : "false"}
     >
-      {isInline && !maximized ? <RightPanelResizeHandle handlers={handlers} /> : null}
+      {isInline && !maximized ? (
+        <RightPanelResizeHandle
+          handlers={handlers}
+          label={gt("Resize panel")}
+          width={width}
+          minWidth={minWidth}
+          maxWidth={maxWidth}
+          onWidthChange={setWidth}
+        />
+      ) : null}
       {/* Content stays pinned to the right edge, so closing uncovers the chat
           instead of sliding the tab bar under the title bar controls. */}
       <div

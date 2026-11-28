@@ -105,7 +105,11 @@ export function useResizableWidth(options: UseResizableWidthOptions): {
 
   return {
     width: clampedWidth,
-    setWidth: (value) => commitWidth(storageKey, clamp(value)),
+    setWidth: (value) => {
+      const next = clamp(value);
+      // Held keys and repeated Home/End at a bound would otherwise re-render and re-persist.
+      if (next !== clampedWidth) commitWidth(storageKey, next);
+    },
     handlers: {
       ref: drag.ref,
       onPointerDown: drag.onPointerDown,
