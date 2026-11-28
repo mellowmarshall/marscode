@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import { overrideRequestPath } from "./challengeGate.ts";
 import {
   isEnded,
   jobDir,
@@ -16,7 +17,13 @@ import { findTerminal, isMarkerLine } from "./markers.ts";
 import type { ProcessIdentity } from "./processIdentity.ts";
 import type { Clock } from "./types.ts";
 
-export const WATCH_EXIT = { done: 0, failed: 1, quiet: 2, actionRequired: 3 } as const;
+export const WATCH_EXIT = {
+  done: 0,
+  failed: 1,
+  quiet: 2,
+  actionRequired: 3,
+  challenged: 4,
+} as const;
 
 /** Incremental reader of a job log's complete marker lines; a partial last line waits for its newline. */
 export class MarkerTail {
@@ -75,9 +82,9 @@ export interface WatchOptions {
 
 const actionSeenPath = (root: string, id: string) => NodePath.join(jobDir(root, id), "action_seen");
 
-function readActionSeen(root: string, id: string): string {
+function readSeen(path: string): string {
   try {
-    return NodeFS.readFileSync(actionSeenPath(root, id), "utf8").trim();
+    return NodeFS.readFileSync(path, "utf8").trim();
   } catch {
     return "";
   }
@@ -105,8 +112,9 @@ function emitReviewIfPresent(root: string, id: string, write: (line: string) => 
 
 /**
  * Prints each marker as it lands. Exits 0 on `DONE job=`, 1 on `FAILED reason=`, 2 with `QUIET job=`
- * when a running job's log has not moved in `quietMs`, and 3 the first time a watch sees the job
- * waiting on an owner action it has not reported yet.
+ * when a running job's log has not moved in `quietMs`, 3 the first time a watch sees the job
+ * waiting on an owner action it has not reported yet, and 4 whenever the job waits on a CHALLENGED
+ * playbook review (`CHALLENGED job=`) with no override pending.
  */
 export async function watchJob(options: WatchOptions): Promise<number> {
   const { root, id, clock, write } = options;
@@ -146,14 +154,27 @@ export async function watchJob(options: WatchOptions): Promise<number> {
 
       const job = readJob(root, id);
       if (job && !isEnded(job)) options.ensureWorker?.();
-      if (job?.state === "waiting" && job.action_digest) {
-        if (readActionSeen(root, id) !== job.action_digest) {
+      if (job?.state === "waiting" && job.waiting_for === "action" && job.action_digest) {
+        if (readSeen(actionSeenPath(root, id)) !== job.action_digest) {
           NodeFS.writeFileSync(actionSeenPath(root, id), job.action_digest);
           write(
             `watch: job ${id} waits for the owner; once approved it resumes on its own and your thread is told. To follow it: ship-queue watch ${id}`,
           );
           return WATCH_EXIT.actionRequired;
         }
+      }
+
+      // Every watch of a challenged job hands the decision back, until an override is pending.
+      if (
+        job?.state === "waiting" &&
+        job.waiting_for === "challenge" &&
+        !NodeFS.existsSync(overrideRequestPath(root, id))
+      ) {
+        emitReviewIfPresent(root, id, write);
+        write(
+          `watch: job ${id} stopped before merge on its CHALLENGED playbook review. You decide: fix the findings, commit, and submit the branch again (the new job replaces this one; watch the new job), or ship as is with: ship-queue override ${id} --reason "<why the findings do not hold>" (the reason goes in the job log and the PR body), then: ship-queue watch ${id}`,
+        );
+        return WATCH_EXIT.challenged;
       }
 
       const now = clock.now();

@@ -168,6 +168,15 @@ export async function houseStages(
   // The broker binds the worker's check to the digest on the job record, so record it first.
   const digestChanged = job.action_digest !== digest;
   if (digestChanged) updateJob(deps.root, job.id, { action_digest: digest });
+  // A once grant is used up; a rebase that keeps the protected diff identical needs no new one.
+  if (job.granted_digest === digest) {
+    appendLog(
+      deps.root,
+      job.id,
+      `protected diff approved earlier: ${bundle.protected_paths.join(", ")}`,
+    );
+    return { kind: "pass" };
+  }
   const grant = await deps.guard.check({
     worktree: job.worktree,
     branch: job.branch,
@@ -176,10 +185,11 @@ export async function houseStages(
     consume: true,
   });
   if (grant.ok) {
+    updateJob(deps.root, job.id, { granted_digest: digest });
     appendLog(deps.root, job.id, `protected diff approved: ${bundle.protected_paths.join(", ")}`);
     return { kind: "pass" };
   }
-  if (digestChanged) {
+  if (digestChanged || job.waiting_for !== "action") {
     const gates = bundle.gates.map((g) => g.gate_id).join(",");
     mark(
       deps.root,

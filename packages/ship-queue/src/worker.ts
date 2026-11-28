@@ -1,7 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off - Serialized per-repo merge queue: one job of a repo lands at a time, in submit order.
-import * as NodeFS from "node:fs";
-import * as NodePath from "node:path";
-
+import {
+  challengeGate,
+  challengeUnanswered,
+  isParkedOnChallenge,
+  takeChallengeOverride,
+} from "./challengeGate.ts";
 import { cleanupMergedJob } from "./cleanup.ts";
 import { houseStages, protectedDiffDigest } from "./houseGate.ts";
 import {
@@ -11,9 +14,6 @@ import {
   failJob,
   hasLiveWatcher,
   isEnded,
-  jobBodyPath,
-  jobDir,
-  jobReviewPath,
   listJobIds,
   mark,
   readJob,
@@ -22,11 +22,13 @@ import {
   updateJob,
 } from "./jobStore.ts";
 import { markerValue } from "./markers.ts";
+import { forgetStaleReview, reviewHead } from "./playbookReview.ts";
 import { runPostMergeSync } from "./postMergeSync.ts";
-import { mergePhase, postReviewComment, pullRequestPhase, pushPhase } from "./prFlow.ts";
+import { landPhase, postReviewComment, pullRequestPhase, pushPhase } from "./prFlow.ts";
 import { sameProcess } from "./processIdentity.ts";
 import { releaseRepoLock, repoLockHolder, tryAcquireRepoLock } from "./processLocks.ts";
 import { rebaseJob } from "./rebaseEngine.ts";
+import { runDeclaredSteps } from "./shipSteps.ts";
 import type { JobRecord, ShipQueueDeps } from "./types.ts";
 import { jobMatchesWorkerVersion, readCurrentWorkerVersion } from "./workerVersion.ts";
 
@@ -211,6 +213,9 @@ export async function runJob(deps: ShipQueueDeps, id: string): Promise<JobStep> 
     return "ended";
   };
   if (cancelled()) return "ended";
+  if (job.retry_after && Date.parse(deps.clock.now()) < Date.parse(job.retry_after)) {
+    return "blocked";
+  }
 
   // The watch that started the job exits on ACTION_REQUIRED by design; the owner's approval
   // (and the thread notice the broker sends) is what resumes it, not a re-armed watch.
@@ -218,6 +223,13 @@ export async function runJob(deps: ShipQueueDeps, id: string): Promise<JobStep> 
   if (parkedOnAction) {
     if (!(await ownerActionGranted(deps, job))) return "blocked";
     appendLog(deps.root, id, `owner approval landed at ${deps.clock.now()}; resuming`);
+  } else if (isParkedOnChallenge(job)) {
+    // Like an owner approval, the agent's override (not a re-armed watch) resumes the job.
+    if (!(await takeChallengeOverride(deps, job))) {
+      if (!challengeUnanswered(deps, job)) return "blocked";
+      return stop("challenge_unanswered: no fix or override within an hour");
+    }
+    job = requireJob(deps.root, id);
   } else {
     const watcher = await awaitWatcher(deps, job);
     if (watcher !== "go") return watcher;
@@ -252,77 +264,47 @@ export async function runJob(deps: ShipQueueDeps, id: string): Promise<JobStep> 
   job = updateJob(deps.root, id, { rebased_onto: rebase.onto });
   if (cancelled()) return "ended";
 
-  const outFile = jobReviewPath(deps.root, id);
-  const workDir = NodePath.join(jobDir(deps.root, id), "work");
-  const reviewTipPath = NodePath.join(workDir, "review-tip");
-  const priorTip = (() => {
-    try {
-      return NodeFS.readFileSync(reviewTipPath, "utf8").trim();
-    } catch {
-      return "";
-    }
-  })();
-  if (priorTip && priorTip !== rebase.head) {
-    NodeFS.rmSync(outFile, { force: true });
-    NodeFS.rmSync(reviewTipPath, { force: true });
-  }
+  forgetStaleReview(deps.root, id, rebase.head);
 
-  const house = await houseStages(deps, job, rebase.onto);
-  if (house.kind === "fail") return stop(house.reason);
-  if (house.kind === "action") {
-    updateJob(deps.root, id, { state: "waiting", waiting_for: "action" });
-    return "blocked";
+  if (job.house_tip === rebase.head) {
+    appendLog(deps.root, id, `house stages passed on ${rebase.head.slice(0, 12)} already`);
+  } else {
+    const house = await houseStages(deps, job, rebase.onto);
+    if (house.kind === "fail") return stop(house.reason);
+    if (house.kind === "action") {
+      updateJob(deps.root, id, { state: "waiting", waiting_for: "action" });
+      return "blocked";
+    }
   }
-  job = updateJob(deps.root, id, { state: "running", waiting_for: undefined, worker: deps.self });
+  job = updateJob(deps.root, id, {
+    state: "running",
+    waiting_for: undefined,
+    worker: deps.self,
+    house_tip: rebase.head,
+  });
   if (cancelled()) return "ended";
 
-  const alreadyReviewed = priorTip === rebase.head && NodeFS.existsSync(outFile);
-  const challengePromise: Promise<void> =
-    deps.declarationChallenge && !alreadyReviewed
-      ? (async () => {
-          NodeFS.rmSync(outFile, { force: true });
-          try {
-            const challenge = await deps.declarationChallenge!({
-              jobId: id,
-              worktree: job.worktree,
-              baseSha: rebase.onto,
-              tipSha: rebase.head,
-              bodyFile: jobBodyPath(deps.root, id),
-              outFile,
-              threadId: job.thread_id,
-            });
-            if (challenge.output) appendLog(deps.root, id, challenge.output);
-          } catch (err) {
-            const why = err instanceof Error ? err.message : String(err);
-            appendLog(deps.root, id, `house declaration-challenge: advisory (${why})`);
-            if (!NodeFS.existsSync(outFile)) {
-              NodeFS.writeFileSync(outFile, `PLAYBOOK REVIEW: NOT RUN\n  ${why}\n`, "utf8");
-            }
-          } finally {
-            NodeFS.mkdirSync(workDir, { recursive: true });
-            NodeFS.writeFileSync(reviewTipPath, `${rebase.head}\n`, "utf8");
-          }
-        })()
-      : Promise.resolve();
+  const steps = await runDeclaredSteps(deps, job, rebase);
+  if (steps.kind === "wait") return "blocked";
+  if (steps.kind === "fail") return stop(steps.reason);
+  if (cancelled()) return "ended";
 
-  const push = await pushPhase(deps, job, rebase.head, rebase.remoteTip);
-  if (!push.ok) {
-    await challengePromise;
-    return stop(push.reason);
-  }
-  if (cancelled()) {
-    await challengePromise;
-    return "ended";
-  }
+  await reviewHead(deps, requireJob(deps.root, id), rebase);
+  if ((await challengeGate(deps, requireJob(deps.root, id), rebase)) === "wait") return "blocked";
+  if (cancelled()) return "ended";
+
+  const push = await pushPhase(deps, requireJob(deps.root, id), rebase.head, rebase.remoteTip);
+  if (!push.ok) return stop(push.reason);
+  if (cancelled()) return "ended";
 
   const pr = await pullRequestPhase(deps, requireJob(deps.root, id));
-  await challengePromise;
   if (!pr.ok) return stop(pr.reason);
   await postReviewComment(deps, requireJob(deps.root, id), pr.value, rebase.head);
   if (cancelled()) return "ended";
 
-  const merge = await mergePhase(deps, requireJob(deps.root, id), pr.value, rebase.head);
-  if (!merge.ok) return stop(merge.reason);
+  const merge = await landPhase(deps, requireJob(deps.root, id), pr.value, rebase);
+  if (merge.kind === "retry") return "blocked";
+  if (merge.kind === "fail") return stop(merge.reason);
 
   return finishMergedJob(deps, requireJob(deps.root, id), pr.value, rebase.head);
 }

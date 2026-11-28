@@ -1,12 +1,30 @@
 import type { WireGuardBundle } from "@t3tools/guard-protocol/bundle-inspect";
 
+import type { CiPlacer } from "./ciPlacement.ts";
 import type { ProcessIdentity } from "./processIdentity.ts";
+import type { RemoteCommandRunner } from "./sshExec.ts";
 import type { WorkerRuntimeVersion } from "./workerVersion.ts";
 
 /** The record states the server's `ShipQueueBridge` maps; a cancel ends as `failed reason=cancelled`. */
 export type JobState = "queued" | "running" | "waiting" | "done" | "failed";
 
-export type JobWait = "watcher" | "action";
+export type JobWait = "watcher" | "action" | "challenge";
+
+/** One declared step's run (PLAYBOOK §14): where it ran, its exit, and its wall time. */
+export interface StepTiming {
+  readonly name: string;
+  readonly host: string;
+  readonly exit: number;
+  readonly ms: number;
+}
+
+/** The agent's decision to ship past a CHALLENGED playbook review, kept for the job's record. */
+export interface ChallengeOverride {
+  readonly reason: string;
+  readonly at: string;
+  /** `git patch-id` of the challenged change: the override covers that change and no other. */
+  readonly patch?: string | undefined;
+}
 
 /** `jobs/<id>/job.json`. Field names follow the legacy queue so `ship-queue status --json` stays wire-compatible. */
 export interface JobRecord {
@@ -32,6 +50,27 @@ export interface JobRecord {
   readonly pr?: number | undefined;
   readonly merge_exit?: number | undefined;
   readonly sync_exit?: number | undefined;
+  /** The rebased head the house stages passed on; a resume skips them on the same head. */
+  readonly house_tip?: string | undefined;
+  /** The protected-diff digest whose owner grant this job already used, so a rebase never asks twice. */
+  readonly granted_digest?: string | undefined;
+  /** The rebased head the declared steps passed on, and the latest run's per-step timings. */
+  readonly steps_tip?: string | undefined;
+  readonly steps?: ReadonlyArray<StepTiming> | undefined;
+  /** The CI host a running CI step holds, read by routing as an active lease. */
+  readonly ci_lease?: { readonly host: string; readonly routed_at: string } | undefined;
+  /** Why no CI host can take the job yet, and when routing last tried. */
+  readonly ci_wait?:
+    | { readonly reason: string; readonly at: string; readonly tip?: string | undefined }
+    | undefined;
+  /** The head (and its patch-id) whose playbook review stopped the job, while it waits on the agent. */
+  readonly challenged_tip?: string | undefined;
+  readonly challenged_patch?: string | undefined;
+  readonly challenge_override?: ChallengeOverride | undefined;
+  /** Declared merge-step exits 75 (base moved) and 76 (transient) retried so far. */
+  readonly merge_retries?: number | undefined;
+  /** A transient failure's back-off: the worker leaves the job alone until then. */
+  readonly retry_after?: string | undefined;
   readonly reason?: string | undefined;
   readonly ended_at?: string | undefined;
   /** The detached worker that last advanced the job, so a restarted client can tell it is still running. */
@@ -197,6 +236,10 @@ export interface ShipQueueDeps {
   readonly isProcessAlive: (identity: ProcessIdentity) => boolean;
   readonly self: ProcessIdentity;
   readonly watcherWaitMs: number;
+  /** Where a job's install and CI steps run; absent means this host. */
+  readonly ciPlacer?: CiPlacer | undefined;
+  /** SSH runner for remote CI hosts (tests inject one). */
+  readonly runRemote?: RemoteCommandRunner | undefined;
   /** Optional bounded timeout for `ship_post_merge` steps (defaults to 10 minutes). */
   readonly postMergeTimeoutMs?: number | undefined;
   /** Runtime version identity of this worker, enabling version-pinned execution without global drain locks. */

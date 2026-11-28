@@ -7,6 +7,8 @@ import * as NodeURL from "node:url";
 
 import { bindGuardJob, identifyGuardThread } from "@t3tools/guard-protocol/client";
 
+import { requestChallengeOverride } from "./challengeGate.ts";
+import { manifestCiPlacer } from "./ciPlacement.ts";
 import { ghForge } from "./ghForge.ts";
 import {
   runDepsSubcommand,
@@ -75,6 +77,7 @@ export function defaultDeps(root: string): ShipQueueDeps {
     secretScan: gitleaksScanner(nodeProcessRunner),
     hygieneScan: scannerHygieneGate(nodeProcessRunner),
     declarationChallenge: playbookDeclarationChallenger(nodeProcessRunner),
+    ciPlacer: manifestCiPlacer({ queueRoot: root }),
     clock: { now: () => new Date().toISOString() },
     isProcessAlive,
     self: currentProcessIdentity(),
@@ -114,9 +117,11 @@ function watcherBlock(id: string): string {
     "Arm the watcher now, before anything else: the job does not start without one.",
     `  ship-queue watch ${id}`,
     "The watch prints each marker as it lands and exits on DONE job= (0) or FAILED reason= (1).",
-    "It exits 2 on QUIET job= (the job keeps running; look, then re-arm or cancel) and 3 on",
-    "ACTION_REQUIRED job= (the owner approves the protected diff; the job then resumes on its own).",
-    "Outcome lines: REBASED, PUSH_EXIT=, PR=, MERGE_EXIT=, CLEANED, then DONE or FAILED reason=.",
+    "It exits 2 on QUIET job= (the job keeps running; look, then re-arm or cancel), 3 on",
+    "ACTION_REQUIRED job= (the owner approves the protected diff; the job then resumes on its own),",
+    "and 4 on CHALLENGED job= (the playbook review challenged it: fix and submit again, or",
+    `ship-queue override ${id} --reason "<why>"; then watch again).`,
+    "Outcome lines: REBASED, STEP name=, PUSH_EXIT=, PR=, MERGE_EXIT=, CLEANED, then DONE or FAILED reason=.",
   ].join("\n");
 }
 
@@ -202,7 +207,7 @@ export async function runShipQueueCli(
   const startWorker =
     options.startWorker ?? ((r: string, jobId?: string) => startDetachedWorker(r, io.env, jobId));
   const usage =
-    "ship-queue <submit WORKTREE BRANCH TITLE BODY.md [--no-start] | watch JOB | status [--json] [JOB...] | cancel JOB | work [--once] | hosts ... | deps ... | pins ... | version ...>\n";
+    "ship-queue <submit WORKTREE BRANCH TITLE BODY.md [--no-start] | watch JOB | status [--json] [JOB...] | cancel JOB | override JOB --reason WHY | work [--once] | hosts ... | deps ... | pins ... | version ...>\n";
 
   if (!sub || sub === "--help" || sub === "-h") {
     io.stdout(usage);
@@ -296,6 +301,18 @@ export async function runShipQueueCli(
         id,
       ),
     });
+  }
+  if (sub === "override") {
+    const id = rest[0] ?? "";
+    const flag = rest.indexOf("--reason");
+    const reason = flag === -1 ? "" : (rest[flag + 1] ?? "");
+    if (!isJobId(id) || !reason.trim()) {
+      io.stderr(`usage: ship-queue override JOB --reason "<why the challenge does not hold>"\n`);
+      return 64;
+    }
+    const res = requestChallengeOverride(root, id, reason, deps.clock);
+    (res.ok ? io.stdout : io.stderr)(`${res.message}\n`);
+    return res.ok ? 0 : 1;
   }
   if (sub === "status") return runStatus(deps, io, rest);
   if (sub === "work") return runWork(deps, io, rest.includes("--once"));

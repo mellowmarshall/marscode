@@ -1,11 +1,13 @@
-// @effect-diagnostics nodeBuiltinImport:off - Push, pull request, review comment, and merge phases of a job: each records its exit as a marker.
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off - Push, pull request, review comment, and merge phases of a job: each records its exit as a marker.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import { postOverrideComment } from "./challengeGate.ts";
 import { git } from "./gitQueries.ts";
 import { appendLog, jobBodyPath, jobDir, jobReviewPath, mark, updateJob } from "./jobStore.ts";
 import { markerValue } from "./markers.ts";
 import { recordPush } from "./rebaseEngine.ts";
+import { readBaseDeclaration, runMergeStep } from "./shipSteps.ts";
 import type { JobRecord, ShipQueueDeps } from "./types.ts";
 
 const MAX_REVIEW_COMMENT_CHARS = 60_000;
@@ -122,6 +124,7 @@ export async function pullRequestPhase(
       repo: job.repo,
       head: job.branch,
     });
+    if (existing) await postOverrideComment(deps, job, existing.number);
     const pr =
       existing ??
       (await deps.forge.createPullRequest({
@@ -139,6 +142,56 @@ export async function pullRequestPhase(
     appendLog(deps.root, job.id, err instanceof Error ? err.message : String(err));
     return { ok: false, reason: "pr_create" };
   }
+}
+
+const MAX_MERGE_RETRIES = 5;
+const TRANSIENT_WAIT_MS = 60_000;
+
+export type LandResult =
+  | { readonly kind: "merged" }
+  | { readonly kind: "retry" }
+  | { readonly kind: "fail"; readonly reason: string };
+
+/**
+ * Merges through the repo's declared `ship_merge` when it has one, else through the forge. A
+ * declared merge's 75 (base moved) or 76 (transient) leaves the job to land again next tick.
+ */
+export async function landPhase(
+  deps: ShipQueueDeps,
+  job: JobRecord,
+  pr: number,
+  rebase: { readonly onto: string; readonly head: string },
+): Promise<LandResult> {
+  const decl = await readBaseDeclaration(deps, job, rebase.onto);
+  if (!decl?.merge.trim()) {
+    const merged = await mergePhase(deps, job, pr, rebase.head);
+    return merged.ok ? { kind: "merged" } : { kind: "fail", reason: merged.reason };
+  }
+  const out = await runMergeStep(deps, job, decl, rebase, pr);
+  appendLog(deps.root, job.id, out.output);
+  if (out.kind === "retry") {
+    const retries = (job.merge_retries ?? 0) + 1;
+    if (retries > MAX_MERGE_RETRIES) {
+      return {
+        kind: "fail",
+        reason: `merge pr=${pr}: ship_merge exit ${out.exit} ${retries} times`,
+      };
+    }
+    const backoff =
+      out.exit === 76
+        ? { retry_after: new Date(Date.parse(deps.clock.now()) + TRANSIENT_WAIT_MS).toISOString() }
+        : {};
+    updateJob(deps.root, job.id, { merge_retries: retries, ...backoff });
+    const why = out.exit === 75 ? "the base moved" : "a transient forge failure";
+    appendLog(deps.root, job.id, `ship_merge exit ${out.exit} (${why}); the job lands again`);
+    return { kind: "retry" };
+  }
+  const exit = out.kind === "merged" ? 0 : out.exit;
+  updateJob(deps.root, job.id, { merge_exit: exit });
+  mark(deps.root, job.id, `MERGE_EXIT=${exit}`);
+  if (out.kind === "merged") return { kind: "merged" };
+  const why = markerValue(out.why).slice(0, 200);
+  return { kind: "fail", reason: `merge pr=${pr}${why ? `: ${why}` : ""}` };
 }
 
 export async function mergePhase(

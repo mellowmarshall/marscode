@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import { isParkedOnChallenge, supersedeChallengedJob } from "./challengeGate.ts";
 import {
   createJob,
   isEnded,
@@ -186,7 +187,12 @@ export async function submitJob(deps: ShipQueueDeps, input: SubmitInput): Promis
   if (reg && reg.remoteUrl !== url)
     return refuse(`${repo} is registered to the remote ${reg.remoteUrl}, not ${url}`);
 
-  if (openJobs(deps.root).some((job) => job.repo === repo && job.branch === input.branch)) {
+  const sameBranch = openJobs(deps.root).filter(
+    (job) => job.repo === repo && job.branch === input.branch,
+  );
+  // A job stopped on its CHALLENGED review is replaced by the fix the agent submits.
+  const challenged = sameBranch.filter(isParkedOnChallenge);
+  if (sameBranch.length > challenged.length) {
     return refuse(`${repo} ${input.branch} is already queued or running`);
   }
   const baseRef = (await revParse(deps.run, worktree, `${remote}/${baseBranch}`)) ?? baseBranch;
@@ -199,6 +205,11 @@ export async function submitJob(deps: ShipQueueDeps, input: SubmitInput): Promis
   const premiseWhy = premiseProblem(deps.root, repo, input.branch, input.body);
   if (premiseWhy) return refuse(premiseWhy);
 
+  for (const job of challenged) {
+    if (!supersedeChallengedJob(deps, job)) {
+      return refuse(`${repo} ${input.branch} is already queued or running`);
+    }
+  }
   const warnings: string[] = [];
   if (!input.identity.session?.trim() && !input.identity.thread?.trim()) {
     warnings.push(

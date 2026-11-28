@@ -112,7 +112,7 @@ function readOptional(path: string | undefined): string | null {
 const NO_JOB_CI_OUTPUT =
   "(no CI output: this ship-queue job ran no CI before the review, so judge the diff alone)";
 
-/** ship-queue reviews a job before its merge gates run CI, so the job dir normally has no `ci-output.txt`. */
+/** ship-queue writes `ci-output.txt` beside the job body after its declared CI; a repo with no CI has none. */
 function jobCiOutput(bodyFile: string | undefined): string | null {
   if (!bodyFile) return null;
   try {
