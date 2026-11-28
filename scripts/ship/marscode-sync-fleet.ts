@@ -8,6 +8,7 @@ import {
   ensureLinuxServerArchive,
   readDesktopVersionAtSha,
   utcDate,
+  utcSecondsOfDay,
 } from "./marscode-sync-fleet-build.ts";
 import {
   FLEET_ROLLOUT_TARGET_ID,
@@ -315,6 +316,7 @@ export function runFleetSync(input: {
       }),
       previousVersion: input.previousArtifact?.version,
       date: input.date ?? utcDate(),
+      minSeq: input.date === undefined ? utcSecondsOfDay() : undefined,
     });
   const sshCwd = NodeFS.existsSync(input.worktree) ? input.worktree : input.primary;
 

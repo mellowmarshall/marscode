@@ -347,10 +347,18 @@ describe("real POSIX shell execution of remote Linux and macOS scripts", () => {
     );
     expect(tarRes.status).toBe(0);
 
+    const svcLog = NodePath.join(dir, "systemctl.log");
     writeExecutable(
       NodePath.join(stubBin, "systemctl"),
-      '#!/bin/sh\nif [ "$2" = "cat" ]; then exit 0; fi\nif [ "$2" = "is-active" ]; then [ "${3:-}" = "--quiet" ] || echo active; exit 0; fi\nexit 0\n',
+      `#!/bin/sh\necho "$*" >> ${JSON.stringify(svcLog)}\nif [ "$2" = "cat" ]; then exit 0; fi\nif [ "$2" = "is-active" ]; then [ "\${3:-}" = "--quiet" ] || echo active; exit 0; fi\nexit 0\n`,
     );
+    // Seed an older deferred ready directory to verify staging prunes stale ready dirs (bounded disk).
+    const staleReadyDir = NodePath.join(
+      t3Home,
+      "runtime/versions",
+      ".marscode-ready-0000000000000000000000000000000000000000",
+    );
+    NodeFS.mkdirSync(staleReadyDir, { recursive: true });
     const env = { ...process.env, PATH: `${stubBin}:${process.env.PATH ?? ""}` };
 
     // 1. Stale SHA for same version string must report NEED_STAGE.
@@ -384,11 +392,12 @@ c.commit(); c.close()`,
     expect(collisionRes.status).toBe(0);
     expect(collisionRes.stdout.trim()).toBe("DEFERRED active_runs=1");
     expect(NodeFS.existsSync(updateLog)).toBe(false);
-    // Live version dir still holds oldSha; newSha sits in readyDir so probe now says STAGED.
+    // Live version dir still holds oldSha; newSha sits in readyDir and older ready dirs were pruned.
     expect(NodeFS.readFileSync(NodePath.join(verDir, ".marscode-sha"), "utf8").trim()).toBe(oldSha);
     expect(NodeFS.readFileSync(NodePath.join(readyDir, ".marscode-sha"), "utf8").trim()).toBe(
       newSha,
     );
+    expect(NodeFS.existsSync(staleReadyDir)).toBe(false);
     const probeReady = NodeChildProcess.spawnSync("sh", ["-s"], {
       input: buildLinuxStageProbeScript({ version, headSha: newSha, t3Home }),
       encoding: "utf8",
@@ -396,24 +405,26 @@ c.commit(); c.close()`,
     });
     expect(probeReady.stdout.trim()).toBe("STAGED");
 
-    // 3. Real locked SQLite DB (BEGIN EXCLUSIVE held by another process) must defer as active_runs_unknown.
+    // 3. Real locked SQLite DB (BEGIN EXCLUSIVE held until parent closes stdin) must defer as active_runs_unknown.
     const lockReady = NodePath.join(dir, "db.locked");
     const locker = NodeChildProcess.spawn(
       "python3",
       [
         "-c",
-        `import sqlite3, sys, time
+        `import sqlite3, sys
 c = sqlite3.connect(sys.argv[1], isolation_level=None)
 c.execute("BEGIN EXCLUSIVE")
 open(sys.argv[2], "w").write("1")
-time.sleep(10)`,
+sys.stdin.read()
+c.close()`,
         dbPath,
         lockReady,
       ],
-      { stdio: "ignore" },
+      { stdio: ["pipe", "ignore", "ignore"] },
     );
     cleanups.push(() => {
       try {
+        locker.stdin?.end();
         locker.kill("SIGKILL");
       } catch {
         // already exited
@@ -428,6 +439,7 @@ time.sleep(10)`,
       encoding: "utf8",
       env,
     });
+    locker.stdin?.end();
     locker.kill("SIGKILL");
     expect(lockedRes.status).toBe(0);
     expect(lockedRes.stdout.trim()).toBe("DEFERRED active_runs_unknown");
@@ -492,6 +504,8 @@ c.commit(); c.close()`,
     expect(NodeFS.readFileSync(updateLog, "utf8")).toContain(
       `NEW update ${version} --yes --allow-downgrade`,
     );
+    // Same-version SHA collision must explicitly restart t3code.service in case `t3 update` returned early.
+    expect(NodeFS.readFileSync(svcLog, "utf8")).toContain("--user restart t3code.service");
   });
 
   it("runs macOS script against real ps (no self-match), exercises real slow quit + reopen, stale lock, and failed checkout", () => {
@@ -579,12 +593,38 @@ c.commit(); c.close()`,
     expect(NodeFS.readFileSync(openLog, "utf8")).toContain(appPath);
     expect(NodeFS.existsSync(NodePath.join(dataRoot, ".reopen-app"))).toBe(false);
 
-    // 3. Failed git checkout in the build child `sh -eu` must abort instead of building an older commit.
+    // 3. Real bare origin + cloned repo: `git fetch origin main` succeeds, then `git checkout` of a
+    // nonexistent SHA fails inside the child `sh -eu` so the script aborts instead of building HEAD.
+    const originGit = NodePath.join(dir, "origin.git");
+    const realRepo = NodePath.join(dir, "real-repo");
+    const gitEnv = {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Test",
+      GIT_AUTHOR_EMAIL: "test@example.com",
+      GIT_COMMITTER_NAME: "Test",
+      GIT_COMMITTER_EMAIL: "test@example.com",
+    };
+    const runGit = (args: ReadonlyArray<string>, cwd: string) => {
+      const r = NodeChildProcess.spawnSync("git", [...args], {
+        cwd,
+        env: gitEnv,
+        encoding: "utf8",
+      });
+      expect(r.status).toBe(0);
+    };
+    NodeFS.mkdirSync(originGit, { recursive: true });
+    runGit(["init", "--bare", "--initial-branch=main"], originGit);
+    runGit(["clone", originGit, realRepo], dir);
+    NodeFS.writeFileSync(NodePath.join(realRepo, "README.md"), "hello\n");
+    runGit(["add", "README.md"], realRepo);
+    runGit(["commit", "-m", "init"], realRepo);
+    runGit(["push", "-u", "origin", "main"], realRepo);
+
     const badSha = "9999999999999999999999999999999999999999";
     const failScript = buildMacDeployScript({
       headSha: badSha,
       version,
-      repo,
+      repo: realRepo,
       dataRoot,
       appPath,
       t3Home,
@@ -595,6 +635,8 @@ c.commit(); c.close()`,
       env: realPsEnv,
     });
     expect(failBuild.status).not.toBe(0);
+    // Verify it passed `git fetch` and specifically failed at the worktree add/checkout of badSha.
+    expect(failBuild.stderr).toMatch(/invalid reference|not a commit|999999999999/);
     expect(NodeFS.existsSync(NodePath.join(dataRoot, "staged-app", badSha))).toBe(false);
   });
 });

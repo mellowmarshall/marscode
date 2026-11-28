@@ -199,12 +199,15 @@ function compareCore(left: string, right: string): number {
 
 /**
  * Produces a strictly increasing nightly exact service version (`X.Y.Z-nightly.YYYYMMDD.N`)
- * newer than both the manifest base and the previously built fleet version.
+ * newer than both the manifest base and the previously built fleet version. When `minSeq`
+ * (e.g. UTC seconds-of-day) is provided, even a fresh state file avoids colliding with earlier
+ * builds on the same day.
  */
 export function chooseFleetVersion(input: {
   readonly desktopVersion: string;
   readonly previousVersion?: string | undefined;
   readonly date: string;
+  readonly minSeq?: number | undefined;
 }): string {
   const desktopBase = bumpPatch(input.desktopVersion);
   const prevMatch = input.previousVersion
@@ -214,7 +217,8 @@ export function chooseFleetVersion(input: {
   const base =
     prevBase !== undefined && compareCore(prevBase, desktopBase) > 0 ? prevBase : desktopBase;
   const sameDayAndBase = prevMatch !== null && prevBase === base && prevMatch[2] === input.date;
-  const seq = sameDayAndBase ? Number(prevMatch[3]) + 1 : 1;
+  const floor = Math.max(1, Math.floor(input.minSeq ?? 1));
+  const seq = sameDayAndBase ? Math.max(Number(prevMatch[3]) + 1, floor) : floor;
   return `${base}-nightly.${input.date}.${seq}`;
 }
 

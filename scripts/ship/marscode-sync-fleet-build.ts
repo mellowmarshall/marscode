@@ -21,6 +21,12 @@ export function utcDate(): string {
   return new Date().toISOString().slice(0, 10).replace(/-/g, "");
 }
 
+export function utcSecondsOfDay(): number {
+  // @effect-diagnostics-next-line globalDate:off -- standalone post-merge script has no Effect clock (#81).
+  const now = new Date();
+  return now.getUTCHours() * 3600 + now.getUTCMinutes() * 60 + now.getUTCSeconds() + 1;
+}
+
 export function readDesktopVersionAtSha(input: {
   readonly primary: string;
   readonly worktree: string;
@@ -77,6 +83,7 @@ export function ensureLinuxServerArchive(input: {
       }),
       previousVersion: input.previousArtifact?.version,
       date: input.date ?? utcDate(),
+      minSeq: input.date === undefined ? utcSecondsOfDay() : undefined,
     }),
   );
 

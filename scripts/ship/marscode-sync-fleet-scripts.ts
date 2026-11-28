@@ -133,6 +133,8 @@ export function buildLinuxActivateScript(input: {
         'rm -rf "$READY_DIR"',
         'mv "$STAGING" "$READY_DIR"',
         'rm -rf "$READY_DIR/${STAGING##*/}" "$ARCHIVE"',
+        // Keep at most one deferred ready runtime on disk so repeated deferrals cannot fill disk.
+        'find "$VERSIONS_DIR" -maxdepth 1 -type d -name \'.marscode-ready-*\' ! -name ".marscode-ready-$HEAD_SHA" -exec rm -rf {} +',
         "trap - EXIT HUP INT TERM",
       ].join("\n")
     : "";
@@ -140,6 +142,7 @@ export function buildLinuxActivateScript(input: {
   return [
     "set -eu",
     `T3_HOME=${t3HomeExpr}`,
+    `HEAD_SHA=${qSha}`,
     'VERSIONS_DIR="$T3_HOME/runtime/versions"',
     `TARGET_DIR="$VERSIONS_DIR"/${qVer}`,
     `READY_DIR="$VERSIONS_DIR/.marscode-ready-"${qSha}`,
@@ -153,7 +156,9 @@ export function buildLinuxActivateScript(input: {
     "fi",
     READ_ONLY_ACTIVE_RUNS_SH,
     // Only move the new build into the live version path after confirming zero active runs.
+    "REPLACED_SAME_VERSION=0",
     'if ! is_staged "$TARGET_DIR"; then',
+    '  if [ -e "$TARGET_DIR" ]; then REPLACED_SAME_VERSION=1; fi',
     '  rm -rf "$TARGET_DIR"',
     '  mv "$READY_DIR" "$TARGET_DIR"',
     "else",
@@ -163,6 +168,11 @@ export function buildLinuxActivateScript(input: {
     'export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"',
     `"$TARGET_DIR/t3" update ${qVer} --yes --allow-downgrade`,
     "if command -v systemctl >/dev/null 2>&1 && systemctl --user cat t3code.service >/dev/null 2>&1; then",
+    // When a same-version SHA collision replaced TARGET_DIR, `t3 update` returns early because the
+    // version string matches; restart explicitly so the running process loads the new binary.
+    '  if [ "$REPLACED_SAME_VERSION" -eq 1 ]; then',
+    "    systemctl --user restart t3code.service",
+    "  fi",
     "  WAIT_SVC=0",
     '  while [ "$WAIT_SVC" -lt 20 ]; do',
     '    SVC_STATE="$(systemctl --user is-active t3code.service 2>/dev/null || true)"',
