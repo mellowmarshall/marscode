@@ -81,6 +81,10 @@ function resolveTrustedInterpreter(
     }
     return systemKind;
   }
+  // Trust boundary: config.realNode, trustedPathDirs, and their contents may be owned by the
+  // current uid, the same uid agents run as. These checks stop accidental or injected drill
+  // spoofing (tmp paths, preload env, uncommitted scripts); they do not stop a same-uid agent
+  // that rewrites those owner-writable files. Only root-owned paths resist that.
   if (config.realNode) {
     const configuredRealNode = procFs.realpath(config.realNode);
     if (realExe === configuredRealNode) {
