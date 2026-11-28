@@ -309,8 +309,11 @@ const REDACT_HEADER_SECRET_RE =
   /(\b[A-Za-z0-9_-]*(?:authorization|api[_-]?key|token|secret|password|passwd|access[_-]?key|private[_-]?key|credentials?)["']?\s*[:=]\s*["']?(?:Bearer\s+)?)[^\s"',;}]+/gi;
 const REDACT_BEARER_RE = /\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]{8,}/gi;
 const REDACT_URL_CREDS_RE = /([a-z][a-z0-9+.-]*:\/\/[^/\s:@'"]+:)[^/\s@'"]+(@)/gi;
+// Provider token shapes: GitHub (classic gh[pousr]_ and fine-grained github_pat_), Hugging Face,
+// OpenAI-style sk-, Slack, Google, Doppler service/personal tokens, AWS access key ids, JWTs, npm
+// and GitLab. The trailing lookahead (not \b) also ends tokens whose last character is - or _.
 const REDACT_KNOWN_KEY_RE =
-  /\b(?:gh[pousr]_[A-Za-z0-9]{16,}|hf_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,})\b/g;
+  /\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|hf_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,}|dp\.(?:st|pt)\.[A-Za-z0-9._-]{16,}|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|npm_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,})(?![A-Za-z0-9_-])/g;
 const PASSWORD_FLAG_CMDS = new Set(["sshpass", "mysql", "mysqldump", "mariadb", "redis-cli"]);
 
 export function redactLogLine(line: string): string {

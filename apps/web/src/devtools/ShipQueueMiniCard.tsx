@@ -45,6 +45,7 @@ export function ShipQueueMiniCard({
   const current =
     steps.find((s) => s.state === "failed") ??
     steps.find((s) => s.state === "warning") ??
+    steps.find((s) => s.state === "stopped") ??
     steps.find((s) => s.state === "active") ??
     steps.find((s) => s.state === "waiting") ??
     steps.findLast((s) => s.state === "done") ??

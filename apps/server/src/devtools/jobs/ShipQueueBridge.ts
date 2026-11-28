@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { getShipQueueStatus } from "../ShipQueueEventStream.ts";
+import { shipJobLogSignature } from "./shipQueueJobLogFile.ts";
 import { readShipJobLogInfo } from "./shipQueueLogParser.ts";
 import { postMergeSyncReason, readShipJobLogTail } from "./shipQueueLogTail.ts";
 import {
@@ -307,7 +308,13 @@ export class ShipQueueBridge {
       const rec = item as Record<string, unknown>;
       const probe = adaptShipQueueJob(rec, this.hostname, 1, this.jobsRootDir);
       if (!probe) continue;
-      const fp = `${JSON.stringify(rec)}\0${probe.phaseLabel}\0${String((probe.shipJob as { stage?: unknown } | undefined)?.stage ?? "")}`;
+      // A running job's log grows between markers; its size and mtime bump the revision so the
+      // row's log excerpt refreshes.
+      const live =
+        probe.state === "queued" || probe.state === "running" || probe.state === "waiting";
+      const logSig =
+        live && typeof rec.id === "string" ? shipJobLogSignature(this.jobsRootDir, rec.id) : "";
+      const fp = `${JSON.stringify(rec)}\0${probe.phaseLabel}\0${String((probe.shipJob as { stage?: unknown } | undefined)?.stage ?? "")}\0${logSig}`;
       seen.add(probe.id);
       const existing = this.current.get(probe.id);
       if (existing && existing.fp === fp) continue;

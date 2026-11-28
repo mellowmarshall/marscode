@@ -94,7 +94,21 @@ function JobFacts({ job }: { readonly job: ShipQueueJob }) {
   const failed = /fail|cancel/.test((job.state ?? "").toLowerCase());
   const challenge = shipJobChallenge(job);
   const sync = shipJobSync(job);
-  const waiting = job.waiting?.trim() || job.ci_wait?.reason?.trim() || null;
+  const waitingFor = job.waiting_for?.trim().toLowerCase();
+  // The queue's current `waiting_for`, then the older free-text fields.
+  const waiting =
+    [
+      waitingFor === "action"
+        ? gt("the owner's approval")
+        : waitingFor === "challenge"
+          ? gt("a fix or an override of the challenged review")
+          : waitingFor === "watcher"
+            ? gt("a watcher")
+            : waitingFor || null,
+      job.waiting?.trim() || job.ci_wait?.reason?.trim() || null,
+    ]
+      .filter(Boolean)
+      .join(" · ") || null;
   const rebased = shortSha(job.rebased_onto);
   const pushed = shortSha(job.pushed_sha);
   const exits = [

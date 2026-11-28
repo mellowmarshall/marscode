@@ -150,8 +150,21 @@ export function shipQueueStatusVariant(
   return "outline";
 }
 
-/** `warning`: the step failed after the job's outcome was already settled (a merged PR's post-merge sync). */
-export type StepState = "done" | "active" | "waiting" | "warning" | "failed" | "pending";
+/**
+ * `warning`: the step failed after the job's outcome was already settled (a merged PR's post-merge sync).
+ * `stopped`: the job was cancelled or superseded there, with no recorded step failing.
+ */
+export type StepState =
+  | "done"
+  | "active"
+  | "waiting"
+  | "warning"
+  | "stopped"
+  | "failed"
+  | "pending";
+
+const STOPPED_REASONS = new Set(["cancelled", "superseded"]);
+const CI_STEP_NAME = "ship_ci";
 
 export interface DerivedShipStep {
   readonly id: string;
@@ -360,6 +373,23 @@ export function deriveShipJobSteps(
     states[lastReached] = "failed";
   }
 
+  // A job cancelled or superseded while every recorded step passed did not fail: it stopped at the
+  // stage after the last one that passed (a passed ship_ci step means CI passed).
+  const recordedSteps = job.steps ?? [];
+  const stopped =
+    isFailed &&
+    (rawState === "cancelled" || STOPPED_REASONS.has(lowerReason.trim())) &&
+    recordedSteps.every((step) => step.exit === 0);
+  if (stopped) {
+    if (states[2] === "failed" && recordedSteps.some((step) => step.name === CI_STEP_NAME)) {
+      states[2] = "done";
+      states[3] = "stopped";
+    }
+    for (let i = 0; i < states.length; i += 1) {
+      if (states[i] === "failed") states[i] = "stopped";
+    }
+  }
+
   const hostBadge = job.route?.host ? String(job.route.host) : undefined;
   const prBadge = hasPr ? `#${job.pr}` : undefined;
 
@@ -449,5 +479,7 @@ export function deriveShipJobSteps(
             : undefined,
     });
   }
-  return steps;
+  return stopped
+    ? steps.map((step) => (step.state === "stopped" ? { ...step, detail: reason } : step))
+    : steps;
 }

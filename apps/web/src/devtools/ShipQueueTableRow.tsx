@@ -6,6 +6,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   CircleDotIcon,
+  CircleSlashIcon,
   ExternalLinkIcon,
   TriangleAlertIcon,
   XCircleIcon,
@@ -30,9 +31,14 @@ import {
 } from "./ShipQueueSteps";
 import { TruncatedText } from "./TruncatedText";
 
-/** Shared by the table header (`ShipQueuePanel`) and every row. */
+/**
+ * Shared by the table header (`ShipQueuePanel`) and every row. Below 40rem of table width (the
+ * panel's `@container/sq`), PR and When move under the title so the Title column keeps its width.
+ */
 export const SHIP_QUEUE_GRID_COLUMNS =
-  "grid grid-cols-[1.25rem_3.75rem_7.5rem_4rem_minmax(0,1fr)_5.75rem_4.5rem_2rem] gap-2";
+  "grid grid-cols-[1.25rem_3.75rem_7.5rem_4rem_minmax(0,1fr)_5.75rem_4.5rem_2rem] gap-2 @max-[40rem]/sq:grid-cols-[1.25rem_3.75rem_6.5rem_minmax(0,1fr)_5.75rem_2rem]";
+/** Cells that only have their own column at 40rem of table width and up. */
+export const SHIP_QUEUE_WIDE_ONLY = "@max-[40rem]/sq:hidden";
 
 function extractIssueRefs(
   job: ShipQueueJob,
@@ -109,6 +115,17 @@ function ShipQueueInlineSteps({ job }: { readonly job: ShipQueueJob }) {
             </span>
           );
         }
+        if (step.state === "stopped") {
+          return (
+            <span
+              key={step.id}
+              className="inline-flex items-center gap-0.5 font-medium text-muted-foreground"
+            >
+              <CircleSlashIcon className="size-2.5" />
+              <span>{step.label}</span>
+            </span>
+          );
+        }
         if (step.state === "warning") {
           return (
             <span
@@ -139,6 +156,26 @@ function ShipQueueInlineSteps({ job }: { readonly job: ShipQueueJob }) {
       })}
     </div>
   );
+}
+
+function ShipJobPr({ job, prUrl }: { readonly job: ShipQueueJob; readonly prUrl: string | null }) {
+  if (prUrl) {
+    return (
+      <a
+        href={prUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-0.5 font-mono text-2xs text-info-foreground hover:underline"
+      >
+        <PullRequestGlyph.pullRequest className="size-3 shrink-0" />
+        <span>{`#${job.pr}`}</span>
+      </a>
+    );
+  }
+  if (job.pr !== undefined && String(job.pr).trim() !== "") {
+    return <span className="font-mono text-2xs text-foreground/85">{`#${job.pr}`}</span>;
+  }
+  return <span className="font-mono text-2xs text-muted-foreground/50">-</span>;
 }
 
 function SyncWarning({ job }: { readonly job: ShipQueueJob }) {
@@ -233,22 +270,8 @@ export function ShipQueueTableRow({
           ) : null}
         </div>
 
-        <div className="min-w-0">
-          {prUrl ? (
-            <a
-              href={prUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-0.5 font-mono text-2xs text-info-foreground hover:underline"
-            >
-              <PullRequestGlyph.pullRequest className="size-3 shrink-0" />
-              <span>{`#${job.pr}`}</span>
-            </a>
-          ) : job.pr !== undefined && String(job.pr).trim() !== "" ? (
-            <span className="font-mono text-2xs text-foreground/85">{`#${job.pr}`}</span>
-          ) : (
-            <span className="font-mono text-2xs text-muted-foreground/50">-</span>
-          )}
+        <div className={`min-w-0 ${SHIP_QUEUE_WIDE_ONLY}`}>
+          <ShipJobPr job={job} prUrl={prUrl} />
         </div>
 
         <div className="min-w-0 space-y-1">
@@ -282,6 +305,15 @@ export function ShipQueueTableRow({
           {job.branch ? (
             <div className="truncate font-mono text-3xs text-muted-foreground">{job.branch}</div>
           ) : null}
+          <div
+            data-testid="ship-queue-narrow-meta"
+            className="hidden items-center gap-2 font-mono text-3xs text-muted-foreground tabular-nums @max-[40rem]/sq:flex"
+          >
+            {job.pr !== undefined && String(job.pr).trim() !== "" ? (
+              <ShipJobPr job={job} prUrl={prUrl} />
+            ) : null}
+            <span>{when || "-"}</span>
+          </div>
           {live || status.toLowerCase().includes("fail") ? (
             <ShipQueueInlineSteps job={job} />
           ) : (
@@ -312,7 +344,9 @@ export function ShipQueueTableRow({
           ) : null}
         </div>
 
-        <div className="text-right font-mono text-3xs text-muted-foreground tabular-nums">
+        <div
+          className={`text-right font-mono text-3xs text-muted-foreground tabular-nums ${SHIP_QUEUE_WIDE_ONLY}`}
+        >
           {when || "-"}
         </div>
 

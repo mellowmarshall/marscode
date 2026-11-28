@@ -1,11 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off - Bounded, redacted tail of a ship-queue job log, and the post-merge sync failure reason it records.
 import * as NodeFS from "node:fs";
-import * as NodePath from "node:path";
 
 import { redactLogLine } from "./logFileGuard.ts";
+import { openShipJobLog, statShipJobLog } from "./shipQueueJobLogFile.ts";
 import { sanitizeJobText } from "./types.ts";
 
-const SAFE_JOB_ID_RE = /^[0-9A-Za-z._-]{1,64}$/;
 const TAIL_BYTES = 64 * 1024;
 const TAIL_LINES = 200;
 const MAX_LINE_CHARS = 400;
@@ -39,16 +38,16 @@ export function readShipJobLogTail(
   jobsRootDir: string,
   jobId: string,
 ): ReadonlyArray<string> | null {
-  if (!jobsRootDir || !SAFE_JOB_ID_RE.test(jobId)) return null;
-  const logPath = NodePath.join(jobsRootDir, jobId, "log");
+  const st = statShipJobLog(jobsRootDir, jobId);
+  if (!st) return null;
+  const logPath = st.path;
   try {
-    const st = NodeFS.statSync(logPath);
-    if (!st.isFile()) return null;
     const cached = tailCache.get(logPath);
     if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.lines;
     const offset = Math.max(0, st.size - TAIL_BYTES);
     const buf = Buffer.alloc(st.size - offset);
-    const fd = NodeFS.openSync(logPath, "r");
+    const fd = openShipJobLog(st);
+    if (fd === null) return null;
     let read = 0;
     try {
       read = NodeFS.readSync(fd, buf, 0, buf.length, offset);

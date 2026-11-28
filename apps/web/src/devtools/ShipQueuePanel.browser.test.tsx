@@ -127,14 +127,17 @@ vi.mock("./jobs/jobsStore", async (importOriginal) => {
 import "~/index.css";
 import { render } from "../../test/render";
 import { TooltipProvider } from "../components/ui/tooltip";
+import { ShipQueueJobDetails } from "./ShipQueueJobDetails";
 import { ShipQueuePanel } from "./ShipQueuePanel";
 
-async function renderPanel() {
+async function renderPanel(options: { width?: number; theme?: "light" | "dark" } = {}) {
   const previous = { width: window.innerWidth, height: window.innerHeight };
   await page.viewport(WINDOW.width, WINDOW.height);
+  const dark = options.theme === "dark";
+  document.documentElement.classList.toggle("dark", dark);
   const screen = await render(
     <TooltipProvider delay={0}>
-      <div style={{ width: PANEL_WIDTH }}>
+      <div style={{ width: options.width ?? PANEL_WIDTH }}>
         <ShipQueuePanel environmentId={"env-local" as EnvironmentId} />
       </div>
     </TooltipProvider>,
@@ -142,6 +145,7 @@ async function renderPanel() {
   return {
     [Symbol.asyncDispose]: async () => {
       await screen[Symbol.asyncDispose]();
+      document.documentElement.classList.remove("dark");
       await page.viewport(previous.width, previous.height);
     },
   };
@@ -153,6 +157,13 @@ function rowFor(id: string): HTMLElement {
   ).find((el) => el.textContent?.includes(`#${id}`));
   if (!row) throw new Error(`No row for #${id}`);
   return row;
+}
+
+function headerCell(label: string): HTMLElement {
+  const header = page.getByText("Queue #", { exact: true }).element().parentElement!;
+  const cell = Array.from(header.children).find((el) => el.textContent === label);
+  if (!cell) throw new Error(`No header cell ${label}`);
+  return cell as HTMLElement;
 }
 
 function fitsInBox(el: Element): boolean {
@@ -262,5 +273,79 @@ describe("ShipQueuePanel at the default window size", () => {
     )!;
     expect(ciRow.textContent).toContain("ci-host-builder-01");
     expect(ciRow.textContent).toContain("1m 01s");
+  });
+
+  it.each(["light", "dark"] as const)(
+    "keeps the Title column wide in a narrow panel, with PR and When under the title (%s)",
+    async (theme) => {
+      await using _screen = await renderPanel({ width: 560, theme });
+      await expect.element(page.getByText("#1001", { exact: true })).toBeVisible();
+      expect(document.documentElement.classList.contains("dark")).toBe(theme === "dark");
+
+      const row = rowFor("1001");
+      const title = Array.from(row.querySelectorAll("button")).find((b) =>
+        b.textContent?.startsWith("fix: a merged job"),
+      )!;
+      // The full eight-column grid leaves the Title column about 20px here; the narrow grid ~186px.
+      const titleCell = title.closest(".space-y-1")!;
+      expect(titleCell.getBoundingClientRect().width).toBeGreaterThan(160);
+      expect(title.getBoundingClientRect().width).toBeGreaterThan(150);
+
+      const narrowMeta = row.querySelector<HTMLElement>('[data-testid="ship-queue-narrow-meta"]')!;
+      expect(getComputedStyle(narrowMeta).display).toBe("flex");
+      const prLink = Array.from(narrowMeta.querySelectorAll("a")).find(
+        (a) => a.textContent === "#63",
+      );
+      expect(prLink?.getAttribute("href")).toBe(
+        "https://github.com/acme-fixture/sample-repo/pull/63",
+      );
+      expect(headerCell("PR").getBoundingClientRect().width).toBe(0);
+      expect(headerCell("When").getBoundingClientRect().width).toBe(0);
+      // Nothing in the row spills past its edge.
+      const rowBox = row.getBoundingClientRect();
+      for (const el of Array.from(row.querySelectorAll<HTMLElement>("*"))) {
+        const box = el.getBoundingClientRect();
+        if (box.width === 0) continue;
+        expect(box.right).toBeLessThanOrEqual(rowBox.right + 1);
+      }
+    },
+  );
+
+  it("keeps PR and When in their own columns at the default width", async () => {
+    await using _screen = await renderPanel();
+    await expect.element(page.getByText("#1001", { exact: true })).toBeVisible();
+    const narrowMeta = rowFor("1001").querySelector<HTMLElement>(
+      '[data-testid="ship-queue-narrow-meta"]',
+    )!;
+    expect(getComputedStyle(narrowMeta).display).toBe("none");
+    expect(headerCell("PR").getBoundingClientRect().width).toBeGreaterThan(0);
+    expect(headerCell("When").getBoundingClientRect().width).toBeGreaterThan(0);
+  });
+
+  it("shows what a waiting job waits on from the queue's waiting_for", async () => {
+    const waitingJob = (waitingFor: string): ShipQueueJob => ({
+      id: "1003",
+      state: "waiting",
+      waiting_for: waitingFor,
+      ci_wait: { reason: "no CI host has room" },
+    });
+    {
+      await using _screen = await render(
+        <ShipQueueJobDetails job={waitingJob("action")} environmentId={null} revision={0} />,
+      );
+      await expect
+        .element(page.getByText("the owner's approval · no CI host has room", { exact: true }))
+        .toBeVisible();
+    }
+    await using _screen = await render(
+      <ShipQueueJobDetails job={waitingJob("challenge")} environmentId={null} revision={0} />,
+    );
+    await expect
+      .element(
+        page.getByText("a fix or an override of the challenged review · no CI host has room", {
+          exact: true,
+        }),
+      )
+      .toBeVisible();
   });
 });
