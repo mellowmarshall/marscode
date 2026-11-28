@@ -111,6 +111,7 @@ import * as DeviceService from "./device/DeviceService.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as DevtoolsHttp from "./devtools/DevtoolsHttp.ts";
 import * as ReaperService from "./devtools/reaper/ReaperService.ts";
+import * as ReaperProposals from "./devtools/reaper/ReaperProposals.ts";
 import * as JobRegistry from "./devtools/jobs/JobRegistry.ts";
 import * as TrustedProviderRegistry from "./devtools/TrustedProviderRegistry.ts";
 import { ExternalBackgroundWorkProbeLive } from "./devtools/jobs/cernoThreadProbe.ts";
@@ -743,6 +744,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerIdleCompactionWorker,
   StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
   ReaperService.layer.pipe(Layer.provide(Scheduler.layer)),
+  ReaperProposals.layer,
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),
     Layer.provide(layerServerRestart),

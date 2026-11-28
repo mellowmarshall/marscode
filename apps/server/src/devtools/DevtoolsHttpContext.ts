@@ -113,6 +113,7 @@ export function requiredScopesForJsonRoute(
     (method === "POST" &&
       (subPath === "/config" ||
         subPath === "/reaper/policy" ||
+        subPath === "/reaper/proposals/decide" ||
         subPath === "/storage/review" ||
         subPath === "/storage/scan/refresh"))
   ) {
@@ -156,7 +157,8 @@ export function requiredScopesForJsonRoute(
       subPath === "/review-stats" ||
       subPath === "/review-threads/verify" ||
       subPath === "/stats/cerno" ||
-      subPath === "/reaper/policy")
+      subPath === "/reaper/policy" ||
+      subPath === "/reaper/proposals")
   ) {
     return {
       scopes: [AuthDiagnosticsReadScope],

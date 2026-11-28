@@ -1,6 +1,6 @@
 /** Dedicated `Reaper & Sweep` tab inside Fleet Console (storage scan, reaper actions, cleanup rules). */
 import { useEffect, useRef, useState } from "react";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ReaperProposalList, ReaperRuleProposalView } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { T, Var, useGT } from "gt-react";
 import { BotIcon, FileSearchIcon, HardDriveIcon, PlayIcon } from "lucide-react";
@@ -24,6 +24,7 @@ import {
   toRuleDrafts,
   type RuleDraftItem,
 } from "./ReaperRulesEditor";
+import { ReaperProposalsPanel } from "./ReaperProposalsPanel";
 import { ReaperStatusCards } from "./ReaperStatusCards";
 
 interface ExecJsonEnvelope<T> {
@@ -82,6 +83,7 @@ export function FleetReaperTab({
   const [cargoDry, setCargoDry] = useState<ReaperCargoResult | null>(null);
   const [policyDoc, setPolicyDoc] = useState<ReaperPolicyDocument | null>(null);
   const [rulesDraft, setRulesDraft] = useState<RuleDraftItem[]>([]);
+  const [proposals, setProposals] = useState<ReadonlyArray<ReaperRuleProposalView>>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
@@ -118,7 +120,11 @@ export function FleetReaperTab({
         ...(query ? { query } : {}),
         signal: controller.signal,
       }),
-    ]).then(([scanRes, reaperRes, policyRes]) => {
+      fetchDevtoolsJson<ReaperProposalList>(environmentId, "/reaper/proposals", {
+        ...(query ? { query } : {}),
+        signal: controller.signal,
+      }),
+    ]).then(([scanRes, reaperRes, policyRes, proposalsRes]) => {
       if (controller.signal.aborted) return;
       const errors: string[] = [];
       if (scanRes.ok && scanRes.data) {
@@ -149,6 +155,10 @@ export function FleetReaperTab({
         }
       } else if (!policyRes.ok && policyRes.error) {
         errors.push(`policy: ${policyRes.error}`);
+      }
+
+      if (proposalsRes.ok && Array.isArray(proposalsRes.data?.proposals)) {
+        setProposals(proposalsRes.data.proposals);
       }
 
       setLoadError(errors.length > 0 ? errors.join(" · ") : null);
@@ -182,6 +192,58 @@ export function FleetReaperTab({
         text: res.data?.error ?? res.error ?? gt("Failed to save cleanup rules"),
       });
     }
+  };
+
+  const handleDecideProposal = async (
+    proposal: ReaperRuleProposalView,
+    decision: "accept" | "reject",
+  ) => {
+    setBusy("decide-proposal");
+    const res = await fetchDevtoolsJson<ReaperProposalList & { readonly error?: string }>(
+      environmentId,
+      "/reaper/proposals/decide",
+      { method: "POST", body: { id: proposal.id, decision } },
+    );
+    if (!res.ok || !res.data || res.data.error) {
+      setBusy(null);
+      onFeedback({
+        tone: "error",
+        text: res.data?.error ?? res.error ?? gt("Failed to update the proposed rule"),
+      });
+      return;
+    }
+    setProposals(res.data.proposals);
+    if (decision === "accept") {
+      const policyRes = await fetchDevtoolsJson<ReaperPolicyDocument>(
+        environmentId,
+        "/reaper/policy",
+      );
+      if (policyRes.ok && policyRes.data) {
+        const saved = policyRes.data;
+        setPolicyDoc(saved);
+        // Keep unsaved edits and add only the accepted rule to them, so a later save keeps it.
+        setRulesDraft((prev) =>
+          rulesDirtyRef.current
+            ? [
+                ...prev,
+                ...toRuleDrafts(
+                  saved.rules.filter(
+                    (r) => r.path === proposal.path && !prev.some((d) => d.path.trim() === r.path),
+                  ),
+                ),
+              ]
+            : toRuleDrafts(saved.rules),
+        );
+      }
+    }
+    setBusy(null);
+    onFeedback({
+      tone: "ok",
+      text:
+        decision === "accept"
+          ? gt("Added cleanup rule for {path}", { path: proposal.path })
+          : gt("Rejected proposed rule for {path}", { path: proposal.path }),
+    });
   };
 
   const handleCargoDryRun = async () => {
@@ -378,6 +440,13 @@ export function FleetReaperTab({
         cargoDry={cargoDry}
         mergedWorktreesCount={mergedWorktreesCount}
         onFeedback={onFeedback}
+      />
+
+      <ReaperProposalsPanel
+        proposals={proposals}
+        readOnly={localActionsDisabled}
+        busy={busy !== null}
+        onDecide={(proposal, decision) => void handleDecideProposal(proposal, decision)}
       />
 
       <ReaperRulesEditor
