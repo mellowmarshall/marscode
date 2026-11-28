@@ -26,6 +26,10 @@ const DRILL_EXTRA_UNSAFE_ENV_PREFIXES: Readonly<
   sh: ["BASH_FUNC_"],
 };
 
+// Trust boundary: config.realNode, trustedPathDirs, and their contents may be owned by the
+// current uid, the same uid agents run as. These checks stop accidental or injected drill
+// spoofing (tmp paths, preload env, uncommitted scripts); they do not stop a same-uid agent
+// that rewrites those owner-writable files. Only root-owned paths resist that.
 const NODE_EXTS = new Set([".js", ".mjs", ".cjs", ".ts", ".mts"]);
 const UNSAFE_PATH_PREFIXES = [...TEST_TMP_PREFIXES, "/dev/shm/"];
 

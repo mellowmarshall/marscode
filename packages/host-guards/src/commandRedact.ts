@@ -3,13 +3,14 @@ import * as NodePath from "node:path";
 import { redactArgvCommand } from "@t3tools/guard-protocol/redaction";
 
 const SECRET_KEY_RE =
-  /(?:secret|token|passw|credential|private_?key|api_?key|apikey|database_?url|dsn|bearer|auth(?!or(?:$|[_-]))|_key$)/i;
+  /(?:secret|token|passw|credential|private_?key|api_?key|apikey|database_?url|dsn|bearer|auth(?!or(?:$|[_-]))|_key$|(?:^|_)pat(?:_|$))/i;
 const AUTH_HEADER_RE = /^\s*(?:--header=)?\s*(?:proxy-)?authorization\s*[:=]/i;
 const EXTRA_HEADER_CONFIG_RE = /^(-c)?([^=\s]*extraheader)=[\s\S]+$/i;
+const CREDENTIAL_HELPER_CONFIG_RE = /^(-c)?(credential\.(?:[^=\s]*\.)?helper)=[\s\S]+$/i;
 const SECRET_FLAG_EQ_RE =
   /^(--[^=\s]*(?:secret|token|passw|api[-_]?key|apikey|bearer|_auth|auth[-_]?token))=[\s\S]+$/i;
-const NPM_AUTH_TOKEN_ASSIGN_RE = /^([^=\s]*:_authToken)=[\s\S]+$/i;
-const NPM_AUTH_TOKEN_KEY_RE = /:_authToken$/i;
+const NPM_REGISTRY_CRED_ASSIGN_RE = /^([^=\s]*:_(?:authToken|auth|password))=[\s\S]+$/i;
+const NPM_REGISTRY_CRED_KEY_RE = /:_(?:authToken|auth|password)$/i;
 const BEARER_RE = /(\bbearer\s+)\S+/gi;
 const URL_USERINFO_RE = /([a-z][a-z0-9+.-]*:\/\/)[^/@\s:]+:[^/@\s]+@/gi;
 const QUERY_SECRET_RE =
@@ -29,15 +30,15 @@ const LOGIN_BINS = new Set(["docker", "podman", "nerdctl", "crane", "helm"]);
 const MYSQL_BINS = new Set(["mysql", "mariadb", "mysqldump", "mysqladmin"]);
 
 function redactGenericToken(tok: string): string {
-  const extraHeader = EXTRA_HEADER_CONFIG_RE.exec(tok);
-  if (extraHeader) {
-    return `${extraHeader[1] ?? ""}${extraHeader[2]!}=<redacted>`;
+  const configCred = EXTRA_HEADER_CONFIG_RE.exec(tok) ?? CREDENTIAL_HELPER_CONFIG_RE.exec(tok);
+  if (configCred) {
+    return `${configCred[1] ?? ""}${configCred[2]!}=<redacted>`;
   }
   const secretFlagEq = SECRET_FLAG_EQ_RE.exec(tok);
   if (secretFlagEq) {
     return `${secretFlagEq[1]!}=<redacted>`;
   }
-  const npmAuthAssign = NPM_AUTH_TOKEN_ASSIGN_RE.exec(tok);
+  const npmAuthAssign = NPM_REGISTRY_CRED_ASSIGN_RE.exec(tok);
   if (npmAuthAssign) {
     return `${npmAuthAssign[1]!}=<redacted>`;
   }
@@ -244,7 +245,7 @@ export function redactGuardCommand(words: ReadonlyArray<string>): ReadonlyArray<
       out.push("-p<redacted>");
       continue;
     }
-    if (NPM_AUTH_TOKEN_KEY_RE.test(a)) {
+    if (NPM_REGISTRY_CRED_KEY_RE.test(a)) {
       out.push(a);
       if (i + 1 < stage1.length) redactNext = true;
       continue;

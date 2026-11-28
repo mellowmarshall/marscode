@@ -240,6 +240,9 @@ export function resolveT3ThreadId(
   return env[AGENT_THREAD_ENV]?.trim() ?? "";
 }
 
+// Trust boundary: the installed ship-queue roots and server binaries run as the same uid as
+// agents and are often owner-writable. These checks stop spoofed PIDs, preload env, and tmp
+// executables; they do not stop a same-uid agent that rewrites the installed tools in place.
 function buildTrustedQueueRoots(queueRoot: string, procFs: ProcFsReader): ReadonlyArray<string> {
   const roots: string[] = ["/usr/local/lib/marscode", "/opt/marscode"];
   const canonHome = procFs.canonicalHome();
