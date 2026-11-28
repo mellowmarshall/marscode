@@ -349,7 +349,7 @@ Limits: the shell is simulated, so a CLI's output is the simulator's reading of 
 
 ## Host-guard and sudo modal cases
 
-`cases/host-guards.ndjson` checks MarsCode's native owner-approval modal (`HOST_GUARD_OVERRIDE`, `HOST_GUARD_OVERRIDE_PLAN` / `marscode-guard override --plan`) and strict `request_secret` + `sudo -S` modal rules. All prompts, worlds and fixtures are authored Acme data.
+`cases/host-guards.ndjson` checks MarsCode's native owner-approval modal (`HOST_GUARD_OVERRIDE`, `HOST_GUARD_OVERRIDE_PLAN` / `marscode-guard override --plan`) and strict `request_secret` + `sudo -S` modal rules. `expect.hostGuard` (`host-guard-grading.ts`) validates batch plans through `parsePlan`/`planContains` (requiring exactly one bound approval and execution of every listed command) and verifies exact target edits followed by executed test runs on the fixable-CI control. All prompts, worlds and fixtures are authored Acme data.
 
 | Case                       | Kind    | What it checks                                                                                                                                                                                                |
 | -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
