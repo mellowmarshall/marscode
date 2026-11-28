@@ -406,7 +406,16 @@ describe("services and env in a job's steps", () => {
       // The file comes from the branch: it is read as data and never run. A command line, or a
       // value that would expand, stops the step, so it cannot end the shell before the CI command.
       const marker = NodePath.join(dir, "ran");
-      for (const text of ["A=1\nexit 0\n", `A=$(touch ${marker})\n`, 'A="x$HOME"\n']) {
+      const hostileFiles = [
+        "A=1\nexit 0\n",
+        `A=$(touch ${marker})\n`,
+        'A="x$HOME"\n',
+        // The reader's own names: no line may change what the reader runs.
+        `sq_keep="touch ${marker}"\n`,
+        "sq_set=.*\n",
+        "IFS=x\n",
+      ];
+      for (const text of hostileFiles) {
         NodeFS.writeFileSync(file, text);
         const hostile = wrapArgvWithCiEnv(file, ["bash", "-c", "echo ci-ran"]);
         const refused = await nodeProcessRunner({
@@ -416,7 +425,9 @@ describe("services and env in a job's steps", () => {
         });
         expect(refused.exitCode).toBe(1);
         expect(refused.stdout).not.toContain("ci-ran");
-        expect(refused.stderr).toContain("has a line that is not NAME=value");
+        expect(refused.stderr).toMatch(
+          /has a line that is not NAME=value|sets a name it may not set/,
+        );
       }
       expect(NodeFS.existsSync(marker)).toBe(false);
       // What real env files hold: comments, export, unset, quoted literals.

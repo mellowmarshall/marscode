@@ -1,6 +1,7 @@
 // Starts and stops a job's CI services with docker compose on the host its CI runs on, local or
 // remote, as the legacy queue did: the job's own project, the declared env file sourced, a health
 // wait, and `down -v` afterwards whatever the outcome.
+import { ciEnvSourceShell } from "./ciEnvFile.ts";
 import { shellSingleQuote } from "@t3tools/ssh/command";
 
 import {
@@ -48,15 +49,11 @@ function composeCommand(plan: CiServicePlan): string {
   );
 }
 
-/** The legacy setup's env: `COMPOSE_FILE` unset, then the declared env file sourced, its values exported. */
+/** The compose shell's env: `COMPOSE_FILE` unset, then the declared env file read as data. */
 function envPrelude(plan: CiServicePlan): string {
   const lines = ["unset COMPOSE_FILE COMPOSE_PROJECT_NAME"];
   if (plan.envFile) {
-    const f = q(`./${plan.envFile}`);
-    lines.push(
-      `[ -f ${f} ] || { echo "the declared env file (ship_ci_env ${plan.envFile}) is not in the job's tree" >&2; exit ${ENV_FILE_EXIT}; }`,
-      `set -a; . ${f} || { echo "the declared env file (ship_ci_env ${plan.envFile}) failed to load" >&2; exit ${ENV_FILE_EXIT}; }; set +a`,
-    );
+    lines.push(ciEnvSourceShell(q(`./${plan.envFile}`), ENV_FILE_EXIT));
   }
   return lines.join("\n");
 }
