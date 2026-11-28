@@ -244,10 +244,22 @@ export class CernoVisibilityCoordinator {
   private readonly bgMatchCache = new Map<string, BgMatchEntry>();
   readonly visibleCernoIds = new Set<string>();
   readonly suppressedBgIds = new Set<string>();
+  /** Live background job id -> the live cerno process it hides, whose health the job carries. */
+  private liveCernoByBg = new Map<string, CernoJobMatchCandidate>();
   private readonly cb: CernoVisibilityCallbacks;
 
   constructor(callbacks: CernoVisibilityCallbacks) {
     this.cb = callbacks;
+  }
+
+  /**
+   * A live background job that hides its live cerno process carries that process's verdict,
+   * so the sidebar and thread card show its health bar.
+   */
+  withLiveCerno(summary: JobSummary): JobSummary {
+    if (summary.cerno || isTerminalJobState(summary.state)) return summary;
+    const cerno = this.liveCernoByBg.get(summary.id)?.cerno;
+    return cerno ? { ...summary, cerno } : summary;
   }
 
   hasBgCached(jobId: string): boolean {
@@ -279,6 +291,7 @@ export class CernoVisibilityCoordinator {
   removeBgEntry(jobId: string): void {
     this.bgMatchCache.delete(jobId);
     this.suppressedBgIds.delete(jobId);
+    this.liveCernoByBg.delete(jobId);
   }
 
   private syncBgCacheAll(): void {
@@ -305,6 +318,7 @@ export class CernoVisibilityCoordinator {
     const bgEntries = [...this.bgMatchCache.values()];
     const nextSuppressedBg = new Set<string>();
     const presentCernoIds = new Set<string>();
+    const nextLiveCernoByBg = new Map<string, CernoJobMatchCandidate>();
 
     for (const candidate of this.cb.listCernoCandidates()) {
       presentCernoIds.add(candidate.id);
@@ -313,6 +327,8 @@ export class CernoVisibilityCoordinator {
       for (const bg of bgEntries) {
         if (!cernoMatchesBackgroundJob(candidate, bg)) continue;
         if (!isTerminalJobState(bg.state)) {
+          if (candidateLive && !nextLiveCernoByBg.has(bg.id))
+            nextLiveCernoByBg.set(bg.id, candidate);
           suppressed = true;
           break;
         }
@@ -349,6 +365,17 @@ export class CernoVisibilityCoordinator {
       if (!nextSuppressedBg.has(bgId)) {
         this.suppressedBgIds.delete(bgId);
         if (this.cb.getBgSummary(bgId)) this.cb.markDirty(bgId, true);
+      }
+    }
+    // A background job whose hidden cerno process appeared, left, or changed its verdict re-sends.
+    const prevLiveCernoByBg = this.liveCernoByBg;
+    this.liveCernoByBg = nextLiveCernoByBg;
+    for (const bgId of new Set([...prevLiveCernoByBg.keys(), ...nextLiveCernoByBg.keys()])) {
+      const prevId = prevLiveCernoByBg.get(bgId)?.id;
+      const nextId = nextLiveCernoByBg.get(bgId)?.id;
+      if (prevId === nextId && !(nextId && changedCernoIds?.has(nextId))) continue;
+      if (!this.suppressedBgIds.has(bgId) && this.cb.getBgSummary(bgId)) {
+        this.cb.markDirty(bgId, true);
       }
     }
   }
