@@ -181,6 +181,8 @@ export default defineConfig({
     ignorePatterns: [
       ".repos/**",
       "infra/task-cache/vendor/**",
+      // The original playbook's design scan, vendored as it is (only its comments differ).
+      "packages/playbook/vendor/**",
       // Generator templates `surface init` copies byte-for-byte into other repos.
       "packages/surface/templates/**",
       // Renovate's regex managers (sq_pins.json) match each tool on one line.
@@ -221,6 +223,8 @@ export default defineConfig({
       ".repos",
       ".repos/**",
       "infra/task-cache/vendor/**",
+      // The original playbook's design scan, vendored as it is (only its comments differ).
+      "packages/playbook/vendor/**",
       // Generator templates `surface init` copies byte-for-byte into other repos.
       "packages/surface/templates/**",
       "dist",

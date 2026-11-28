@@ -6,6 +6,7 @@ import * as NodeUtil from "node:util";
 
 import { requestGuardGrant } from "@t3tools/guard-protocol/client";
 
+import { cmdActions } from "./actionsCli.ts";
 import { planAmend, proposeAmendText } from "./amend.ts";
 import { installedExceptionsPath, readExceptionsFile, repoBypasses } from "./bypass.ts";
 import { decodeChallengeReplyText } from "./challengeReply.ts";
@@ -373,20 +374,25 @@ function cmdCiFiles(root: string, args: ReadonlyArray<string>, io: CliIo): numbe
 }
 
 /** `-C DIR` or `-CDIR` before the command: (the directory, the rest). */
-function takeDir(argv: ReadonlyArray<string>, cwd: string): { dir: string; args: string[] } {
+function takeDir(
+  argv: ReadonlyArray<string>,
+  cwd: string,
+): { dir: string; typed: string; args: string[] } {
   const args = [...argv];
   const first = args[0] ?? "";
   if (first === "-C") {
-    const dir = NodePath.resolve(cwd, args[1] ?? ".");
-    return { dir, args: args.slice(2) };
+    const typed = args[1] ?? ".";
+    return { dir: NodePath.resolve(cwd, typed), typed, args: args.slice(2) };
   }
-  if (first.startsWith("-C"))
-    return { dir: NodePath.resolve(cwd, first.slice(2)), args: args.slice(1) };
-  return { dir: cwd, args };
+  if (first.startsWith("-C")) {
+    const typed = first.slice(2);
+    return { dir: NodePath.resolve(cwd, typed), typed, args: args.slice(1) };
+  }
+  return { dir: cwd, typed: ".", args };
 }
 
 export async function runPlaybookCli(argv: ReadonlyArray<string>, io: CliIo): Promise<number> {
-  const { dir, args } = takeDir(argv, io.cwd);
+  const { dir, typed, args } = takeDir(argv, io.cwd);
   const [cmd, ...rest] = args;
   if (!cmd) {
     io.err(USAGE);
@@ -414,7 +420,17 @@ export async function runPlaybookCli(argv: ReadonlyArray<string>, io: CliIo): Pr
       });
       return cmdMinimal(values.merge, io);
     }
-    if (!NodeFS.existsSync(dir) || !NodeFS.statSync(dir).isDirectory()) {
+    const isDir = () => NodeFS.existsSync(dir) && NodeFS.statSync(dir).isDirectory();
+    // As the original does, `actions` parses its arguments before -C DIR is checked.
+    if (cmd === "actions") {
+      return await cmdActions(rest, io, () => {
+        if (isDir()) return repoRoot(dir);
+        // The original prints the directory as it was typed.
+        io.err(`playbook: ${typed} is not a directory`);
+        return null;
+      });
+    }
+    if (!isDir()) {
       io.err(`playbook: ${dir} is not a directory`);
       return EXIT_USAGE;
     }

@@ -1,9 +1,9 @@
 /**
- * The declaration ratchet (evidence-only): against the base's playbook.json a branch may
- * tighten, adopt, or remove scoped exceptions, never silently drop a contract, widen CI
- * ceilings, or add unapproved scoped exceptions. Evidence path changes are reported, not refused.
- */
-import { contractsOf, optedOut, type DeclarationData } from "./declaration.ts";
+ * The declaration ratchet: a branch may tighten, adopt, or remove scoped exceptions, never drop a
+ * contract, widen CI ceilings, or add an unapproved exception. A new one-file size exception that
+ * names an issue is returned apart: it needs no owner when the issue is open (§1.3).
+ */ import { contractsOf, optedOut, type DeclarationData } from "./declaration.ts";
+import { exceptionIssueRefs, type IssueRef } from "./exceptionIssues.ts";
 import { isRecord } from "./strictJson.ts";
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -23,28 +23,85 @@ function allowlistEntries(text: string | null): ReadonlySet<string> {
   );
 }
 
+/** A subject as one path: trimmed, without a leading ./, with no doubled slash. */
+function normalizeSubject(subject: string): string {
+  return subject
+    .trim()
+    .replace(/^(?:\.\/)+/, "")
+    .replace(/\/{2,}/g, "/");
+}
+
 function exceptionMap(raw: unknown): ReadonlyMap<string, unknown> {
   const out = new Map<string, unknown>();
   if (!Array.isArray(raw)) return out;
   for (const item of raw) {
     if (isRecord(item) && typeof item.subject === "string") {
-      out.set(item.subject.trim(), item);
+      out.set(normalizeSubject(item.subject), item);
     }
   }
   return out;
+}
+
+/** A new scoped size exception for one file that names an issue: accepted when the issue is open. */
+export interface IssueBackedException {
+  readonly where: string;
+  readonly subject: string;
+  readonly refs: ReadonlyArray<IssueRef>;
+}
+
+/** Why REL is not one tracked regular file at HEAD inside the repo; null when it is one. */
+export type FileScope = (rel: string) => string | null;
+
+/** A glob or regex metacharacter: such a subject could name more than one file. */
+const PATTERN = /[*?[\]{}+()|^$!\\]/;
+
+/** Why SUBJECT is not one file the ratchet can see; null when it names one tracked file. */
+function notOneFile(subject: string, fileScope: FileScope | undefined): string | null {
+  if (PATTERN.test(subject)) return "a pattern scope";
+  if (subject === "" || subject === "." || subject.endsWith("/")) return "a directory scope";
+  if (subject.startsWith("/") || subject.split("/").includes(".."))
+    return "a path outside the repo";
+  if (!fileScope) return "no way to see the file";
+  return fileScope(subject);
+}
+
+interface ExceptionRules {
+  readonly problems: string[];
+  /** Where to put an issue-backed exception; absent: none is (every new one takes the owner). */
+  readonly issueBacked?: IssueBackedException[] | undefined;
+  readonly fileScope?: FileScope | undefined;
 }
 
 function checkScopedExceptions(
   where: string,
   before: unknown,
   after: unknown,
-  problems: string[],
+  rules: ExceptionRules,
 ): void {
+  const { problems } = rules;
   const oldMap = exceptionMap(before);
   const newMap = exceptionMap(after);
   for (const [subject, entry] of [...newMap].toSorted(([a], [b]) => a.localeCompare(b))) {
     if (!oldMap.has(subject)) {
-      problems.push(`${where} adds scoped exception '${subject}' (requires owner override, §1.3)`);
+      if (!rules.issueBacked) {
+        problems.push(
+          `${where} adds scoped exception '${subject}' (requires owner override, §1.3)`,
+        );
+        continue;
+      }
+      const scope = notOneFile(subject, rules.fileScope);
+      const refs = isRecord(entry) ? exceptionIssueRefs(entry) : [];
+      if (scope !== null) {
+        problems.push(
+          `${where} adds scoped exception '${subject}' with ${scope} (requires owner override, §1.3)`,
+        );
+      } else if (refs.length === 0) {
+        problems.push(
+          `${where} adds scoped exception '${subject}' naming no issue (requires owner override, §1.3)`,
+        );
+      } else {
+        rules.issueBacked.push({ where, subject, refs });
+      }
     } else if (!same(oldMap.get(subject), entry)) {
       problems.push(
         `${where} modifies scoped exception '${subject}' (requires owner override, §1.3)`,
@@ -59,6 +116,8 @@ function settingProblems(
   next: Readonly<Record<string, unknown>>,
   read: ReadFile | undefined,
   readBase: ReadFile | undefined,
+  issueBacked: IssueBackedException[],
+  fileScope: FileScope | undefined,
 ): string[] {
   const problems: string[] = [];
   const keys = [...new Set([...Object.keys(old), ...Object.keys(next)])].toSorted();
@@ -111,7 +170,11 @@ function settingProblems(
     const where = `${name}.${key}`;
     if (key === "evidence" || key === "choke" || key === "engine" || key === "migrator") continue;
     if (key === "exceptions") {
-      checkScopedExceptions(where, before, after, problems);
+      checkScopedExceptions(where, before, after, {
+        problems,
+        issueBacked: name === "size" ? issueBacked : undefined,
+        fileScope,
+      });
       continue;
     }
     if (name === "size" && key === "maxLines") {
@@ -149,7 +212,7 @@ function ciProblems(
     problems.push("ci opted out: the base declares CI standards (§14)");
     return problems;
   }
-  checkScopedExceptions("ci.exceptions", oldCi.exceptions, nextCi.exceptions, problems);
+  checkScopedExceptions("ci.exceptions", oldCi.exceptions, nextCi.exceptions, { problems });
   if (
     typeof oldCi.parallel === "number" &&
     typeof nextCi.parallel === "number" &&
@@ -195,16 +258,37 @@ function ciProblems(
   return problems;
 }
 
-/** How HEAD loosens BASE's declaration; empty when it only tightens or adopts. */
-export function loosenedDeclaration(
+export interface DeclarationRatchet {
+  /** Each loosening the owner must approve. */
+  readonly problems: ReadonlyArray<string>;
+  /** New one-file size exceptions that name an issue: accepted without the owner when it is open. */
+  readonly issueBacked: ReadonlyArray<IssueBackedException>;
+}
+
+/** How HEAD loosens BASE's declaration: what takes the owner, and what an open issue may carry. */
+export function declarationRatchet(
   head: DeclarationData,
   base: DeclarationData,
   read?: ReadFile,
   readBase?: ReadFile,
-): ReadonlyArray<string> {
+  fileScope?: FileScope,
+): DeclarationRatchet {
   const headContracts = contractsOf(head);
   const problems: string[] = [];
-  for (const [name, old] of Object.entries(contractsOf(base))) {
+  const issueBacked: IssueBackedException[] = [];
+  const baseContracts = contractsOf(base);
+  // A contract new to the branch, or one the base opted out of, adopts its settings, but each
+  // of its exceptions is new: it is held as one added to an empty list.
+  for (const [name, next] of Object.entries(headContracts)) {
+    const old = baseContracts[name];
+    if (old !== undefined && !optedOut(old)) continue;
+    checkScopedExceptions(`${name}.exceptions`, [], asRecord(next).exceptions, {
+      problems,
+      issueBacked: name === "size" ? issueBacked : undefined,
+      fileScope,
+    });
+  }
+  for (const [name, old] of Object.entries(baseContracts)) {
     if (!(name in headContracts)) {
       problems.push(`contract ${name} removed`);
       continue;
@@ -215,7 +299,20 @@ export function loosenedDeclaration(
       problems.push(`contract ${name} opted out: the base declares it`);
       continue;
     }
-    problems.push(...settingProblems(name, asRecord(old), asRecord(next), read, readBase));
+    problems.push(
+      ...settingProblems(
+        name,
+        asRecord(old),
+        asRecord(next),
+        read,
+        readBase,
+        issueBacked,
+        fileScope,
+      ),
+    );
+  }
+  if (isRecord(head.ci) && (!isRecord(base.ci) || optedOut(base.ci))) {
+    checkScopedExceptions("ci.exceptions", [], head.ci.exceptions, { problems });
   }
   if (isRecord(base.ci)) {
     if (!isRecord(head.ci)) {
@@ -224,7 +321,7 @@ export function loosenedDeclaration(
       problems.push(...ciProblems(base.ci, head.ci));
     }
   }
-  return problems;
+  return { problems, issueBacked };
 }
 
 /** Evidence path changes against the base: reported, never refused. */

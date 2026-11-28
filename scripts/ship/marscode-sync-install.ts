@@ -5,6 +5,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import { DESIGN_SCAN, designScanBundle } from "./marscode-sync-design-scan.ts";
 import {
   assertMayReplace,
   CliParityRefusal,
@@ -240,6 +241,10 @@ export function atomicInstallNodeCli(
     NodeFS.copyFileSync(bundleSrc, NodePath.join(distDir, "bin.mjs"));
     NodeFS.chmodSync(NodePath.join(distDir, "bin.mjs"), 0o755);
 
+    if (target.id === "playbook" && NodeFS.existsSync(designScanBundle(worktree))) {
+      // The design scan rides with the CLI's release, for the CI hosts' payload.
+      NodeFS.copyFileSync(designScanBundle(worktree), NodePath.join(distDir, DESIGN_SCAN));
+    }
     if (target.id === "surface") {
       const templatesSrc = NodePath.join(worktree, target.pkgRel, "templates");
       if (NodeFS.existsSync(templatesSrc)) {

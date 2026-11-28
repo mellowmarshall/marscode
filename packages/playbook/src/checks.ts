@@ -18,7 +18,9 @@ import {
 import { validateSectionEvidence } from "./evidence.ts";
 import { gateBase, readWorktreeFile, showFile, type GateBase } from "./git.ts";
 import { intentGate } from "./intent.ts";
-import { loosenedDeclaration, reportedCommandChanges } from "./ratchet.ts";
+import { judgeIssueBacked, trackedFileScope } from "./exceptionApproval.ts";
+import type { IssueLookup } from "./exceptionIssues.ts";
+import { declarationRatchet, reportedCommandChanges } from "./ratchet.ts";
 import { exitCodeFor, failed, passed, unproven, type CheckResult } from "./result.ts";
 import { isRecord } from "./strictJson.ts";
 
@@ -38,6 +40,8 @@ export interface CheckOptions {
   readonly base?: GateBase | undefined;
   readonly override?: OverrideAsk | undefined;
   readonly env?: NodeJS.ProcessEnv | undefined;
+  /** Whether an issue is open (default: gh); an issue-backed size exception needs it open. */
+  readonly issueState?: IssueLookup | undefined;
   /** Aborting stops the run cleanly. */
   readonly signal?: AbortSignal | undefined;
 }
@@ -100,22 +104,47 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
   const base = options.base ?? gateBase(root, options.env);
   const results: CheckResult[] = [passed("declaration", "playbook.json is valid")];
   const baseText = base.sha ? showFile(root, base.sha, "playbook.json") : null;
-  const baseData = baseText ? parseDeclarationText(baseText, { base: true }).data : null;
+  const baseParsed = baseText ? parseDeclarationText(baseText, { base: true }) : null;
+  const baseData = baseParsed?.data ?? null;
   let reported: ReadonlyArray<string> = [];
   if (!base.sha) {
     results.push(unproven("ratchet", base.problem ?? "no base", { fix: "git fetch origin" }));
   } else if (bypassReason(bypasses, "ratchet")) {
     results.push(passed("ratchet", `bypassed by owner (${bypassReason(bypasses, "ratchet")})`));
+  } else if (baseParsed && !baseData) {
+    // A base declaration that exists but does not parse cannot be compared: never a silent pass.
+    results.push(
+      unproven(
+        "ratchet",
+        `the base's playbook.json does not parse: ${baseParsed.errors[0] ?? "?"}`,
+        {
+          fix: "repair playbook.json on the base branch first",
+        },
+      ),
+    );
   } else if (baseData) {
-    const problems = loosenedDeclaration(
+    const ratchet = declarationRatchet(
       head,
       baseData,
       (rel) => readWorktreeFile(root, rel),
       (rel) => showFile(root, base.sha!, rel),
+      (rel) => trackedFileScope(root, rel),
     );
+    const issues = await judgeIssueBacked(root, ratchet.issueBacked, options);
     reported = reportedCommandChanges(head, baseData);
+    const accepted =
+      issues.accepted.length > 0
+        ? `; ${issues.accepted.length} size exception(s) with an open issue (§1.3): ${issues.accepted.join(", ")}`
+        : "";
+    const result = await held(
+      "ratchet",
+      [...ratchet.problems, ...issues.problems],
+      "playbook.json only tightens",
+      ask,
+      "restore the setting, or name an open refactor issue in a one-file size exception (§1.3)",
+    );
     results.push(
-      await held("ratchet", problems, "playbook.json only tightens", ask, "restore the setting"),
+      result.status === "PASS" ? { ...result, summary: result.summary + accepted } : result,
     );
   }
   const exceptionsHead = readWorktreeFile(root, EXCEPTIONS_SOURCE);

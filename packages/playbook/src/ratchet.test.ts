@@ -8,8 +8,11 @@ import {
   sectionBypassReason,
   sectionRuleReasons,
 } from "./bypass.ts";
-import { loosenedDeclaration, reportedCommandChanges } from "./ratchet.ts";
+import { declarationRatchet, reportedCommandChanges } from "./ratchet.ts";
 import { evidenceDeclaration } from "./testing/fixtureRepo.ts";
+
+const loosenedDeclaration = (...args: Parameters<typeof declarationRatchet>) =>
+  declarationRatchet(...args).problems;
 
 describe("declaration ratchet", () => {
   const base = evidenceDeclaration(

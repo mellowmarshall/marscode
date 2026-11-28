@@ -22,6 +22,7 @@ import {
   stageShipQueueVersion,
   validateAndSwapAppImage,
 } from "./marscode-sync-install.ts";
+import { DESIGN_SCAN, designScanBundle, installDesignScan } from "./marscode-sync-design-scan.ts";
 import { parityFingerprint } from "./marscode-sync-parity.ts";
 import {
   APP_IMAGE_TARGET_ID,
@@ -172,6 +173,20 @@ export function runSync(options: SyncCliOptions): void {
     VP_GIT_HOOKS: "0",
   };
 
+  // Every sync: a missing design scan comes back, and an older one of ours is replaced.
+  const syncDesignScan = (): void => {
+    if (!NodeFS.existsSync(designScanBundle(syncWorktree))) return;
+    try {
+      installDesignScan(syncWorktree, {
+        dir: NodePath.join(options.prefix, "lib", "playbook"),
+        log,
+        warn: logErr,
+      });
+    } catch (err) {
+      logErr(`marscode-sync: warning: skipped ${DESIGN_SCAN}: ${String(err)}`);
+    }
+  };
+
   const execute = (): void => {
     const state = readSyncState(statePath);
     const existingAppSha = NodeFS.existsSync(appShaPath)
@@ -221,6 +236,7 @@ export function runSync(options: SyncCliOptions): void {
       const detail =
         plan.appImage.action === "skip" && plan.appImage.detail ? ` (${plan.appImage.detail})` : "";
       log(`marscode-sync: nothing to rebuild at ${headSha.slice(0, 10)}${detail}`);
+      syncDesignScan();
       return;
     }
 
@@ -289,6 +305,8 @@ export function runSync(options: SyncCliOptions): void {
       const records = { targets: nextTargets, paritySkips: nextParitySkips };
       if (recordParitySkips(records, skipped, headSha, parityFingerprint)) persist();
     }
+
+    syncDesignScan();
 
     const guardItem = plan.binaries.find((b) => b.target.kind === "guard-protocol")!;
     if (guardItem.decision.action === "build") {

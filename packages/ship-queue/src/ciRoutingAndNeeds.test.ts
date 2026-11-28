@@ -432,6 +432,33 @@ describe("host probe, availability, and MarsCode payload sync", () => {
       ]),
     );
 
+    // The playbook's design scan rides along when its release holds one.
+    NodeFS.writeFileSync(
+      NodePath.join(cliBundles, "playbook", "dist", "pb_design_scan.mjs"),
+      "// scan\n",
+    );
+    let withScanStdin = "";
+    const withScan = await syncCiHostPayload({
+      host: { name: "ci-host-1", ssh: "ci-host-1.example", role: "ci", data_root: "~/data" },
+      marscodeRoot: fakeRepo,
+      bundleDir: cliBundles,
+      deps: {
+        runLocal: nodeProcessRunner,
+        runRemote: async (_alias, _script, opts) => {
+          withScanStdin = opts?.stdin ?? "";
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+      },
+    });
+    expect(withScan.paths).toContain("packages/playbook/dist/pb_design_scan.mjs");
+    const shippedScan = await nodeProcessRunner({
+      command: "bash",
+      args: ["-c", "base64 -d | tar -xO packages/playbook/dist/pb_design_scan.mjs"],
+      cwd: fakeRepo,
+      stdin: withScanStdin,
+    });
+    expect(shippedScan.stdout).toBe("// scan\n");
+
     // Rejects option-like sourceRef before calling git archive.
     const badRef = await syncCiHostPayload({
       host: { name: "ci-host-1", ssh: "ci-host-1.example", role: "ci", data_root: "~/data" },

@@ -191,6 +191,11 @@
       // Copied verbatim into target repositories by `surface init`, never imported directly.
       "ignore": ["templates/**"],
     },
+    "packages/playbook": {
+      "includeEntryExports": true,
+      // The original playbook's design scan, vendored as it is: its unused exports stay.
+      "ignoreIssues": { "vendor/**": ["exports"] },
+    },
     "packages/host-guards": {
       "includeEntryExports": true,
       "entry": ["src/bin.ts!"],

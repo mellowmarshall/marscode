@@ -14,7 +14,7 @@ The playbook does **not** run checks, lint source files, or scan code itself. Fo
 | **Choke**            | A single typed/linted API or factory forcing code to self-declare without scanning (§4).                  |
 | **Evidence**         | Structured pass/fail/measurement output emitted by a repo's own checks.                                   |
 | **Scoped exception** | An explicit allowlisted `file`/`subject` with technical reason and approval `#N` (never a bulk baseline). |
-| **Override**         | `HOST_GUARD_OVERRIDE="<reason>"` for owner-approved loosening or exception changes.                       |
+| **Override**         | `HOST_GUARD_OVERRIDE="<reason>"` for owner-approved loosening or exception changes (one exemption: §1.3). |
 | **UNPROVEN**         | Evidence missing, stale, skipped, or unable to prove a pass; never treated as passing.                    |
 
 ---
@@ -23,7 +23,7 @@ The playbook does **not** run checks, lint source files, or scan code itself. Fo
 
 - **1.1 Three criteria:** A contract requires (1) a committed declaration of repo facts, (2) a repo-owned gate emitting structured evidence, and (3) a concrete failure mode it prevents.
 - **1.2 No baselines:** Do not maintain bulk `baseline` debt files. Fix violations or declare a narrow scoped exception.
-- **1.3 Scoped exceptions per section:** Every section supports an explicit allowlist/exception entry (`file`/`subject`, concrete reason, open issue `#N`) or a host-level waiver in `host-guards/exceptions.json`.
+- **1.3 Scoped exceptions per section:** Every section supports an explicit allowlist/exception entry (`file`/`subject`, concrete reason, open issue `#N`) or a host-level waiver in `host-guards/exceptions.json`. A new or changed entry takes the owner's override, with one exception: a new `size.exceptions` entry for one file git tracks at `HEAD` (a plain path: no wildcard, pattern or directory) whose `issue` names an open GitHub issue of this same repository to refactor that file. The ratchet asks `gh` that the issue exists, is an issue (not a pull request, not moved) and is open, and then accepts the entry without the owner. An issue of another repository, a closed issue, an issue `gh` cannot check (it fails closed), no issue, a pattern or directory scope, a raised `maxLines`, or a changed entry still takes the owner's override.
 - **1.4 Fixed per-unit caps and invariants:** Keep per-unit limits and scale-invariant checks constant as the repo grows (no N+1s, no full scans, `<= 500` LOC, 100% choke coverage).
 - **1.5 Bounded sprawl:** Every new `env` var, `role`, `store`, `dep`, `exception`, or budget increase must state a concrete `why`, confirm existing config/routes cannot serve, and stay within justified scope. Removing a check class or weakening safety invariants requires `HOST_GUARD_OVERRIDE`.
 - **1.6 Evidence:** `playbook.json` declares applicable sections (or scoped exceptions); repo evidence covers the current tree cleanly without mutating the checkout.

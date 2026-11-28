@@ -47,7 +47,8 @@ export function defaultCliBundleDir(homeDir: string = NodeOS.homedir()): string 
 
 /**
  * Ships `marscode@sourceRef:infra/ci-host` + bundled MarsCode packages to a CI host, plus every
- * prebuilt CLI bundle from `bundleDir` at `packages/<name>/dist/bin.mjs` (refuses when one is missing).
+ * prebuilt CLI bundle from `bundleDir` at `packages/<name>/dist/bin.mjs` (refuses when one is missing),
+ * and the playbook's design scan (`packages/playbook/dist/pb_design_scan.mjs`) when the release holds it.
  */
 export async function syncCiHostPayload(input: {
   readonly host: CiHostEntry;
@@ -88,7 +89,7 @@ export async function syncCiHostPayload(input: {
         'r=$1; sha=$(git -C "$r" rev-parse --verify --end-of-options "$2^{commit}")',
         'b=$3; IFS=, read -r -a clis <<< "$4"; shift 4',
         'git -C "$r" archive --format=tar -o "$t" "$sha" -- "$@"',
-        'for n in "${clis[@]}"; do [ -f "$b/$n/dist/bin.mjs" ] && tar -rf "$t" -C "$b/$n/" --transform "s,^dist/,packages/$n/dist/," dist/bin.mjs; done',
+        'for n in "${clis[@]}"; do for f in dist/bin.mjs dist/pb_design_scan.mjs; do if [ -f "$b/$n/$f" ]; then tar -rf "$t" -C "$b/$n/" --transform "s,^dist/,packages/$n/dist/," "$f"; fi; done; done',
         'base64 < "$t"',
       ].join("; "),
       "--",
@@ -119,7 +120,15 @@ export async function syncCiHostPayload(input: {
       error: unpack.stderr.trim() || `remote unpack exited ${unpack.exitCode}`,
     };
   }
-  return { ok: true, paths: [...paths, ...clis.map((name) => `packages/${name}/dist/bin.mjs`)] };
+  const designScan = NodeFS.existsSync(
+    NodePath.join(bundleDir, "playbook", "dist", "pb_design_scan.mjs"),
+  )
+    ? ["packages/playbook/dist/pb_design_scan.mjs"]
+    : [];
+  return {
+    ok: true,
+    paths: [...paths, ...clis.map((name) => `packages/${name}/dist/bin.mjs`), ...designScan],
+  };
 }
 
 /** Provisions missing user-level tools (and optionally WSL/passwordless-sudo root tools) on one CI host. */
