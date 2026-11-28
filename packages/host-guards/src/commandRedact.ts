@@ -10,7 +10,8 @@ const CREDENTIAL_HELPER_CONFIG_RE = /^(-c)?(credential\.(?:[^=\s]*\.)?helper)=[\
 const SECRET_FLAG_EQ_RE =
   /^(--[^=\s]*(?:secret|token|passw|api[-_]?key|apikey|bearer|_auth|auth[-_]?token))=[\s\S]+$/i;
 const NPM_REGISTRY_CRED_ASSIGN_RE = /^([^=\s]*:_(?:authToken|auth|password))=[\s\S]+$/i;
-const NPM_REGISTRY_CRED_KEY_RE = /:_(?:authToken|auth|password)$/i;
+const NPM_REGISTRY_CRED_KEY_RE = /(?:^|:)_(?:authToken|auth|password)$/i;
+const CREDENTIAL_HELPER_KEY_RE = /^credential\.(?:[^=\s]*\.)?helper$/i;
 const BEARER_RE = /(\bbearer\s+)\S+/gi;
 const URL_USERINFO_RE = /([a-z][a-z0-9+.-]*:\/\/)[^/@\s:]+:[^/@\s]+@/gi;
 const QUERY_SECRET_RE =
@@ -245,7 +246,7 @@ export function redactGuardCommand(words: ReadonlyArray<string>): ReadonlyArray<
       out.push("-p<redacted>");
       continue;
     }
-    if (NPM_REGISTRY_CRED_KEY_RE.test(a)) {
+    if (NPM_REGISTRY_CRED_KEY_RE.test(a) || CREDENTIAL_HELPER_KEY_RE.test(a)) {
       out.push(a);
       if (i + 1 < stage1.length) redactNext = true;
       continue;

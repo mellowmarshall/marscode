@@ -51,6 +51,42 @@ describe("redactGuardCommand credential shapes", () => {
       secret: "helper_value_777",
       expected: ["git", "-c", "credential.https://git.example.test.helper=<redacted>", "fetch"],
     },
+    {
+      name: "git config credential.helper space form",
+      argv: ["git", "config", "credential.helper", "!echo password=helper_value_888"],
+      secret: "helper_value_888",
+      expected: ["git", "config", "credential.helper", "<redacted>"],
+    },
+    {
+      name: "git config --global URL-scoped credential helper space form",
+      argv: [
+        "git",
+        "config",
+        "--global",
+        "Credential.https://git.example.test.Helper",
+        "!echo password=helper_value_999",
+      ],
+      secret: "helper_value_999",
+      expected: [
+        "git",
+        "config",
+        "--global",
+        "Credential.https://git.example.test.Helper",
+        "<redacted>",
+      ],
+    },
+    {
+      name: "npm config set bare _auth",
+      argv: ["npm", "config", "set", "_auth", "auth_value_aaa"],
+      secret: "auth_value_aaa",
+      expected: ["npm", "config", "set", "_auth", "<redacted>"],
+    },
+    {
+      name: "npm config set bare _password",
+      argv: ["npm", "config", "set", "_password", "pw_value_bbb"],
+      secret: "pw_value_bbb",
+      expected: ["npm", "config", "set", "_password", "<redacted>"],
+    },
   ])("redacts $name", ({ argv, secret, expected }) => {
     const redacted = redactGuardCommand(argv);
     expect(redacted.join(" ")).not.toContain(secret);
@@ -73,5 +109,18 @@ describe("redactGuardCommand credential shapes", () => {
     expect(
       redactGuardCommand(["npm", "config", "set", "//registry.example.test/:username", "bot"]),
     ).toEqual(["npm", "config", "set", "//registry.example.test/:username", "bot"]);
+    expect(redactGuardCommand(["git", "config", "credential.useHttpPath", "true"])).toEqual([
+      "git",
+      "config",
+      "credential.useHttpPath",
+      "true",
+    ]);
+    expect(redactGuardCommand(["npm", "config", "set", "my_auth", "value"])).toEqual([
+      "npm",
+      "config",
+      "set",
+      "my_auth",
+      "value",
+    ]);
   });
 });

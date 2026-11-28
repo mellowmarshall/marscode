@@ -95,7 +95,7 @@ describe("drillTrust env values that end in '='", () => {
     expect(checkDrill(["PATH=/usr/bin:/bin", "BASH_FUNC_ls%%=() { :; }="])).toBe(false);
   });
 
-  it("rejects a PATH whose segments end in '='", () => {
+  it("rejects PATH segments ending in '=' as untrusted or relative dirs", () => {
     expect(checkDrill(["PATH=/usr/bin="])).toBe(false);
     expect(checkDrill(["PATH=/usr/bin:/bin:="])).toBe(false);
   });
