@@ -39,6 +39,10 @@ const UNKNOWN_ACTOR: ClassifiedModel = {
   provider: "unknown",
 };
 
+function stringField(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
 function emptyCounts(): {
   breaking: number;
   critical: number;
@@ -174,27 +178,21 @@ export function challengeRecordFromJson(
           return c;
         })()
       : countsFromDefects(data.defects);
-    const reviewerBase = classifyModel(
+    const reviewer = classifyModel(
       typeof data.reviewer_model === "string" && data.reviewer_model
         ? data.reviewer_model
         : reviewerRaw,
-      typeof data.reviewer_provider === "string" ? data.reviewer_provider : undefined,
+      stringField(data.reviewer_provider),
+      stringField(data.reviewer_effort),
     );
-    const reviewer: ClassifiedModel =
-      typeof data.reviewer_effort === "string" && data.reviewer_effort && !reviewerBase.effort
-        ? { ...reviewerBase, effort: data.reviewer_effort.toLowerCase() }
-        : reviewerBase;
-    const submitterRaw = typeof data.submitter_model === "string" ? data.submitter_model : "";
-    const submitterBase = submitterRaw
+    const submitterRaw = stringField(data.submitter_model);
+    const submitter = submitterRaw
       ? classifyModel(
           submitterRaw,
-          typeof data.submitter_provider === "string" ? data.submitter_provider : undefined,
+          stringField(data.submitter_provider),
+          stringField(data.submitter_effort),
         )
       : UNKNOWN_ACTOR;
-    const submitter: ClassifiedModel =
-      typeof data.submitter_effort === "string" && data.submitter_effort && !submitterBase.effort
-        ? { ...submitterBase, effort: data.submitter_effort.toLowerCase() }
-        : submitterBase;
     const record: ReviewStatRecord = {
       id: `challenge:${repoDirName}:${fileName}`,
       source: "playbook_challenge",
@@ -257,11 +255,7 @@ export function parseStructuredReviewText(text: string): {
           (typeof parsed.reviewer_effort === "string" && parsed.reviewer_effort) ||
           (typeof parsed.effort === "string" && parsed.effort) ||
           "";
-        const revBase = classifyModel(revModelRaw, revProviderRaw);
-        const reviewer: ClassifiedModel =
-          revEffortRaw && !revBase.effort
-            ? { ...revBase, effort: revEffortRaw.toLowerCase() }
-            : revBase;
+        const reviewer = classifyModel(revModelRaw, revProviderRaw, revEffortRaw);
 
         const subField = parsed.submitter;
         const subObj =
@@ -276,7 +270,8 @@ export function parseStructuredReviewText(text: string): {
         const submitter = subModelRaw
           ? classifyModel(
               subModelRaw,
-              typeof subObj?.provider === "string" ? subObj.provider : undefined,
+              stringField(subObj?.provider),
+              stringField(subObj?.effort) || stringField(parsed.submitter_effort),
             )
           : UNKNOWN_ACTOR;
 
@@ -307,19 +302,21 @@ export function parseStructuredReviewText(text: string): {
     }
   }
 
-  let reviewerRaw = "unknown";
+  // A "Reviewer:" line may be prose ("<model> (high), the configured ..."); classifyModel
+  // keeps a clean model name and turns prose into "unknown".
+  let reviewerRaw = "";
   let submitterRaw = "";
   let verdict = "pass";
   let sawExplicitVerdict = false;
   for (const line of text.split(/\r?\n/)) {
-    const rm = reviewerRaw === "unknown" ? REVIEWER_LINE_RE.exec(line) : null;
+    const rm = reviewerRaw ? null : REVIEWER_LINE_RE.exec(line);
     if (rm?.[1]) {
-      reviewerRaw = rm[1].trim().replace(/^[`*]+|[`*]+$/g, "");
+      reviewerRaw = rm[1].trim();
       continue;
     }
-    const sm = !submitterRaw ? SUBMITTER_LINE_RE.exec(line) : null;
+    const sm = submitterRaw ? null : SUBMITTER_LINE_RE.exec(line);
     if (sm?.[1]) {
-      submitterRaw = sm[1].trim().replace(/^[`*]+|[`*]+$/g, "");
+      submitterRaw = sm[1].trim();
       continue;
     }
     const vm = VERDICT_LINE_RE.exec(line);
@@ -336,7 +333,7 @@ export function parseStructuredReviewText(text: string): {
     }
   }
   return {
-    reviewer: classifyModel(reviewerRaw),
+    reviewer: reviewerRaw ? classifyModel(reviewerRaw) : UNKNOWN_ACTOR,
     submitter: submitterRaw ? classifyModel(submitterRaw) : UNKNOWN_ACTOR,
     verdict,
     counts: parseAdversarialReviewCounts(text),
@@ -370,24 +367,14 @@ export function parseJsonlRecords(raw: string): ReadonlyArray<ReviewStatRecord> 
         obj.submitter && typeof obj.submitter === "object" ? obj.submitter : {}
       ) as Record<string, unknown>;
       const reviewer = classifyModel(
-        typeof revObj.model === "string" ? revObj.model : "unknown",
-        typeof revObj.provider === "string" ? revObj.provider : undefined,
+        stringField(revObj.model) || "unknown",
+        stringField(revObj.provider),
+        stringField(revObj.effort),
       );
-      const revWithEffort: ClassifiedModel =
-        typeof revObj.effort === "string" && revObj.effort && !reviewer.effort
-          ? { ...reviewer, effort: revObj.effort }
-          : reviewer;
+      const subModel = stringField(subObj.model);
       const submitter =
-        typeof subObj.model === "string" && subObj.model && subObj.model !== "unknown"
-          ? (() => {
-              const s = classifyModel(
-                subObj.model,
-                typeof subObj.provider === "string" ? subObj.provider : undefined,
-              );
-              return typeof subObj.effort === "string" && subObj.effort && !s.effort
-                ? { ...s, effort: subObj.effort }
-                : s;
-            })()
+        subModel && subModel !== "unknown"
+          ? classifyModel(subModel, stringField(subObj.provider), stringField(subObj.effort))
           : UNKNOWN_ACTOR;
       out.push({
         id: obj.id,
@@ -400,7 +387,7 @@ export function parseJsonlRecords(raw: string): ReadonlyArray<ReviewStatRecord> 
         threadId: String(obj.thread_id ?? obj.threadId ?? ""),
         reviewThreadId: String(obj.review_thread_id ?? obj.reviewThreadId ?? ""),
         verdict: String(obj.verdict ?? "pass"),
-        reviewer: revWithEffort,
+        reviewer,
         submitter,
         counts: c,
         bypassDetected: Boolean(obj.bypass_detected ?? obj.bypassDetected),

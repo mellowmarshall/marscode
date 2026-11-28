@@ -1,13 +1,12 @@
 /**
  * Review + Ship stats and Cerno findings panel mounted inside T3's Usage page (`Cost | Tokens | Limits | Reviews`).
- * Queries connected environments in parallel, merges multi-host data, and groups by Model -> Effort level.
+ * Queries connected environments in parallel and merges multi-host data; UsageReviewsTable shows it.
  */
 import { useEffect, useRef, useState } from "react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { T, Var, useGT } from "gt-react";
 import { AwardIcon, BugIcon, RefreshCwIcon } from "lucide-react";
 
-import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
   Select,
@@ -19,7 +18,6 @@ import {
 import {
   fetchDevtoolsJson,
   type CernoStatsPayload,
-  type ReviewStatsGroupRow,
   type ReviewStatsPayload,
   type ReviewStatsSide,
 } from "./devtoolsClient";
@@ -27,48 +25,8 @@ import { DevtoolsErrorBoundary } from "./DevtoolsErrorBoundary";
 import { DevtoolsStateBanner } from "./DevtoolsStateBanner";
 import { readCachedCapabilities } from "./devtoolsStreams";
 import { UsageCernoSection } from "./UsageCernoSection";
-import {
-  groupRowsByModelAndEffort,
-  mergeCernoStatsPayloads,
-  mergeReviewStatsPayloads,
-} from "./usageReviewsMerge";
-
-type SeverityMetricRow = Pick<
-  ReviewStatsGroupRow,
-  | "reviews"
-  | "passRatePct"
-  | "avgIssues"
-  | "breaking"
-  | "critical"
-  | "high"
-  | "medium"
-  | "low"
-  | "total"
->;
-
-function SeverityRowCells({
-  row,
-  sub,
-}: {
-  readonly row: SeverityMetricRow;
-  readonly sub?: boolean;
-}) {
-  const pad = sub ? "py-1.5" : "py-2";
-  const numCls = sub ? "px-2 py-1.5 text-right text-muted-foreground" : "px-2 py-2 text-right";
-  return (
-    <>
-      <td className={numCls}>{row.reviews}</td>
-      <td className={numCls}>{`${row.passRatePct.toFixed(0)}%`}</td>
-      <td className={numCls}>{row.avgIssues.toFixed(2)}</td>
-      <td className={`px-2 ${pad} text-right text-destructive`}>{row.breaking || "·"}</td>
-      <td className={`px-2 ${pad} text-right text-destructive`}>{row.critical || "·"}</td>
-      <td className={`px-2 ${pad} text-right text-warning`}>{row.high || "·"}</td>
-      <td className={`px-2 ${pad} text-right`}>{row.medium || "·"}</td>
-      <td className={`px-2 ${pad} text-right text-muted-foreground`}>{row.low || "·"}</td>
-      <td className={`px-3 ${pad} text-right${sub ? "" : " font-semibold"}`}>{row.total}</td>
-    </>
-  );
-}
+import { mergeCernoStatsPayloads, mergeReviewStatsPayloads } from "./usageReviewsMerge";
+import { UsageReviewsTable } from "./UsageReviewsTable";
 
 function UsageReviewsPanelInner({
   environmentIds,
@@ -176,11 +134,10 @@ function UsageReviewsPanelInner({
     .toSorted();
 
   const familyOptions = stats?.facets.families ?? [];
-  const groupedModels = stats && side !== "pair" ? groupRowsByModelAndEffort(stats.groups) : [];
   const totals = stats?.totals ?? null;
 
   return (
-    <div className="space-y-6">
+    <div className="@container/reviews-panel space-y-6">
       {/* Filter Controls: Machine + Model Family dropdowns + Side + Source */}
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-card/40 p-3">
         <div className="flex flex-wrap items-center gap-2">
@@ -291,7 +248,7 @@ function UsageReviewsPanelInner({
 
       {/* Top KPI Summary Cards */}
       {totals ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 @sm/reviews-panel:grid-cols-2 @3xl/reviews-panel:grid-cols-4">
           <div className="rounded-lg border border-border/70 bg-card/40 p-3">
             <div className="text-2xs text-muted-foreground">
               {windowDays === 0 ? (
@@ -330,7 +287,7 @@ function UsageReviewsPanelInner({
             </div>
             {stats?.highlights.topBugSubmitter ? (
               <>
-                <div className="mt-1 truncate text-sm font-semibold">
+                <div className="mt-1 text-sm font-semibold wrap-anywhere">
                   {stats.highlights.topBugSubmitter.label}
                 </div>
                 <div className="font-mono text-3xs text-muted-foreground tabular-nums">
@@ -352,7 +309,7 @@ function UsageReviewsPanelInner({
             </div>
             {stats?.highlights.topBugCatcher ? (
               <>
-                <div className="mt-1 truncate text-sm font-semibold">
+                <div className="mt-1 text-sm font-semibold wrap-anywhere">
                   {stats.highlights.topBugCatcher.label}
                 </div>
                 <div className="font-mono text-3xs text-muted-foreground tabular-nums">
@@ -369,81 +326,7 @@ function UsageReviewsPanelInner({
         </div>
       ) : null}
 
-      {/* Review + Ship Table grouped by Model -> Effort level */}
-      <section className="overflow-hidden rounded-lg border border-border/70 bg-card/40">
-        <div className="flex items-center justify-between border-b border-border/60 bg-muted/20 px-3 py-2 text-xs font-semibold">
-          <T>Review & Ship Stats (grouped by model & effort)</T>
-          <span className="font-mono text-3xs font-normal text-muted-foreground">
-            {loading ? gt("Loading…") : gt("{n} rows", { n: stats?.groups.length ?? 0 })}
-          </span>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-xs">
-            <thead>
-              <tr className="border-b border-border/60 bg-muted/15 text-left font-mono text-3xs uppercase text-muted-foreground">
-                <th className="px-3 py-2">{side === "pair" ? gt("Pair") : gt("Model / Effort")}</th>
-                <th className="px-2 py-2 text-right">{gt("Rev")}</th>
-                <th className="px-2 py-2 text-right">{gt("Pass%")}</th>
-                <th className="px-2 py-2 text-right">{gt("Avg")}</th>
-                <th className="px-2 py-2 text-right">{gt("Brk")}</th>
-                <th className="px-2 py-2 text-right">{gt("Crit")}</th>
-                <th className="px-2 py-2 text-right">{gt("High")}</th>
-                <th className="px-2 py-2 text-right">{gt("Med")}</th>
-                <th className="px-2 py-2 text-right">{gt("Low")}</th>
-                <th className="px-3 py-2 text-right">{gt("Total")}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/50 font-mono tabular-nums">
-              {!stats || stats.groups.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={10}
-                    className="px-3 py-6 text-center font-sans text-muted-foreground"
-                  >
-                    <T>No review records match the selected filters.</T>
-                  </td>
-                </tr>
-              ) : side === "pair" ? (
-                stats.groups.map((row) => (
-                  <tr key={row.key} className="hover:bg-muted/20">
-                    <td className="px-3 py-2 font-sans font-medium text-foreground">{row.key}</td>
-                    <SeverityRowCells row={row} />
-                  </tr>
-                ))
-              ) : (
-                groupedModels.flatMap((grp) => {
-                  const passRatePct = grp.reviews > 0 ? (100 * grp.passed) / grp.reviews : 0;
-                  const avgIssues = grp.reviews > 0 ? grp.total / grp.reviews : 0;
-                  return [
-                    <tr key={`model:${grp.model}`} className="bg-muted/15 font-semibold">
-                      <td className="px-3 py-2 font-sans text-foreground">
-                        <span>{grp.model}</span>
-                        {grp.family ? (
-                          <span className="ml-2 font-mono text-3xs font-normal text-muted-foreground">
-                            {grp.family}
-                          </span>
-                        ) : null}
-                      </td>
-                      <SeverityRowCells row={{ ...grp, passRatePct, avgIssues }} />
-                    </tr>,
-                    ...grp.efforts.map((eff) => (
-                      <tr key={`eff:${grp.model}:${eff.effort}`} className="hover:bg-muted/20">
-                        <td className="py-1.5 pr-3 pl-7 font-sans text-2xs text-muted-foreground">
-                          <Badge size="sm" variant="outline">
-                            {eff.effort || "default"}
-                          </Badge>
-                        </td>
-                        <SeverityRowCells row={eff} sub />
-                      </tr>
-                    )),
-                  ];
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <UsageReviewsTable stats={stats} side={side} loading={loading} />
 
       {cerno?.enabled ? <UsageCernoSection cerno={cerno} /> : null}
     </div>

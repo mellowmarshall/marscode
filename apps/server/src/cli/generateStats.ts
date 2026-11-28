@@ -212,15 +212,11 @@ export function recordGenerateStats(input: {
     threadId: input.threadId?.trim() ?? "",
     reviewThreadId: "",
     verdict: input.verdict,
-    reviewer: classifyModel(
-      input.effort ? `${input.model} (${input.effort})` : input.model,
-      input.provider,
-    ),
+    reviewer: classifyModel(input.model, input.provider, input.effort),
     submitter: classifyModel(
-      input.submitterModel && input.submitterEffort
-        ? `${input.submitterModel} (${input.submitterEffort})`
-        : (input.submitterModel ?? ""),
+      input.submitterModel ?? "",
       input.submitterProvider ?? "",
+      input.submitterEffort,
     ),
     counts: input.counts,
     bypassDetected: input.bypassDetected,

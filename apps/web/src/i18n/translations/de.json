@@ -12788,5 +12788,6 @@
   "4e2bae10c1ec9047": "Die Anweisungen, die T3 dem Systemprompt jedes Agenten hinzufügt. Änderungen ersetzen den eingebauten Text und gelten ab dem nächsten Start einer Agentensitzung.",
   "67d1444f1ebafc5d": "Agentenanweisungen auf Standard zurücksetzen",
   "6c33fafcd03b38e0": "Eingebaute Anweisungen werden geladen…",
-  "a9f26af6134146f9": "Dieser Server hat seine eingebauten Anweisungen nicht gesendet. Aktualisiere ihn, um sie hier zu bearbeiten."
+  "a9f26af6134146f9": "Dieser Server hat seine eingebauten Anweisungen nicht gesendet. Aktualisiere ihn, um sie hier zu bearbeiten.",
+  "5cc60007585c8f44": "Standard"
 }

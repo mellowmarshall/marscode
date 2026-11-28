@@ -12783,5 +12783,6 @@
   "4e2bae10c1ec9047": "Las instrucciones que T3 añade al prompt del sistema de cada agente. Los cambios sustituyen el texto integrado y se aplican cuando se inicia la siguiente sesión del agente.",
   "67d1444f1ebafc5d": "Restablecer las instrucciones del agente a los valores predeterminados",
   "6c33fafcd03b38e0": "Cargando las instrucciones integradas…",
-  "a9f26af6134146f9": "Este servidor no envió sus instrucciones integradas. Actualízalo para editarlas aquí."
+  "a9f26af6134146f9": "Este servidor no envió sus instrucciones integradas. Actualízalo para editarlas aquí.",
+  "5cc60007585c8f44": "predeterminado"
 }

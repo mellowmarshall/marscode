@@ -12795,5 +12795,6 @@
   "4e2bae10c1ec9047": "Instruktionerna som T3 lägger till i varje agents systemprompt. Ändringar ersätter den inbyggda texten och gäller när en agentsession startar nästa gång.",
   "67d1444f1ebafc5d": "Återställ agentinstruktionerna till standard",
   "6c33fafcd03b38e0": "Läser in de inbyggda instruktionerna…",
-  "a9f26af6134146f9": "Den här servern skickade inte sina inbyggda instruktioner. Uppdatera den för att redigera dem här."
+  "a9f26af6134146f9": "Den här servern skickade inte sina inbyggda instruktioner. Uppdatera den för att redigera dem här.",
+  "5cc60007585c8f44": "standard"
 }
