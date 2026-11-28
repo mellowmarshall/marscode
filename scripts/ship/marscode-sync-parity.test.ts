@@ -165,10 +165,18 @@ describe("marscode-sync flag-parity guard", () => {
 
   it("marks a skip whose probe did not finish for a retry, and leaves the old CLI", () => {
     const { link, script } = originalStyleLink("runlog");
-    // The real runlog, whose probe command `true` hangs here past the probe's timeout.
+    // The real runlog, whose probe command `true` blocks here past the probe's timeout
+    // (and says which process blocks, so the test can check the probe ended it).
     const slow = NodePath.join(tmp, "slow-bin");
+    const blocker = NodePath.join(tmp, "blocker.pid");
     NodeFS.mkdirSync(slow);
-    NodeFS.writeFileSync(NodePath.join(slow, "true"), "#!/bin/sh\nsleep 5\n", { mode: 0o755 });
+    NodeFS.writeFileSync(
+      NodePath.join(slow, "true"),
+      `#!/bin/sh\necho $$ > '${blocker}'\nexec sleep 300\n`,
+      {
+        mode: 0o755,
+      },
+    );
     const savedPath = process.env.PATH;
     process.env.PATH = `${slow}:${savedPath ?? ""}`;
     let refusal: unknown;
@@ -188,9 +196,16 @@ describe("marscode-sync flag-parity guard", () => {
     expect(refusal).toBeInstanceOf(CliParityRefusal);
     expect((refusal as CliParityRefusal).retry).toBe(true);
     expect((refusal as Error).message).toMatch(
-      /its flag-parity check did not run \(.*ETIMEDOUT.*\); the next sync tries again\.$/,
+      /its flag-parity check did not run \(it timed out after 1500 ms\); the next sync tries again\.$/,
     );
     expect(NodeFS.readlinkSync(link)).toBe(script);
+    // The probe ended its whole process group: the blocked command is gone too.
+    const pid = Number.parseInt(NodeFS.readFileSync(blocker, "utf8"), 10);
+    const waited = NodeChildProcess.spawnSync("bash", [
+      "-c",
+      `for i in $(seq 1 100); do kill -0 ${pid} 2>/dev/null || exit 0; sleep 0.05; done; kill -9 ${pid}; exit 1`,
+    ]);
+    expect(waited.status, `pid ${pid} outlived the probe`).toBe(0);
   });
 
   it("reinstalls over its own wrappers, older ones without the marker too, with no parity check", () => {

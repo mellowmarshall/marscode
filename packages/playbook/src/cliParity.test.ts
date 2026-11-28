@@ -11,6 +11,7 @@ import * as NodeURL from "node:url";
 import { starterShape } from "@t3tools/fleet";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { proposeAmendText } from "./amend.ts";
 import { classifyModel } from "./modelClassify.ts";
 import { appendReviewStatRecord } from "./statsStore.ts";
 import type { ReviewStatRecord } from "./statsTypes.ts";
@@ -284,6 +285,18 @@ describe("playbook intent-diff and intent-audit", () => {
       "playbook intent-audit: the merged playbook.json declares no intent contracts; nothing to record\n",
     );
   });
+
+  it("fails, and records nothing, when the merged playbook.json cannot be read", () => {
+    const { repo, base } = intentRepo();
+    repo.write("playbook.json", '{"contracts": {"intent": ');
+    const merged = repo.commit("a broken declaration");
+    const r = playbook(repo.root, ["intent-audit", "--base", base, "--merged", merged]);
+    expect(r.code).toBe(2);
+    expect(r.out).toBe("");
+    expect(r.err).toMatch(
+      new RegExp(`^playbook intent-audit: playbook\\.json at ${merged}: not valid JSON: `),
+    );
+  });
 });
 
 describe("playbook ci-files", () => {
@@ -409,6 +422,45 @@ describe("playbook stats", () => {
     expect(playbook(dir, ["stats", "--days", "two"], env).code).toBe(2);
     expect(playbook(dir, ["stats", "--bogus"], env).code).toBe(2);
     expect(playbook(dir, ["stats", "--days", "7", "--side", "pair"], env).code).toBe(0);
+  });
+});
+
+describe("playbook amend's approved write", () => {
+  function proposed() {
+    const repo = makeFixtureRepo();
+    repo.write("playbook/PLAYBOOK.md", fixturePlaybookMd());
+    repo.commit("base");
+    const state = makeTempDir("pb-amend-write-");
+    const text = NodePath.join(state, "new.md");
+    NodeFS.writeFileSync(text, `${fixturePlaybookMd()}\nAn amended rule.\n`);
+    const proposal = proposeAmendText(repo.root, "playbook/PLAYBOOK.md", text);
+    if (!proposal.ok) throw new Error(proposal.problem);
+    return { repo, state, proposal, file: NodePath.join(repo.root, "playbook", "PLAYBOOK.md") };
+  }
+
+  it("writes the approved text into the file it checked", () => {
+    const { proposal, file } = proposed();
+    expect(proposal.write()).toBeNull();
+    expect(NodeFS.readFileSync(file, "utf8")).toBe(proposal.text);
+  });
+
+  it("never writes through a link swapped in after the check", () => {
+    const { state, proposal, file } = proposed();
+    const outside = NodePath.join(state, "outside.txt");
+    NodeFS.writeFileSync(outside, "not to be touched\n");
+    NodeFS.rmSync(file);
+    NodeFS.symlinkSync(outside, file);
+    expect(proposal.write()).toMatch(/became a link after the approval; nothing written$/);
+    expect(NodeFS.readFileSync(outside, "utf8")).toBe("not to be touched\n");
+  });
+
+  it("never writes into another file swapped in after the check", () => {
+    const { state, proposal, file } = proposed();
+    const other = NodePath.join(state, "other.md");
+    NodeFS.writeFileSync(other, "another file\n");
+    NodeFS.renameSync(other, file);
+    expect(proposal.write()).toMatch(/is not the file that was approved; nothing written$/);
+    expect(NodeFS.readFileSync(file, "utf8")).toBe("another file\n");
   });
 });
 

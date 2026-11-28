@@ -153,7 +153,16 @@ export function cmdIntentAudit(root: string, args: ReadonlyArray<string>, io: Io
     return EXIT_USAGE;
   }
   const text = showFile(root, mergedSha, DECLARATION);
-  const files = judgedFiles(text ? parseDeclarationText(text).data : null);
+  const parsed = text ? parseDeclarationText(text) : null;
+  // A declaration the audit cannot read cannot say what to record: that is no pass.
+  // (The original read it as declaring nothing and exited 0.)
+  if (parsed && parsed.errors.length > 0) {
+    for (const problem of parsed.errors) {
+      io.err(`playbook intent-audit: ${DECLARATION} at ${merged}: ${problem}`);
+    }
+    return EXIT_USAGE;
+  }
+  const files = judgedFiles(parsed ? parsed.data : null);
   if (Object.keys(files).length === 0) {
     io.out(
       "playbook intent-audit: the merged playbook.json declares no intent contracts; nothing to record",

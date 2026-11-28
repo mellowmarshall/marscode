@@ -1,10 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off extendsNativeError:off - Standalone post-merge installer runs from extracted base tree without Effect/node_modules.
 // Ownership and flag-parity guard for marscode-sync: a CLI this installer did not write (another
 // install's link or file) is replaced only by a MarsCode CLI that passes its flag-parity probe.
-import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+
+import { runProbe } from "./marscode-sync-probe.ts";
 
 /** The line every MarsCode wrapper carries (infra/ci-host/ci-marscode-cli.sh writes the same one). */
 export const WRAPPER_MARKER = "# Installed by MarsCode; reinstalls replace this file.";
@@ -158,15 +159,17 @@ export function assertMayReplace(input: {
   if (!probe) {
     throw refuse(`the MarsCode ${input.binName} has no flag-parity check`);
   }
-  const res = NodeChildProcess.spawnSync(input.nodeBin, [input.stagedBundle, ...probe.args], {
+  const res = runProbe({
+    nodeBin: input.nodeBin,
+    bundle: input.stagedBundle,
+    args: probe.args,
     cwd: input.cwd,
-    encoding: "utf8",
-    timeout: input.probeTimeoutMs ?? 60_000,
+    timeoutMs: input.probeTimeoutMs ?? 60_000,
   });
-  if (res.error) {
-    throw refuse(`its flag-parity check did not run (${res.error.message})`, true);
+  if (!res.ran) {
+    throw refuse(`its flag-parity check did not run (${res.problem})`, true);
   }
-  const why = probe.judge({ status: res.status, stdout: res.stdout ?? "" });
+  const why = probe.judge({ status: res.status, stdout: res.stdout });
   if (why !== null) {
     throw refuse(
       `the MarsCode ${input.binName} fails its flag-parity check (${probe.what}: ${why})`,

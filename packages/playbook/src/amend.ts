@@ -109,8 +109,42 @@ function normalizeAmendText(text: string): string {
 }
 
 export type ProposedAmend =
-  | { readonly ok: true; readonly text: string; readonly write: () => void }
+  | {
+      readonly ok: true;
+      readonly text: string;
+      /** Writes the text over the file checked before the approval; a problem when it is not that file now. */
+      readonly write: () => string | null;
+    }
   | { readonly ok: false; readonly problem: string };
+
+/**
+ * Writes TEXT into the file at TARGET only when it is still the regular file
+ * (same device and inode) that was checked before the approval: opened with
+ * O_NOFOLLOW, verified on the open descriptor, then truncated and written
+ * through it, so a link or another file swapped in meanwhile is never written.
+ */
+function writeCheckedFile(target: string, checked: NodeFS.Stats, text: string): string | null {
+  let fd: number;
+  try {
+    fd = NodeFS.openSync(target, NodeFS.constants.O_WRONLY | NodeFS.constants.O_NOFOLLOW);
+  } catch (cause) {
+    const code = (cause as NodeJS.ErrnoException).code;
+    return code === "ELOOP"
+      ? `${target} became a link after the approval; nothing written`
+      : `cannot open ${target}: ${code ?? String(cause)}; nothing written`;
+  }
+  try {
+    const now = NodeFS.fstatSync(fd);
+    if (!now.isFile() || now.dev !== checked.dev || now.ino !== checked.ino) {
+      return `${target} is not the file that was approved; nothing written`;
+    }
+    NodeFS.ftruncateSync(fd, 0);
+    NodeFS.writeSync(fd, text, 0, "utf8");
+    return null;
+  } finally {
+    NodeFS.closeSync(fd);
+  }
+}
 
 /** SOURCE's whole text (normalized) proposed for FILE; `write` puts it in the worktree. */
 export function proposeAmendText(root: string, file: string, source: string): ProposedAmend {
@@ -135,5 +169,12 @@ export function proposeAmendText(root: string, file: string, source: string): Pr
   }
   const text = normalizeAmendText(next);
   const target = NodePath.join(NodeFS.realpathSync(root), rel);
-  return { ok: true, text, write: () => NodeFS.writeFileSync(target, text) };
+  const checked = NodeFS.lstatSync(target);
+  if (!checked.isFile()) {
+    return {
+      ok: false,
+      problem: `${rel} is not a regular file in the checkout; refusing to write through it`,
+    };
+  }
+  return { ok: true, text, write: () => writeCheckedFile(target, checked, text) };
 }

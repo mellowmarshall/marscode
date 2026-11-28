@@ -234,7 +234,12 @@ async function cmdAmend(root: string, args: ReadonlyArray<string>, io: CliIo): P
   }
   // The text is written only once the owner approves it, as the original does.
   const outcome = await amendWorktree(root, file, base, { ...values, text: proposed.text }, io);
-  if (outcome.approved) proposed.write();
+  if (!outcome.approved) return outcome.code;
+  const problem = proposed.write();
+  if (problem !== null) {
+    io.err(`FAIL amend: ${problem}`);
+    return EXIT_FAIL;
+  }
   return outcome.code;
 }
 
