@@ -121,6 +121,24 @@ function readShipJob(jobDir: string, jobId: string): ReviewStatRecord | null {
   });
 }
 
+/** Commits whose playbook challenge a ship job overrode (`challenge_override.tip`). */
+function readOverriddenTips(shipJobsDir: string): ReadonlySet<string> {
+  const tips = new Set<string>();
+  for (const entry of listDir(shipJobsDir)) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const job = JSON.parse(
+        NodeFS.readFileSync(NodePath.join(shipJobsDir, entry.name, "job.json"), "utf8"),
+      ) as { readonly challenge_override?: { readonly tip?: unknown } };
+      const tip = job.challenge_override?.tip;
+      if (typeof tip === "string" && /^[0-9a-f]{7,64}$/i.test(tip)) tips.add(tip.toLowerCase());
+    } catch {
+      // A job without job.json, or without an override, adds nothing.
+    }
+  }
+  return tips;
+}
+
 function listDir(dir: string): ReadonlyArray<NodeFS.Dirent> {
   try {
     return NodeFS.readdirSync(dir, { withFileTypes: true });
@@ -160,6 +178,15 @@ export function collectReviewRecords(
   }
   const shipIdByReviewThread = new Map<string, string>();
   const shipJobsDir = paths.shipJobsDir ?? defaultShipJobsDir();
+  const overriddenTips = readOverriddenTips(shipJobsDir);
+  for (const [id, rec] of byId) {
+    if (rec.source === "playbook_challenge" && rec.verdict !== "pass" && rec.commit) {
+      const tip = rec.commit.toLowerCase();
+      if ([...overriddenTips].some((t) => t.startsWith(tip) || tip.startsWith(t))) {
+        byId.set(id, { ...rec, overridden: true });
+      }
+    }
+  }
   for (const entry of listDir(shipJobsDir)) {
     if (!entry.isDirectory()) continue;
     const rec = readShipJob(NodePath.join(shipJobsDir, entry.name), entry.name);

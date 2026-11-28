@@ -44,6 +44,8 @@ export interface ReviewStatRecord {
   readonly rejectedRisesCount: number;
   readonly fallbackUsed: boolean;
   readonly durationS: number | null;
+  /** A failing playbook challenge the agent shipped past with `ship-queue override`. */
+  readonly overridden?: boolean | undefined;
 }
 
 export interface ReviewStatsGroupRow {
@@ -59,6 +61,9 @@ export interface ReviewStatsGroupRow {
   readonly bypasses: number;
   readonly friction: number;
   readonly fallbacks: number;
+  /** Failing playbook challenges, and how many of them were overridden. */
+  readonly challenges: number;
+  readonly overrides: number;
   readonly breaking: number;
   readonly critical: number;
   readonly high: number;

@@ -172,7 +172,7 @@ export async function watchJob(options: WatchOptions): Promise<number> {
       ) {
         emitReviewIfPresent(root, id, write);
         write(
-          `watch: job ${id} stopped before merge on its CHALLENGED playbook review. You decide: fix the findings, commit, and submit the branch again (the new job replaces this one; watch the new job), or ship as is with: ship-queue override ${id} --reason "<why the findings do not hold>" (the reason goes in the job log and the PR body), then: ship-queue watch ${id}`,
+          `watch: job ${id} is CHALLENGED by its playbook review. To ship as is, override within 30 s: ship-queue override ${id} --reason "<why the findings do not hold>" (the reason goes in the job log and the PR body), then: ship-queue watch ${id}. With no override in 30 s the job fails (reason=challenged) and leaves the queue: fix the findings, commit, and submit the branch again.`,
         );
         return WATCH_EXIT.challenged;
       }

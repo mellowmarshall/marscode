@@ -265,7 +265,8 @@ function UsageReviewsPanelInner({
             <div className="text-2xs text-muted-foreground tabular-nums">
               <T>
                 <Var>{totals.passRatePct.toFixed(1)}</Var>% pass · <Var>{totals.flagged}</Var>{" "}
-                flagged
+                flagged · <Var>{totals.overrides ?? 0}</Var> of <Var>{totals.challenges ?? 0}</Var>{" "}
+                challenges overridden
               </T>
             </div>
           </div>

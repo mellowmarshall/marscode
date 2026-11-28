@@ -62,6 +62,8 @@ interface MutableBucket {
   bypasses: number;
   friction: number;
   fallbacks: number;
+  challenges: number;
+  overrides: number;
   breaking: number;
   critical: number;
   high: number;
@@ -80,6 +82,8 @@ function newBucket(key: string): MutableBucket {
     bypasses: 0,
     friction: 0,
     fallbacks: 0,
+    challenges: 0,
+    overrides: 0,
     breaking: 0,
     critical: 0,
     high: 0,
@@ -98,6 +102,8 @@ function accumulate(bucket: MutableBucket, rec: ReviewStatRecord): void {
   if (rec.bypassDetected) bucket.bypasses += 1;
   if (rec.playbookFriction) bucket.friction += 1;
   if (rec.fallbackUsed) bucket.fallbacks += 1;
+  if (rec.source === "playbook_challenge" && !isPass) bucket.challenges += 1;
+  if (rec.overridden) bucket.overrides += 1;
   bucket.breaking += rec.counts.breaking;
   bucket.critical += rec.counts.critical;
   bucket.high += rec.counts.high;

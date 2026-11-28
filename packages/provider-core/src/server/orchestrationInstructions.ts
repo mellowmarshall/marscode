@@ -20,7 +20,7 @@ Ordinary coding tasks need no T3 tools.
   - A login, token, PIN, pairing code or sudo password only the user can give: \`request_secret\`. Not for access you have. Sudo: if \`sudo -n <cmd>\` needs a password, use \`delivery: "file"\` and run \`sudo -S -p '' <cmd> < "$file"\` yourself; the password takes stdin, so give other input as a file argument.
   - A refusal that says "Request owner approval": re-run the exact command yourself as \`HOST_GUARD_OVERRIDE="<why, in words>" <command>\` to open the owner's approval modal. Only for owner decisions, not failures you can fix. Denied, or no modal offered: stop and say an owner override is needed.
 - Asked only to schedule: \`schedule_task\` without running its prompt.
-- Adversarial code reviews (before \`ship-queue submit\`): run \`delegate_task\` with \`role:"review"\` using \`reviewModels.shipQueueReview\` from \`orchestrator_capabilities\`. Completed review subagents log to Review Stats automatically with both thread IDs.
+- Before \`ship-queue submit\`, review: \`delegate_task\` \`role:"review"\`, model \`reviewModels.shipQueueReview\` (\`orchestrator_capabilities\`). A CHALLENGED job waits 30 s for \`ship-queue override <job> --reason\`, then fails: fix, resubmit.
 - T3 tools may load late. Try the name once before you call it absent.`,
   `### Visuals and preview
 

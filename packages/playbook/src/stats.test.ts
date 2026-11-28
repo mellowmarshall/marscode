@@ -104,6 +104,56 @@ describe("review stats store", () => {
     expect(collectReviewRecords(paths).map((r) => r.id)).toEqual(["ship:1"]);
   });
 
+  it("counts playbook challenges and the ones a ship job overrode", () => {
+    const dir = makeTempDir("pb-stats-");
+    const pb = NodePath.join(dir, "pb", "sample-repo");
+    NodeFS.mkdirSync(pb, { recursive: true });
+    const challenge = (pass: number, commit: string) =>
+      NodeFS.writeFileSync(
+        NodePath.join(pb, `feat_x.${pass}.challenge.json`),
+        JSON.stringify({
+          acceptable: false,
+          summary: "s",
+          diagnosis: "d",
+          repo: "sample-repo",
+          branch: "feat/x",
+          pass,
+          commit,
+          reviewer_model: "gpt-6.2-astra",
+          reviewer_effort: "medium",
+          timestamp: `2026-11-0${pass}T00:00:00Z`,
+          defects: [{ severity: "high", file: "a.ts", summary: "bug" }],
+        }),
+      );
+    challenge(1, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    challenge(2, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    const job = NodePath.join(dir, "jobs", "7");
+    NodeFS.mkdirSync(job, { recursive: true });
+    NodeFS.writeFileSync(
+      NodePath.join(job, "job.json"),
+      JSON.stringify({
+        repo: "owner_sample-repo",
+        branch: "feat/x",
+        challenge_override: {
+          reason: "test-only helper",
+          at: "2026-11-02T00:01:00Z",
+          tip: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
+      }),
+    );
+    const records = collectReviewRecords({
+      playbookStateDir: NodePath.join(dir, "pb"),
+      shipJobsDir: NodePath.join(dir, "jobs"),
+      jsonlPath: NodePath.join(dir, "x.jsonl"),
+    });
+    expect(records.filter((r) => r.overridden).map((r) => r.commit)).toEqual([
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    ]);
+    const stats = aggregateReviewStats(records, { side: "reviewer", by: "model" });
+    expect(stats.totals).toMatchObject({ challenges: 2, overrides: 1 });
+    expect(stats.groups[0]).toMatchObject({ challenges: 2, overrides: 1 });
+  });
+
   it("merges a delegated review thread into the ship job that names it", () => {
     const dir = makeTempDir("pb-stats-");
     const job = NodePath.join(dir, "jobs", "42");

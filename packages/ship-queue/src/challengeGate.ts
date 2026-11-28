@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalDate:off - The playbook challenge as a merge gate: a CHALLENGED review waits for the agent to fix or override.
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off - The playbook challenge as a merge gate: a CHALLENGED review waits 30 s for an override, then fails the job.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
@@ -68,7 +68,8 @@ export function overrideBodySection(reason: string): string {
   return `## Playbook challenge overridden\n\n${reason}\n`;
 }
 
-const CHALLENGE_WAIT_MS = 60 * 60_000;
+/** How long a CHALLENGED job holds its repo's turn for `ship-queue override`; then it fails. */
+export const CHALLENGE_WAIT_MS = 30_000;
 
 /** `git patch-id` of the job's change on its base: what an override covers, across rebases. */
 async function changePatchId(deps: ShipQueueDeps, job: JobRecord, onto: string, tip: string) {
@@ -127,7 +128,13 @@ export function takeChallengeOverride(deps: ShipQueueDeps, job: JobRecord): bool
   const body = NodeFS.readFileSync(bodyFile, "utf8").trimEnd();
   NodeFS.writeFileSync(bodyFile, `${body}\n\n${overrideBodySection(reason)}`, "utf8");
   updateJob(deps.root, job.id, {
-    challenge_override: { reason, at, patch: job.challenged_patch, comment: Boolean(job.pr) },
+    challenge_override: {
+      reason,
+      at,
+      patch: job.challenged_patch,
+      comment: Boolean(job.pr),
+      tip: job.challenged_tip,
+    },
     challenged_tip: undefined,
     challenged_patch: undefined,
     house_tip: undefined,
@@ -139,7 +146,7 @@ export function takeChallengeOverride(deps: ShipQueueDeps, job: JobRecord): bool
   return true;
 }
 
-/** A challenged job the agent never answered stops holding its repo's queue. */
+/** The override window is over: the job fails (reason=challenged) and leaves the queue. */
 export function challengeUnanswered(deps: ShipQueueDeps, job: JobRecord): boolean {
   const since = job.waiting_since ? Date.parse(job.waiting_since) : Number.NaN;
   const now = Date.parse(deps.clock.now());
@@ -147,9 +154,9 @@ export function challengeUnanswered(deps: ShipQueueDeps, job: JobRecord): boolea
 }
 
 /**
- * After the review: a CHALLENGED verdict parks the job, unless the agent overrode a review of
- * this same change (a rebase keeps it; a new commit does not). Anything else, a missing review
- * included, goes on.
+ * After the review: a CHALLENGED verdict holds the job for the override window, unless the agent
+ * overrode a review of this same change (a rebase keeps it; a new commit does not). Anything
+ * else, a missing review included, goes on.
  */
 export async function challengeGate(
   deps: ShipQueueDeps,

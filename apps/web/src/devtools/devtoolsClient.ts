@@ -843,6 +843,8 @@ export interface ReviewStatsGroupRow {
   readonly bypasses: number;
   readonly friction: number;
   readonly fallbacks: number;
+  readonly challenges?: number;
+  readonly overrides?: number;
   readonly breaking: number;
   readonly critical: number;
   readonly high: number;

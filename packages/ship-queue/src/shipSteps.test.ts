@@ -11,7 +11,7 @@ import type { RemoteCommandRunner } from "./sshExec.ts";
 import { fixtureCleanups, makeFixture, SELF, sh } from "./testing/shipStepsFixture.ts";
 import type { ProcessRunner, ShipQueueDeps } from "./types.ts";
 import { WATCH_EXIT, watchJob } from "./watcher.ts";
-import { runJob } from "./worker.ts";
+import { runDueWork, runJob } from "./worker.ts";
 
 afterEach(() => {
   for (const cleanup of fixtureCleanups.splice(0)) cleanup();
@@ -349,23 +349,44 @@ describe("declared merge and routing waits", () => {
 });
 
 describe("unanswered challenge", () => {
-  it("fails a CHALLENGED job with no fix or override within an hour", async () => {
+  it("fails a CHALLENGED job with no override within 30 s, and the repo's next job starts", async () => {
     const fx = makeFixture();
     fx.setVerdict("CHALLENGED");
     let nowMs = Date.UTC(2026, 0, 1);
     const deps: ShipQueueDeps = { ...fx.deps, clock: { now: () => new Date(nowMs).toISOString() } };
     const wt = fx.worktree("feat/98-silent", { "s.txt": "s\n" });
     const id = await fx.submit(wt, "feat/98-silent", deps);
+    const nextWt = fx.worktree("feat/98-next", { "n.txt": "n\n" });
+    const next = await fx.submit(nextWt, "feat/98-next", deps);
+    const started = (job: string) => fx.markers(job).some((m) => m.startsWith("STARTED"));
 
-    expect(await runJob(deps, id)).toBe("blocked");
-    nowMs += 59 * 60_000;
-    expect(await runJob(deps, id)).toBe("blocked");
-    nowMs += 2 * 60_000;
-    expect(await runJob(deps, id)).toBe("ended");
+    // The worker loop runs each repo's head job: the challenged head holds the repo's turn.
+    await runDueWork(deps);
+    expect(readJob(fx.root, id)).toMatchObject({ state: "waiting", waiting_for: "challenge" });
+    fx.setVerdict("PASS");
+    nowMs += 29_000;
+    await runDueWork(deps);
+    expect(readJob(fx.root, id)).toMatchObject({ state: "waiting" });
+    expect(started(next)).toBe(false);
+
+    // No override within 30 s: the job fails, leaves the queue, and the next job runs.
+    nowMs += 2_000;
+    await runDueWork(deps);
     expect(readJob(fx.root, id)).toMatchObject({ state: "failed" });
-    expect(fx.markers(id).at(-1)).toBe(
-      "FAILED reason=challenge_unanswered: no fix or override within an hour",
-    );
-    expect(fx.prs.size).toBe(0);
+    expect(fx.markers(id).at(-1)).toBe("FAILED reason=challenged");
+    for (let tick = 0; tick < 5 && readJob(fx.root, next)?.state !== "done"; tick += 1) {
+      nowMs += 2_000;
+      await runDueWork(deps);
+    }
+    expect(readJob(fx.root, next)).toMatchObject({ state: "done" });
+
+    // An override after the window is refused: the job is over.
+    const out: string[] = [];
+    expect(
+      await runShipQueueCli(["override", id, "--reason", "too late"], {
+        deps,
+        io: { stdout: (t) => out.push(t), stderr: (t) => out.push(t), env: {}, cwd: fx.tmp },
+      }),
+    ).toBe(1);
   });
 });

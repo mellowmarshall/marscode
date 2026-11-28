@@ -225,10 +225,16 @@ export async function runJob(deps: ShipQueueDeps, id: string): Promise<JobStep> 
     if (!(await ownerActionGranted(deps, job))) return "blocked";
     appendLog(deps.root, id, `owner approval landed at ${deps.clock.now()}; resuming`);
   } else if (isParkedOnChallenge(job)) {
-    // Like an owner approval, the agent's override (not a re-armed watch) resumes the job.
+    // Only an override within the window keeps a challenged job: otherwise it fails and leaves
+    // the queue, so it never holds its repo's turn while the agent fixes and resubmits.
     if (!takeChallengeOverride(deps, job)) {
       if (!challengeUnanswered(deps, job)) return "blocked";
-      return stop("challenge_unanswered: no fix or override within an hour");
+      appendLog(
+        deps.root,
+        id,
+        "no override within 30 s of the challenge; fix the findings and resubmit",
+      );
+      return stop("challenged");
     }
     job = requireJob(deps.root, id);
   } else {
