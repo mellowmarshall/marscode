@@ -3,6 +3,8 @@ import * as NodeCrypto from "node:crypto";
 import type * as NodeNet from "node:net";
 import * as NodeStringDecoder from "node:string_decoder";
 
+import { argvSha256 } from "@t3tools/guard-protocol/digests";
+import { PLAN_GUARD, parsePlanEntries } from "@t3tools/guard-protocol/plan";
 import {
   parseBundleSpec,
   sanitizeText,
@@ -20,6 +22,8 @@ import {
 } from "./GuardBrokerTypes.ts";
 import type { GuardGrantStore } from "./GuardGrantStore.ts";
 import type { PeerThreadResolution } from "./GuardPeerIdentity.ts";
+import type { GuardJobBindings } from "./GuardJobBindings.ts";
+import { verifyQueueWorkerJob, type QueueWorkerTrust } from "./GuardQueueWorker.ts";
 import { canonicalCwd } from "./GuardSocketPath.ts";
 
 const MAX_LINE_BYTES = 64 * 1024;
@@ -39,7 +43,10 @@ export interface GuardProtocolContext {
     entry: PendingEntry,
     decision: "approved" | "denied" | "expired" | "disconnected",
     payload: Record<string, unknown>,
+    reason?: string,
   ) => void;
+  readonly queueWorkerTrust: QueueWorkerTrust;
+  readonly jobBindings: GuardJobBindings;
 }
 
 export function writeAndCloseSocket(
@@ -133,7 +140,7 @@ async function handleGuardProtocolMessage(
     writeAndCloseSocket(socket, { ok: false, error: "malformed JSON" });
     return;
   }
-  if (msg.v !== 1) {
+  if (msg.v !== 1 && msg.v !== 2) {
     writeAndCloseSocket(socket, { ok: false, error: "unsupported protocol version" });
     return;
   }
@@ -153,7 +160,24 @@ async function handleGuardProtocolMessage(
     });
     return;
   }
-  if (op !== "peek" && op !== "check" && op !== "request") {
+  if (op === "bind_job") {
+    const peer = await ctx.resolvePeer(socket);
+    if (ctx.isClosed() || socket.destroyed) return;
+    if (!peer.verified) {
+      writeAndCloseSocket(socket, { ok: false, error: peer.error });
+      return;
+    }
+    const bound = ctx.jobBindings.bind(ctx.queueWorkerTrust, {
+      peerPid: peer.peerPid,
+      threadId: peer.threadId,
+      jobId: typeof msg.job_id === "string" ? msg.job_id : "",
+      worktree: typeof msg.cwd === "string" ? msg.cwd : "",
+      branch: sanitizeText(msg.branch, 200),
+    });
+    writeAndCloseSocket(socket, bound.ok ? { ok: true, thread_id: peer.threadId } : bound);
+    return;
+  }
+  if (op !== "peek" && op !== "check" && op !== "use" && op !== "request") {
     writeAndCloseSocket(socket, { ok: false, error: "unsupported op" });
     return;
   }
@@ -169,19 +193,58 @@ async function handleGuardProtocolMessage(
     return;
   }
 
+  const parsedPlan = msg.plan === undefined ? null : parsePlanEntries(msg.plan);
+  if (parsedPlan && !parsedPlan.ok) {
+    writeAndCloseSocket(socket, { ok: false, error: parsedPlan.error });
+    return;
+  }
+  const plan = parsedPlan?.ok ? parsedPlan.entries : undefined;
+  if (
+    plan &&
+    (op !== "request" ||
+      validated.guard !== PLAN_GUARD ||
+      !plan.some((e) => argvSha256(e.command) === validated.digest))
+  ) {
+    writeAndCloseSocket(socket, {
+      ok: false,
+      error: "plan requests use guard 'plan' and list their command",
+    });
+    return;
+  }
+
   const cwd = typeof msg.cwd === "string" ? canonicalCwd(msg.cwd) : "";
   const reqThreadId = sanitizeText(msg.thread_id, 128);
+  const jobId = typeof msg.job_id === "string" ? msg.job_id : "";
   const peer = await ctx.resolvePeer(socket);
   if (ctx.isClosed() || socket.destroyed) return;
   if (!peer.verified) {
     writeAndCloseSocket(socket, { ok: false, error: peer.error });
     return;
   }
-  if (reqThreadId && reqThreadId !== peer.threadId) {
+  let effectiveThreadId = peer.threadId;
+  if (jobId) {
+    if (op === "request") {
+      writeAndCloseSocket(socket, { ok: false, error: "queue workers cannot request grants" });
+      return;
+    }
+    const worker = verifyQueueWorkerJob(ctx.queueWorkerTrust, ctx.jobBindings, {
+      peerPid: peer.peerPid,
+      jobId,
+      guard: validated.guard,
+      command: validated.displayCommand,
+      cwd,
+      bundle: parsedBundle.bundle,
+    });
+    if (!worker.ok) {
+      writeAndCloseSocket(socket, { ok: false, error: worker.error });
+      return;
+    }
+    effectiveThreadId = worker.threadId;
+  }
+  if (reqThreadId && reqThreadId !== effectiveThreadId) {
     writeAndCloseSocket(socket, { ok: false, error: "thread_id does not match caller process" });
     return;
   }
-  const effectiveThreadId = peer.threadId;
 
   const matchedOnce = ctx.store.lookupOnce(
     validated.guard,
@@ -201,18 +264,19 @@ async function handleGuardProtocolMessage(
 
   const replyOnce = (key: string, grant: StoredOnceGrant, consume: boolean) => {
     if (consume) ctx.store.deleteOnce(key);
-    ctx.store.recordEvent({
-      ts: new Date().toISOString(),
-      eventType: "used",
-      grantId: grant.grantId,
-      threadId: grant.threadId || effectiveThreadId,
-      guard: validated.guard,
-      scope: "once",
-      argvSha256: validated.digest,
-      command: validated.displayCommand,
-      summary: validated.displayCommand.slice(0, 3).join(" "),
-      reason: grant.reason,
-    });
+    if (consume)
+      ctx.store.recordEvent({
+        ts: new Date().toISOString(),
+        eventType: "used",
+        grantId: grant.grantId,
+        threadId: grant.threadId || effectiveThreadId,
+        guard: validated.guard,
+        scope: "once",
+        argvSha256: validated.digest,
+        command: validated.displayCommand,
+        summary: validated.displayCommand.slice(0, 3).join(" "),
+        reason: grant.reason,
+      });
     writeAndCloseSocket(socket, {
       ok: true,
       grant_id: grant.grantId,
@@ -224,21 +288,22 @@ async function handleGuardProtocolMessage(
     });
   };
 
-  const replyBundle = (grant: StoredGuardBundleGrant) => {
+  const replyBundle = (grant: StoredGuardBundleGrant, recordUse = true) => {
     const nowIso = new Date().toISOString();
-    ctx.store.recordBundleUse(grant, nowIso, ctx.broadcastGrantsChanged);
-    ctx.store.recordEvent({
-      ts: nowIso,
-      eventType: "used",
-      grantId: grant.grantId,
-      threadId: effectiveThreadId || grant.threadId,
-      guard: validated.guard,
-      scope: "bundle",
-      argvSha256: validated.digest,
-      command: validated.displayCommand,
-      summary: grant.summary,
-      reason: grant.reason,
-    });
+    if (recordUse) ctx.store.recordBundleUse(grant, nowIso, ctx.broadcastGrantsChanged);
+    if (recordUse)
+      ctx.store.recordEvent({
+        ts: nowIso,
+        eventType: "used",
+        grantId: grant.grantId,
+        threadId: effectiveThreadId || grant.threadId,
+        guard: validated.guard,
+        scope: "bundle",
+        argvSha256: validated.digest,
+        command: validated.displayCommand,
+        summary: grant.summary,
+        reason: grant.reason,
+      });
     writeAndCloseSocket(socket, {
       ok: true,
       grant_id: grant.grantId,
@@ -251,24 +316,33 @@ async function handleGuardProtocolMessage(
     });
   };
 
-  if (op === "check") {
-    if (matchedOnce) return replyOnce(matchedOnce.key, matchedOnce.grant, true);
-    if (matchedBundle) return replyBundle(matchedBundle);
+  if (op === "check" || op === "use") {
+    // v2 `check` is read-only; v1 `check` keeps consuming so older installed hooks stay single-use.
+    const consume = op === "use" || msg.v === 1;
+    if (matchedOnce) return replyOnce(matchedOnce.key, matchedOnce.grant, consume);
+    if (matchedBundle) return replyBundle(matchedBundle, consume);
     writeAndCloseSocket(socket, { ok: false });
     return;
   }
 
   const wait = msg.wait !== false;
-  const consumeExisting = msg.consume_existing !== false;
-  if (matchedOnce) {
-    if (!wait && !consumeExisting) {
-      writeAndCloseSocket(socket, { ok: true, already_approved: true, scope: "once" });
+  const storeGrant = plan !== undefined || msg.store_grant === true;
+  const consumeExisting = msg.consume_existing !== false && !storeGrant;
+  if (matchedOnce && !plan) {
+    if (!consumeExisting) {
+      writeAndCloseSocket(socket, {
+        ok: true,
+        already_approved: true,
+        scope: "once",
+        grant_id: matchedOnce.grant.grantId,
+        thread_id: matchedOnce.grant.threadId || effectiveThreadId,
+      });
       return;
     }
     return replyOnce(matchedOnce.key, matchedOnce.grant, true);
   }
-  if (matchedBundle) {
-    if (!wait && !consumeExisting) {
+  if (matchedBundle && !plan) {
+    if (!consumeExisting) {
       writeAndCloseSocket(socket, {
         ok: true,
         already_approved: true,
@@ -288,10 +362,11 @@ async function handleGuardProtocolMessage(
     return;
   }
 
-  const coalesceKey =
-    parsedBundle.bundleEligible && parsedBundle.bundle
+  const coalesceKey = plan
+    ? `plan\0${plan.map((c) => JSON.stringify(c)).join("\0")}\0${cwd}\0${effectiveThreadId}`
+    : parsedBundle.bundleEligible && parsedBundle.bundle
       ? `bundle\0${bundleKeyOf(validated.guard, parsedBundle.bundle)}\0${effectiveThreadId}`
-      : `once\0${onceGrantKey(validated.guard, validated.digest, cwd, effectiveThreadId)}`;
+      : `${storeGrant ? "stored" : "once"}\0${onceGrantKey(validated.guard, validated.digest, cwd, effectiveThreadId)}`;
 
   for (const existing of ctx.pending.values()) {
     if (!existing.settled && existing.coalesceKey === coalesceKey) {
@@ -341,8 +416,9 @@ async function handleGuardProtocolMessage(
     createdAt: new Date(nowMs).toISOString(),
     expiresAt: new Date(nowMs + timeoutMs).toISOString(),
     ...(parsedBundle.bundle ? { bundle: parsedBundle.bundle } : {}),
-    bundleEligible: parsedBundle.bundleEligible,
+    bundleEligible: plan ? false : parsedBundle.bundleEligible,
     wholeCommitGates: parsedBundle.wholeCommitGates,
+    ...(plan ? { plan } : {}),
   };
 
   const summary = parsedBundle.bundle?.summary ?? validated.displayCommand.slice(0, 3).join(" ");
@@ -360,16 +436,24 @@ async function handleGuardProtocolMessage(
       summary,
       reason: "override request timed out waiting for owner",
     });
-    ctx.finishPending(entry, "expired", {
-      ok: false,
-      denied: false,
-      error: "override request timed out waiting for owner",
-    });
+    ctx.finishPending(
+      entry,
+      "expired",
+      { ok: false, denied: false, error: "override request timed out waiting for owner" },
+      "timed out",
+    );
   }, timeoutMs);
 
   const sockets = new Set<NodeNet.Socket>();
   if (wait) sockets.add(socket);
-  const entry: PendingEntry = { request, coalesceKey, sockets, timer, settled: false };
+  const entry: PendingEntry = {
+    request,
+    coalesceKey,
+    sockets,
+    timer,
+    storeGrant,
+    settled: false,
+  };
   ctx.pending.set(requestId, entry);
 
   if (wait) {

@@ -216,6 +216,65 @@ describe("gitGuard and pushGuard against real git repos", () => {
     expect(
       decideGit(["config", "include.path", "/tmp/evil.cfg"], {}, worktreeDir, config).verdict,
     ).toBe("deny");
+    // The first step of the rename two-step is not a guarded key, so it alone is allowed.
+    expect(
+      decideGit(["config", "foo.hooksPath", "/dev/null"], {}, worktreeDir, config).verdict,
+    ).toBe("allow");
+    expect(
+      decideGit(["config", "-e"], { GIT_EDITOR: "sed -i s/x/y/" }, worktreeDir, config).verdict,
+    ).toBe("deny");
+    // Reading a guarded key is a read, whatever the flags; a value after the key is a write
+    for (const read of [
+      ["config", "core.hooksPath"],
+      ["config", "--get", "core.hooksPath"],
+      ["config", "--local", "core.hooksPath"],
+      ["config", "--file", ".gitmodules", "core.hooksPath"],
+      ["config", "--type", "path", "core.hooksPath"],
+      ["config", "get", "core.hooksPath"],
+    ]) {
+      expect(decideGit(read, {}, worktreeDir, config).verdict, read.join(" ")).toBe("allow");
+    }
+    expect(
+      decideGit(["config", "core.hooksPath", "core.hooksPath"], {}, worktreeDir, config).verdict,
+    ).toBe("deny");
+    expect(
+      decideGit(["config", "--local", "core.hooksPath", "/dev/null"], {}, worktreeDir, config)
+        .verdict,
+    ).toBe("deny");
+    expect(
+      decideGit(["config", "set", "core.hooksPath", "/dev/null"], {}, worktreeDir, config).verdict,
+    ).toBe("deny");
+    // Probes: option parsing stops at --/--end-of-options; a dash word after the key is a value.
+    for (const write of [
+      ["config", "--", "core.hooksPath", "-x"],
+      ["config", "--", "include.path", "-evil.cfg"],
+      ["config", "--local", "--", "core.hooksPath", "-x"],
+      ["config", "--end-of-options", "core.hooksPath", "-x"],
+      ["config", "--local", "--end-of-options", "include.path", "-evil.cfg"],
+      ["config", "core.hooksPath", "-x"],
+      ["config", "--show-origin", "core.hooksPath", "/dev/null"],
+      ["config", "--", "--get", "core.hooksPath"],
+      ["config", "--unknown-flag", "core.hooksPath"],
+      // Words after the key are positional: any of them makes it a write.
+      ["config", "core.hooksPath", "--local"],
+      ["config", "core.hooksPath", "--get"],
+      ["config", "core.hooksPath", "--file", "x"],
+      ["config", "core.hooksPath", "--type", "path"],
+      ["config", "core.hooksPath", "--show-origin"],
+      ["config", "--local", "core.hooksPath", "--list"],
+      ["config", "--get", "core.hooksPath", "/dev/null"],
+      ["config", "--local", "core.hooksPath", ".githooks"],
+      // Section edits can turn any key into core.hooksPath or an include: owner-only.
+      ["config", "--rename-section", "foo", "core"],
+      ["config", "--rename-section", "foo", "include"],
+      ["config", "rename-section", "foo", "core"],
+      ["config", "foo", "core", "--rename-section"],
+      ["config", "--remove-section", "core"],
+      ["config", "-e"],
+      ["config", "--edit", "--local"],
+    ]) {
+      expect(decideGit(write, {}, worktreeDir, config).verdict, write.join(" ")).toBe("deny");
+    }
     // Setting core.hooksPath to tracked directory containing pre-commit is allowed
     expect(
       decideGit(["config", "core.hooksPath", ".githooks"], {}, worktreeDir, config).verdict,

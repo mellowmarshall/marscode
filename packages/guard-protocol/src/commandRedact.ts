@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Universal command-line secret redaction across all host guards (logs and approval modals).
 import * as NodePath from "node:path";
-import { redactArgvCommand } from "@t3tools/guard-protocol/redaction";
+import { redactArgvCommand } from "./redaction.ts";
 
 const SECRET_KEY_RE =
   /(?:secret|token|passw|credential|private_?key|api_?key|apikey|database_?url|dsn|bearer|auth(?!or(?:$|[_-]))|_key$|(?:^|_)pat(?:_|$))/i;

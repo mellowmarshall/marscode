@@ -60,6 +60,7 @@ import { handleNativeFleetRequest } from "./fleet/FleetRoutes.ts";
 import type { NativeFleetService } from "./fleet/NativeFleetService.ts";
 import { makeNativeFleetFromContext } from "./fleet/NativeFleetWiring.ts";
 import { GuardGrantBroker } from "./GuardGrantBroker.ts";
+import { makeGuardThreadNotifier } from "./GuardThreadNotifier.ts";
 import * as JobRegistry from "./jobs/JobRegistry.ts";
 import * as Reaper from "./reaper/ReaperService.ts";
 import { createShipQueueEventStream } from "./ShipQueueEventStream.ts";
@@ -416,6 +417,7 @@ export function makeLayer(deps: DevtoolsDeps = {}) {
           bundlePersistence,
           secretGrants,
           signingStateDir,
+          notifyThread: yield* makeGuardThreadNotifier(),
         });
       if (Option.isSome(pullRequestSvc)) {
         const merges = yield* pullRequestSvc.value.subscribeMerges;

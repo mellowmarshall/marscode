@@ -1,8 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - House stages: secret scan, §16 hygiene, protected-diff grant check, and advisory declaration challenge.
 import * as NodeFS from "node:fs";
 
-import { inspectWorktreeBundle } from "@t3tools/guard-protocol/bundle-inspect";
-import { checkGuardGrant } from "@t3tools/guard-protocol/client";
+import {
+  inspectWorktreeBundle,
+  type WireGuardBundle,
+} from "@t3tools/guard-protocol/bundle-inspect";
+import { checkGuardGrant, useGuardGrant } from "@t3tools/guard-protocol/client";
 import { computeBundleKey } from "@t3tools/guard-protocol/digests";
 
 import { appendLog, jobBodyPath, mark, updateJob } from "./jobStore.ts";
@@ -25,27 +28,51 @@ export function shipGrantCommand(worktree: string, branch: string): ReadonlyArra
   return ["ship-queue", "submit", worktree, branch];
 }
 
-/** `#6` guard-protocol: bundle inspection and the check-first grant lookup, with no local digest logic. */
-export const guardProtocolGuard: ShipGuard = {
-  inspect: ({ worktree, branch, baseRef }) =>
-    inspectWorktreeBundle({
-      guard: "ship-queue",
-      command: shipGrantCommand(worktree, branch),
-      cwd: worktree,
-      worktree,
-      branch,
-      baseRef,
-    }),
-  check: async ({ worktree, branch, bundle }) => {
-    const reply = await checkGuardGrant({
-      guard: "ship-queue",
-      command: shipGrantCommand(worktree, branch),
-      cwd: worktree,
-      bundle,
-    });
-    return { ok: reply.ok, reason: reply.error ?? reply.reason };
-  },
-};
+/**
+ * `#6` guard-protocol: bundle inspection and the grant lookup, with no local digest logic. The
+ * worker names its job, so the broker binds the check to that job's recorded thread.
+ */
+export function makeGuardProtocolGuard(options?: {
+  readonly socketPath?: string | undefined;
+}): ShipGuard {
+  return {
+    inspect: ({ worktree, branch, baseRef }) =>
+      inspectWorktreeBundle({
+        guard: "ship-queue",
+        command: shipGrantCommand(worktree, branch),
+        cwd: worktree,
+        worktree,
+        branch,
+        baseRef,
+      }),
+    check: async ({ worktree, branch, bundle, jobId, consume }) => {
+      const reply = await (consume ? useGuardGrant : checkGuardGrant)({
+        guard: "ship-queue",
+        command: shipGrantCommand(worktree, branch),
+        cwd: worktree,
+        bundle,
+        jobId,
+        ...(options?.socketPath ? { socketPath: options.socketPath } : {}),
+      });
+      return { ok: reply.ok, reason: reply.error ?? reply.reason };
+    },
+  };
+}
+
+export const guardProtocolGuard: ShipGuard = makeGuardProtocolGuard();
+
+export function protectedDiffDigest(bundle: WireGuardBundle): string {
+  return computeBundleKey({
+    repo: bundle.repo,
+    branch: bundle.branch,
+    prOrIssue: bundle.pr_or_issue,
+    guard: "ship-queue",
+    gateIds: bundle.gates.map((g) => g.gate_id),
+    protectedPaths: bundle.protected_paths,
+    protectedDiffSha256: bundle.protected_diff_sha256,
+    bodySha256: bundle.body_sha256,
+  });
+}
 
 /** `gitleaks` over the job's own commits; `null` when the host has no scanner. */
 export function gitleaksScanner(run: ProcessRunner): SecretScanner {
@@ -137,29 +164,28 @@ export async function houseStages(
 
   const bundle = deps.guard.inspect({ worktree: job.worktree, branch: job.branch, baseRef: onto });
   if (!bundle) return { kind: "pass" };
-  const digest = computeBundleKey({
-    repo: bundle.repo,
-    branch: bundle.branch,
-    prOrIssue: bundle.pr_or_issue,
-    guard: "ship-queue",
-    gateIds: bundle.gates.map((g) => g.gate_id),
-    protectedPaths: bundle.protected_paths,
-    protectedDiffSha256: bundle.protected_diff_sha256,
-    bodySha256: bundle.body_sha256,
+  const digest = protectedDiffDigest(bundle);
+  // The broker binds the worker's check to the digest on the job record, so record it first.
+  const digestChanged = job.action_digest !== digest;
+  if (digestChanged) updateJob(deps.root, job.id, { action_digest: digest });
+  const grant = await deps.guard.check({
+    worktree: job.worktree,
+    branch: job.branch,
+    bundle,
+    jobId: job.id,
+    consume: true,
   });
-  const grant = await deps.guard.check({ worktree: job.worktree, branch: job.branch, bundle });
   if (grant.ok) {
     appendLog(deps.root, job.id, `protected diff approved: ${bundle.protected_paths.join(", ")}`);
     return { kind: "pass" };
   }
-  if (job.action_digest !== digest) {
+  if (digestChanged) {
     const gates = bundle.gates.map((g) => g.gate_id).join(",");
     mark(
       deps.root,
       job.id,
-      `ACTION_REQUIRED job=${job.id} gates=${gates} paths=${bundle.protected_paths.join(",")} digest=${digest}: the owner approves this protected diff (marscode-guard override ship-queue), then re-arm the watch`,
+      `ACTION_REQUIRED job=${job.id} gates=${gates} paths=${bundle.protected_paths.join(",")} digest=${digest}: the owner approves this protected diff (marscode-guard override ship-queue); the job resumes on its own once approved`,
     );
-    updateJob(deps.root, job.id, { action_digest: digest });
   }
   return { kind: "action", digest };
 }

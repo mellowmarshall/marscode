@@ -120,40 +120,116 @@ function isTrackedHooksDir(repo: RepoInfo, value: string, config: HostGuardsConf
   return listing.split(/\s+/).some((name) => HOOK_NAMES.has(name));
 }
 
+const CONFIG_VALUE_FLAGS = new Set([
+  "-f",
+  "--file",
+  "--blob",
+  "--type",
+  "--default",
+  "--comment",
+  "--value",
+]);
+const CONFIG_READ_MODES = new Set(["--get", "--get-all", "--get-regexp", "--list", "-l"]);
+/** Flags a read may carry before its key; anything else makes the call a write. */
+const CONFIG_READ_FLAGS = new Set([
+  "--local",
+  "--global",
+  "--system",
+  "--worktree",
+  "--show-origin",
+  "--show-scope",
+  "--null",
+  "-z",
+  "--name-only",
+  "--includes",
+  "--no-includes",
+  "--bool",
+  "--int",
+  "--bool-or-int",
+  "--path",
+  "--expiry-date",
+]);
+/** Section-wide edits: any key can become core.hooksPath or an include, so they are owner-only. */
+const CONFIG_SECTION_EDITS = new Set([
+  "--rename-section",
+  "--remove-section",
+  "-e",
+  "--edit",
+  "rename-section",
+  "remove-section",
+  "edit",
+]);
+
+/**
+ * Splits `git config` arguments: options until the first positional (or `--`), then every word
+ * is positional, whatever it looks like. `unknown` marks an option no read may carry.
+ */
+function splitConfigArgs(rest: ReadonlyArray<string>): {
+  readonly readMode: boolean;
+  readonly positionals: ReadonlyArray<string>;
+  readonly unknown: boolean;
+} {
+  const positionals: string[] = [];
+  let readMode = false;
+  let unknown = false;
+  let parsing = true;
+  for (let i = 0; i < rest.length; i += 1) {
+    const a = rest[i]!;
+    if (parsing && (a === "--" || a === "--end-of-options")) {
+      parsing = false;
+      continue;
+    }
+    if (!parsing || positionals.length > 0 || !a.startsWith("-") || a === "-") {
+      positionals.push(a);
+      continue;
+    }
+    const name = a.startsWith("--") && a.includes("=") ? a.slice(0, a.indexOf("=")) : a;
+    if (CONFIG_VALUE_FLAGS.has(name)) {
+      if (name === a) i += 1;
+    } else if (CONFIG_READ_MODES.has(a)) {
+      readMode = true;
+    } else if (!CONFIG_READ_FLAGS.has(a)) {
+      unknown = true;
+    }
+  }
+  return { readMode, positionals, unknown };
+}
+
+/** Whether `git config` is one of the exact read shapes; everything else is a write. */
+function isConfigRead(rest: ReadonlyArray<string>): boolean {
+  const { readMode, positionals, unknown } = splitConfigArgs(rest);
+  if (unknown) return false;
+  if (readMode) return positionals.length <= 1;
+  if (positionals.length === 1) return true;
+  return (
+    (positionals.length === 2 && positionals[0] === "get") ||
+    (positionals.length === 1 && positionals[0] === "list")
+  );
+}
+
 export function checkGitConfigWrite(
   repo: RepoInfo,
   sub: ReadonlyArray<string>,
   config: HostGuardsConfig,
 ): GuardVerdict {
   const rest = sub.slice(1);
+  const terminator = rest.findIndex((a) => a === "--" || a === "--end-of-options");
+  const optionRegion = terminator === -1 ? rest : rest.slice(0, terminator);
+  // git also reads options after positionals, so a section edit anywhere before `--` counts.
+  const { positionals } = splitConfigArgs(rest);
+  const subcommand = positionals[0] ?? "";
+  const sectionEdit =
+    optionRegion.find((w) => w.startsWith("-") && CONFIG_SECTION_EDITS.has(w.split("=", 1)[0]!)) ??
+    (CONFIG_SECTION_EDITS.has(subcommand) ? subcommand : undefined);
+  if (sectionEdit) {
+    return {
+      verdict: "deny",
+      reason: `host git guard: refusing git config ${sectionEdit} in ${repo.slug}: a section edit can switch its hooks off; owner approval required.`,
+    };
+  }
   const keys = rest.filter((a) => GUARDED_CONFIG_RE.test(a));
   if (keys.length === 0) return ALLOW_VERDICT;
-  const reads = new Set([
-    "--get",
-    "--get-all",
-    "--get-regexp",
-    "-l",
-    "--list",
-    "get",
-    "list",
-    "--show-origin",
-    "--show-scope",
-  ]);
-  const writes = new Set([
-    "--unset",
-    "--unset-all",
-    "set",
-    "unset",
-    "--add",
-    "--replace-all",
-    "--rename-section",
-    "--remove-section",
-    "--edit",
-    "-e",
-  ]);
-  const hasRead = rest.some((r) => reads.has(r));
-  const hasWrite = rest.some((r) => writes.has(r));
-  if (hasRead && !hasWrite) return ALLOW_VERDICT;
+  if (isConfigRead(rest)) return ALLOW_VERDICT;
 
   const firstKey = keys[0]!;
   if (firstKey.toLowerCase() !== "core.hookspath") {
@@ -162,14 +238,19 @@ export function checkGitConfigWrite(
       reason: `host git guard: refusing to write ${firstKey} in ${repo.slug}: an included file can switch its hooks off.`,
     };
   }
-  if (rest.some((r) => r === "--unset" || r === "--unset-all" || r === "unset")) {
+  if (rest.some((o) => o.startsWith("--unset")) || subcommand === "unset") {
     return {
       verdict: "deny",
       reason: `host git guard: refusing to unset core.hooksPath in ${repo.slug}: it drops the repo's hooks.`,
     };
   }
-  const value =
-    [...rest].reverse().find((a) => !a.startsWith("-") && a !== "set" && a !== firstKey) ?? "";
+  // Only `[set] core.hooksPath <dir>` with no other flag may set it, to a tracked hooks dir.
+  const keyAt = subcommand === "set" ? 1 : 0;
+  const plainSet =
+    rest.every((w) => !w.startsWith("-")) &&
+    positionals.length === keyAt + 2 &&
+    positionals[keyAt] === firstKey;
+  const value = plainSet ? (positionals.at(-1) ?? "") : "";
   if (!isTrackedHooksDir(repo, value, config)) {
     return {
       verdict: "deny",

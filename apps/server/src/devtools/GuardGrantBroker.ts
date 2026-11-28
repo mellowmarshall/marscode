@@ -1,14 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off - Server-owned 0600 Unix socket broker matching @t3tools/guard-protocol.
-import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
 
-import {
-  sanitizeText,
-  type GuardBrokerEvent,
-  type GuardGrantScope,
-  type PendingGuardRequest,
-  type UnifiedActiveGrant,
+import type {
+  GuardBrokerEvent,
+  PendingGuardRequest,
+  UnifiedActiveGrant,
 } from "@t3tools/guard-protocol/protocol";
 
 import { readExceptionsFile } from "./GuardAuditFiles.ts";
@@ -20,14 +17,24 @@ import type {
 } from "./GuardBrokerTypes.ts";
 import { GuardGrantStore } from "./GuardGrantStore.ts";
 import { defaultResolvePeerThreadId, type PeerThreadResolution } from "./GuardPeerIdentity.ts";
+import { GuardJobBindings } from "./GuardJobBindings.ts";
+import { defaultQueueWorkerTrust, type QueueWorkerTrust } from "./GuardQueueWorker.ts";
+import {
+  resolveGuardRequest,
+  type GuardResolveInput,
+  type GuardResolveResult,
+  type PendingDecision,
+} from "./GuardRequestResolver.ts";
 import {
   defaultGuardSocketPath,
   ensurePrivateParentDir,
   probeSocketAlive,
 } from "./GuardSocketPath.ts";
 import { attachGuardSocketReader, writeAndCloseSocket } from "./GuardSocketProtocol.ts";
+import { guardThreadNoticeText, type GuardThreadNotice } from "./GuardThreadNotice.ts";
 
 export type {
+  GuardThreadNotice,
   GuardBrokerEvent,
   GuardBundlePersistence,
   GuardGrantBrokerOptions,
@@ -57,6 +64,9 @@ export class GuardGrantBroker {
     platform: NodeJS.Platform,
   ) => Promise<PeerThreadResolution>;
   private readonly hasCustomResolver: boolean;
+  private readonly queueWorkerTrust: QueueWorkerTrust;
+  private readonly jobBindings = new GuardJobBindings();
+  private readonly notifyThread: ((notice: GuardThreadNotice) => void) | undefined;
 
   private server: NodeNet.Server | null = null;
   private startPromise: Promise<void> | null = null;
@@ -82,6 +92,8 @@ export class GuardGrantBroker {
       auditLogPath: options.auditLogPath,
     });
     this.hasCustomResolver = options.resolvePeerThreadId !== undefined;
+    this.queueWorkerTrust = options.queueWorkerTrust ?? defaultQueueWorkerTrust();
+    this.notifyThread = options.notifyThread;
     const getTrustedCodexAppServers = options.getTrustedCodexAppServers;
     this.resolvePeerThreadId =
       options.resolvePeerThreadId ??
@@ -170,9 +182,12 @@ export class GuardGrantBroker {
       broadcastGrantsChanged: () => void this.broadcastGrantsChanged(),
       finishPending: (
         entry: PendingEntry,
-        decision: "approved" | "denied" | "expired" | "disconnected",
+        decision: PendingDecision,
         payload: Record<string, unknown>,
-      ) => this.finishPending(entry, decision, payload),
+        reason?: string,
+      ) => this.finishPending(entry, decision, payload, reason),
+      queueWorkerTrust: this.queueWorkerTrust,
+      jobBindings: this.jobBindings,
     };
 
     const server = NodeNet.createServer((socket) =>
@@ -313,141 +328,21 @@ export class GuardGrantBroker {
     });
   }
 
-  resolveRequest(
-    requestId: string,
-    input: {
-      readonly decision: "approve" | "deny";
-      readonly scope?: GuardGrantScope | undefined;
-      readonly reason?: string | undefined;
-      readonly approvedVia?: string | undefined;
-    },
-  ): {
-    readonly found: boolean;
-    readonly grantId?: string;
-    readonly scope?: GuardGrantScope;
-    readonly persisted?: Promise<boolean>;
-  } {
-    const entry = this.pending.get(requestId);
-    if (!entry || entry.settled) return { found: false };
-    const req = entry.request;
-    const nowIso = new Date().toISOString();
-
-    if (input.decision === "approve") {
-      const grantId = `t3g_${NodeCrypto.randomBytes(12).toString("hex")}`;
-      const reason = sanitizeText(input.reason, 400) || req.proposedReason || "approved in T3 Code";
-      const wantBundle =
-        input.scope === "bundle" &&
-        this.store.canSignBundles &&
-        req.threadId.length > 0 &&
-        req.bundleEligible &&
-        req.bundle !== undefined;
-      const effectiveScope: GuardGrantScope = wantBundle ? "bundle" : "once";
-      const approvedVia = input.approvedVia ?? "t3-input-request";
-
-      if (wantBundle && req.bundle) {
-        entry.settled = true;
-        clearTimeout(entry.timer);
-        this.pending.delete(req.requestId);
-        const created = this.store.createSignedBundle({
-          grantId,
-          guard: req.guard,
-          threadId: req.threadId,
-          cwd: req.cwd,
-          bundle: req.bundle,
-          reason,
-          approvedVia,
-          nowIso,
-          initialUseCount: entry.sockets.size > 0 ? 1 : 0,
-          onPersisted: () => void this.broadcastGrantsChanged(),
-        });
-        const persisted = created.persisted.then((ok) => {
-          if (!ok) {
-            this.flushPendingSockets(entry, "denied", {
-              ok: false,
-              denied: false,
-              error: "failed to persist bundle grant",
-            });
-            return false;
-          }
-          this.recordDecisionEvent(req, "approved", "bundle", nowIso, reason, grantId);
-          this.flushPendingSockets(entry, "approved", {
-            ok: true,
-            grant_id: grantId,
-            scope: "bundle",
-            reason,
-            approved_by: "human",
-            ...(input.approvedVia ? { approved_via: input.approvedVia } : {}),
-            signature: created.signature,
-            thread_id: req.threadId,
-          });
-          return true;
-        });
-        return { found: true, grantId, scope: "bundle", persisted };
-      }
-
-      if (entry.sockets.size === 0) {
-        if (!req.threadId) {
-          this.finishPending(entry, "denied", {
-            ok: false,
-            denied: true,
-            error: "override requests require a verified thread_id",
-          });
-          return { found: true };
-        }
-        this.store.pruneExpiredOnce();
-        this.store.putOnceGrant({
-          grantId,
-          guard: req.guard,
-          argvSha256: req.argvSha256,
-          cwd: req.cwd,
-          reason,
-          approvedBy: "human",
-          approvedVia: input.approvedVia,
-          threadId: req.threadId,
-          expiresAtMs: Date.now() + this.defaultGrantTtlMs,
-        });
-      }
-
-      this.recordDecisionEvent(req, "approved", effectiveScope, nowIso, reason, grantId);
-      this.finishPending(entry, "approved", {
-        ok: true,
-        grant_id: grantId,
-        scope: effectiveScope,
-        reason,
-        approved_by: "human",
-        ...(input.approvedVia ? { approved_via: input.approvedVia } : {}),
-        thread_id: req.threadId,
-      });
-      return { found: true, grantId, scope: effectiveScope };
-    }
-
-    const reason = sanitizeText(input.reason, 400) || "denied by owner in T3 Code";
-    this.recordDecisionEvent(req, "denied", req.bundleEligible ? "bundle" : "once", nowIso, reason);
-    this.finishPending(entry, "denied", { ok: false, denied: true, error: reason });
-    return { found: true };
-  }
-
-  private recordDecisionEvent(
-    req: PendingGuardRequest,
-    eventType: "approved" | "denied",
-    scope: GuardGrantScope,
-    ts: string,
-    reason: string,
-    grantId?: string,
-  ): void {
-    this.store.recordEvent({
-      ts,
-      eventType,
-      requestId: req.requestId,
-      ...(grantId ? { grantId } : {}),
-      threadId: req.threadId,
-      guard: req.guard,
-      scope,
-      argvSha256: req.argvSha256,
-      command: req.command,
-      summary: req.bundle?.summary ?? req.command.slice(0, 3).join(" "),
-      reason,
-    });
+  resolveRequest(requestId: string, input: GuardResolveInput): GuardResolveResult {
+    return resolveGuardRequest(
+      {
+        pending: this.pending,
+        store: this.store,
+        grantTtlMs: this.defaultGrantTtlMs,
+        broadcastGrantsChanged: () => void this.broadcastGrantsChanged(),
+        flushPendingSockets: (entry, decision, payload, reason) =>
+          this.flushPendingSockets(entry, decision, payload, reason),
+        finishPending: (entry, decision, payload, reason) =>
+          this.finishPending(entry, decision, payload, reason),
+      },
+      requestId,
+      input,
+    );
   }
 
   readAuditTail(limit = 50): ReadonlyArray<Record<string, unknown>> {
@@ -464,25 +359,42 @@ export class GuardGrantBroker {
 
   private finishPending(
     entry: PendingEntry,
-    decision: "approved" | "denied" | "expired" | "disconnected",
+    decision: PendingDecision,
     payload: Record<string, unknown>,
+    reason = "",
   ): void {
     if (entry.settled) return;
     entry.settled = true;
     clearTimeout(entry.timer);
     this.pending.delete(entry.request.requestId);
-    this.flushPendingSockets(entry, decision, payload);
+    this.flushPendingSockets(entry, decision, payload, reason);
   }
 
   private flushPendingSockets(
     entry: PendingEntry,
-    decision: "approved" | "denied" | "expired" | "disconnected",
+    decision: PendingDecision,
     payload: Record<string, unknown>,
+    reason = "",
   ): void {
+    // A caller still waiting on the socket gets the decision itself; otherwise wake the thread.
+    const nobodyWaiting = entry.sockets.size === 0;
     for (const sock of entry.sockets) {
       writeAndCloseSocket(sock, payload);
     }
     entry.sockets.clear();
     this.emit({ type: "pending_resolved", requestId: entry.request.requestId, decision });
+    const threadId = entry.request.threadId;
+    if (nobodyWaiting && threadId && decision !== "disconnected" && this.notifyThread) {
+      try {
+        this.notifyThread({
+          threadId,
+          requestId: entry.request.requestId,
+          decision,
+          text: guardThreadNoticeText(entry.request, decision, reason),
+        });
+      } catch {
+        // notification is best-effort; the decision already stands
+      }
+    }
   }
 }

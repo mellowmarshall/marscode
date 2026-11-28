@@ -1009,6 +1009,9 @@ importers:
       '@t3tools/guard-protocol':
         specifier: workspace:*
         version: link:../../packages/guard-protocol
+      '@t3tools/host-guards':
+        specifier: workspace:*
+        version: link:../../packages/host-guards
       '@t3tools/provider-testing':
         specifier: workspace:*
         version: link:../../packages/provider-testing

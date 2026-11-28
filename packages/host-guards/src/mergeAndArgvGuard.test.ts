@@ -6,7 +6,7 @@ import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { checkArgvSecrets } from "./argvGuard.ts";
-import { redactGuardCommand } from "./commandRedact.ts";
+import { redactGuardCommand } from "@t3tools/guard-protocol/command-redact";
 import { loadHostConfig, type HostGuardsConfig } from "./hostConfig.ts";
 import { decideGh, isManualMergeDrill } from "./mergeGuard.ts";
 
@@ -213,10 +213,139 @@ describe("mergeGuard and ghApiGuard", () => {
         repoDir,
         config,
       ).verdict,
-    ).toBe("allow");
+    ).toBe("deny");
     expect(decideGh(["api", "repos/example-org/demo-app/pulls/12"], repoDir, config).verdict).toBe(
       "allow",
     );
+
+    // Repo settings, renames, creation, deletion: owner-only with their own reason, not the merge one
+    const repoAdmin = [
+      ["api", "-X", "PATCH", "repos/example-org/demo-app", "-f", "name=demo-app-next"],
+      ["api", "-X", "DELETE", "repos/example-org/demo-app"],
+      ["api", "-X", "POST", "repos/example-org/demo-app/transfer", "-f", "new_owner=x"],
+      ["api", "-X", "POST", "orgs/example-org/repos", "-f", "name=fresh"],
+      ["repo", "rename", "demo-app-next", "-R", "example-org/demo-app"],
+      ["repo", "rename", "demo-app-next"],
+      ["repo", "edit", "example-org/demo-app", "--description", "new words"],
+      ["repo", "edit", "--enable-wiki=false"],
+      ["repo", "delete", "example-org/demo-app", "--yes"],
+      ["repo", "create", "example-org/fresh", "--private"],
+      ["repo", "create", "fresh"],
+    ];
+    for (const args of repoAdmin) {
+      const verdict = decideGh(args, repoDir, config);
+      expect(verdict.verdict, args.join(" ")).toBe("deny");
+      expect(verdict.verdict === "deny" ? verdict.reason : "").toContain(
+        "repo settings change: owner approval required",
+      );
+    }
+    // The cwd repo is always a candidate target, so a managed cwd needs the owner.
+    expect(
+      decideGh(["repo", "edit", "other-org/other-repo", "-d", "x"], repoDir, config).verdict,
+    ).toBe("deny");
+    expect(decideGh(["repo", "view", "example-org/demo-app"], repoDir, config).verdict).toBe(
+      "allow",
+    );
+    expect(decideGh(["api", "repos/example-org/demo-app"], repoDir, config).verdict).toBe("allow");
+
+    // Probes: the target resolves as gh does, value flags never pose as the repo, unknown flags fail closed.
+    const outside = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "hg-outside-"));
+    tempDirs.push(outside);
+    const ghRepoEnv = { ...process.env, GH_REPO: "example-org/demo-app" };
+    const adminProbes: Array<{ args: string[]; cwd: string; env?: NodeJS.ProcessEnv }> = [
+      { args: ["repo", "delete", "--yes"], cwd: outside, env: ghRepoEnv },
+      { args: ["repo", "rename", "demo-app-next", "--yes"], cwd: outside, env: ghRepoEnv },
+      { args: ["repo", "edit", "--description", "x"], cwd: outside, env: ghRepoEnv },
+      { args: ["repo", "delete", "-Rexample-org/demo-app", "--yes"], cwd: outside },
+      { args: ["repo", "rename", "next", "--repo=example-org/demo-app"], cwd: outside },
+      { args: ["repo", "edit", "--default-branch", "release/v2"], cwd: repoDir },
+      { args: ["repo", "edit", "--description", "other-org/other-repo"], cwd: repoDir },
+      { args: ["repo", "edit", "--homepage", "other-org/other-repo"], cwd: repoDir },
+      { args: ["repo", "edit", "--template", "example-org/demo-app"], cwd: outside },
+      { args: ["repo", "fork", "--remote", "example-org/demo-app"], cwd: outside },
+      { args: ["repo", "fork", "example-org/demo-app", "--remote", "--clone"], cwd: outside },
+      {
+        args: ["repo", "deploy-key", "add", "key.pub", "-w", "-R", "example-org/demo-app"],
+        cwd: outside,
+      },
+      { args: ["repo", "deploy-key", "add", "key.pub", "-w"], cwd: repoDir },
+      { args: ["repo", "deploy-key", "list", "-R", "example-org/demo-app"], cwd: outside },
+      { args: ["repo", "archive", "example-org/demo-app", "-y"], cwd: outside },
+      { args: ["repo", "autolink", "create", "X-", "https://x/<num>"], cwd: repoDir },
+      {
+        args: ["api", "-X", "POST", "repos/other-org/other-repo/forks", "--input", "-"],
+        cwd: outside,
+      },
+      {
+        args: ["api", "-X", "POST", "repos/example-org/demo-app/hooks", "-f", "name=web"],
+        cwd: outside,
+      },
+      { args: ["api", "-X", "PUT", "repos/example-org/demo-app/environments/prod"], cwd: outside },
+      {
+        args: [
+          "api",
+          "-X",
+          "PUT",
+          "repos/example-org/demo-app/actions/permissions",
+          "-F",
+          "enabled=false",
+        ],
+        cwd: outside,
+      },
+      { args: ["api", "-X", "PATCH", "repos/example-org/demo-app/invitations/1"], cwd: outside },
+      { args: ["api", "-X", "POST", "orgs/example-org/hooks", "-f", "name=web"], cwd: outside },
+      { args: ["api", "-X", "PUT", "repos/example-org/demo-app/rulesets/1"], cwd: outside },
+      { args: ["repo", "deploy-key", "add", "key.pub", "--allow-write"], cwd: repoDir },
+      { args: ["repo", "fork", "other-org/other-repo", "--org", "example-org"], cwd: outside },
+      { args: ["api", "-X", "POST", "user/repos", "-f", "name=x"], cwd: outside },
+      {
+        args: [
+          "api",
+          "-X",
+          "POST",
+          "repos/other-org/other-repo/forks",
+          "-f",
+          "organization=example-org",
+        ],
+        cwd: outside,
+      },
+      {
+        args: ["api", "-X", "POST", "repos/other-org/tpl/generate", "-f", "owner=example-org"],
+        cwd: outside,
+      },
+      {
+        args: ["api", "-X", "PUT", "repos/example-org/demo-app/collaborators/someone"],
+        cwd: outside,
+      },
+      {
+        args: ["api", "-X", "POST", "repos/example-org/demo-app/keys", "-f", "key=x"],
+        cwd: outside,
+      },
+    ];
+    for (const probe of adminProbes) {
+      const verdict = decideGh(
+        probe.args,
+        probe.cwd,
+        config,
+        probe.env ? { env: probe.env } : undefined,
+      );
+      expect(verdict.verdict, probe.args.join(" ")).toBe("deny");
+      expect(verdict.verdict === "deny" ? verdict.reason : "").toContain("repo settings change");
+    }
+    for (const args of [
+      ["repo", "view", "example-org/demo-app"],
+      ["repo", "clone", "example-org/demo-app"],
+      ["repo", "delete", "other-org/other-repo", "--yes"],
+      ["api", "-X", "POST", "repos/other-org/other-repo/forks"],
+      ["api", "-X", "POST", "repos/example-org/demo-app/issues", "-f", "title=t"],
+      ["api", "-X", "POST", "repos/example-org/demo-app/issues/3/comments", "-f", "body=b"],
+      ["api", "-X", "POST", "repos/example-org/demo-app/pulls/3/reviews", "-f", "event=COMMENT"],
+      ["api", "-X", "POST", "repos/example-org/demo-app/labels", "-f", "name=bug"],
+      ["api", "-X", "POST", "repos/example-org/demo-app/statuses/abc1234", "-f", "state=success"],
+      ["api", "-X", "POST", "repos/example-org/demo-app/check-runs", "-f", "name=ci"],
+    ]) {
+      expect(decideGh(args, outside, config).verdict, args.join(" ")).toBe("allow");
+    }
 
     // GraphQL mutations refused (raw, unicode-escaped JSON --input, unreadable -F @- / @/dev/stdin), read query allowed
     expect(

@@ -5,6 +5,8 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
+import { bindGuardJob, identifyGuardThread } from "@t3tools/guard-protocol/client";
+
 import { ghForge } from "./ghForge.ts";
 import {
   runDepsSubcommand,
@@ -46,6 +48,16 @@ export interface CliOptions {
   /** Starts the detached worker after a submit or for a watched job with none; the default spawns `ship-queue work`. */
   readonly startWorker?: ((root: string, jobId?: string) => string) | undefined;
   readonly waitForChange?: ((root: string, id: string) => () => Promise<void>) | undefined;
+  /** The submitter's kernel-verified thread ("" when none); the default asks the guard broker. */
+  readonly identifyThread?: (() => Promise<string>) | undefined;
+  /** Records the job's verified thread, worktree and branch with the broker; true when bound. */
+  readonly bindJob?:
+    | ((input: {
+        readonly jobId: string;
+        readonly worktree: string;
+        readonly branch: string;
+      }) => Promise<boolean>)
+    | undefined;
   readonly quietMs?: number | undefined;
 }
 
@@ -83,6 +95,11 @@ function startDetachedWorker(root: string, env: CliIo["env"], jobId?: string): s
   return res.kind === "spawned" ? `worker=${res.via}` : `worker=running pid=${res.pid}`;
 }
 
+async function verifiedSubmitterThread(env: CliIo["env"]): Promise<string> {
+  const res = await identifyGuardThread({ env: { ...env } });
+  return res.ok ? (res.threadId?.trim() ?? "") : "";
+}
+
 function stageOf(logText: string): string {
   let stage = "";
   for (const line of logText.split("\n")) {
@@ -98,7 +115,7 @@ function watcherBlock(id: string): string {
     `  ship-queue watch ${id}`,
     "The watch prints each marker as it lands and exits on DONE job= (0) or FAILED reason= (1).",
     "It exits 2 on QUIET job= (the job keeps running; look, then re-arm or cancel) and 3 on",
-    "ACTION_REQUIRED job= (the owner approves the protected diff; re-arm after).",
+    "ACTION_REQUIRED job= (the owner approves the protected diff; the job then resumes on its own).",
     "Outcome lines: REBASED, PUSH_EXIT=, PR=, MERGE_EXIT=, CLEANED, then DONE or FAILED reason=.",
   ].join("\n");
 }
@@ -205,18 +222,32 @@ export async function runShipQueueCli(
       io.stderr(`ship-queue: refused: body file not readable: ${bodyFile}\n`);
       return 1;
     }
+    // The job's thread decides whose owner grants its worker may use, so it comes from the
+    // broker's view of this process, never from the caller's environment.
+    const thread = await (options.identifyThread ?? (() => verifiedSubmitterThread(io.env)))();
     const res = await submitJob(deps, {
       worktree: NodePath.resolve(io.cwd, worktree),
       branch,
       title,
       body,
-      identity: { session: io.env.SHIP_QUEUE_AGENT_SESSION, thread: io.env.T3CODE_THREAD_ID },
+      identity: { session: io.env.SHIP_QUEUE_AGENT_SESSION, thread },
     });
     if (!res.ok) {
       io.stderr(`ship-queue: refused: ${res.reason}\n`);
       return 1;
     }
     for (const warning of res.warnings) io.stderr(`ship-queue: warning: ${warning}\n`);
+    if (thread) {
+      const bind =
+        options.bindJob ??
+        (async (input) => (await bindGuardJob({ ...input, env: { ...io.env } })).ok);
+      const bound = await bind({ jobId: res.id, worktree: res.record.worktree, branch });
+      if (!bound) {
+        io.stderr(
+          "ship-queue: warning: the guard broker did not bind this job to your thread; a protected diff in it cannot use owner approvals\n",
+        );
+      }
+    }
     io.stdout(`job=${res.id} log=${jobLogPath(root, res.id)}\n${watcherBlock(res.id)}\n`);
     if (!rest.includes("--no-start")) io.stdout(`${startWorker(root, res.id)}\n`);
     return 0;

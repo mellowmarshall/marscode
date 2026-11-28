@@ -13546,5 +13546,7 @@
   "27d76249d09eb69f": "Guia de revisão pronto",
   "faa3bb26abb39c93": "O guia de revisão falhou",
   "b7df38b7d8792d78": "Abrir guia",
-  "9e91e9a77b664e4e": "Não foi possível iniciar um guia de revisão"
+  "9e91e9a77b664e4e": "Não foi possível iniciar um guia de revisão",
+  "5b00253e46e9b400": "Uma aprovação cobre estes {count} comandos, cada um utilizável uma vez por 30 minutos:",
+  "e125f3b5b8f2db0d": "Aprovar todos da lista"
 }

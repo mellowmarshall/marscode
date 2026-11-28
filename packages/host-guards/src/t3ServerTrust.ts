@@ -35,7 +35,7 @@ const WORKER_EXTRA_UNSAFE_ENV_PREFIXES: ReadonlyArray<string> = ["BASH_FUNC_"];
 const T3_CODEX_SCOPE_RE =
   /\/app-t3code-agents(?:-[0-9a-f]+)?\.slice\/t3code-codex-[A-Za-z0-9_.-]+\.scope(?:\s|$)/;
 const UNTRUSTED_EXE_PREFIXES = [...TEST_TMP_PREFIXES, "/dev/shm/"];
-const TRUSTED_QUEUE_SCRIPT_BASENAMES = new Set([
+export const TRUSTED_QUEUE_SCRIPT_BASENAMES: ReadonlySet<string> = new Set([
   "bin.mjs",
   "cli.mjs",
   "ship-queue.mjs",
@@ -48,7 +48,7 @@ function extractAppImageMountRoot(exePath: string): string | null {
   return match?.[1] ?? null;
 }
 
-function isUntrustedPath(filePath: string): boolean {
+export function isUntrustedPath(filePath: string): boolean {
   return UNTRUSTED_EXE_PREFIXES.some((prefix) => filePath.startsWith(prefix));
 }
 
@@ -243,7 +243,10 @@ export function resolveT3ThreadId(
 // Trust boundary: the installed ship-queue roots and server binaries run as the same uid as
 // agents and are often owner-writable. These checks stop spoofed PIDs, preload env, and tmp
 // executables; they do not stop a same-uid agent that rewrites the installed tools in place.
-function buildTrustedQueueRoots(queueRoot: string, procFs: ProcFsReader): ReadonlyArray<string> {
+export function buildTrustedQueueRoots(
+  queueRoot: string,
+  procFs: ProcFsReader,
+): ReadonlyArray<string> {
   const roots: string[] = ["/usr/local/lib/marscode", "/opt/marscode"];
   const canonHome = procFs.canonicalHome();
   if (canonHome) {
@@ -278,7 +281,7 @@ function isSafeLdLibraryPath(value: string, procFs: ProcFsReader): boolean {
   return true;
 }
 
-function hasUnsafeWorkerEnv(pid: number, procFs: ProcFsReader): boolean {
+export function hasUnsafeWorkerEnv(pid: number, procFs: ProcFsReader): boolean {
   const raw = procFs.readText(`/proc/${pid}/environ`);
   if (raw === null) return true;
   for (const entry of raw.split("\0")) {
@@ -294,7 +297,10 @@ function hasUnsafeWorkerEnv(pid: number, procFs: ProcFsReader): boolean {
   return false;
 }
 
-function isUnderTrustedRoot(targetPath: string, trustedRoots: ReadonlyArray<string>): boolean {
+export function isUnderTrustedRoot(
+  targetPath: string,
+  trustedRoots: ReadonlyArray<string>,
+): boolean {
   if (!targetPath || isUntrustedPath(targetPath)) return false;
   return trustedRoots.some((root) => targetPath === root || targetPath.startsWith(`${root}/`));
 }
@@ -448,6 +454,30 @@ function collectRecordedQueueWorkers(
   return out;
 }
 
+/**
+ * Whether `pid` is a live ship-queue worker that recorded itself in the queue's worker locks
+ * (same start time) and passes `isTrustedShipQueueProcess`.
+ */
+export function isRecordedQueueWorker(
+  queueRoot: string,
+  pid: number,
+  procFs: ProcFsReader = defaultProcFs,
+): boolean {
+  return collectRecordedQueueWorkers(queueRoot, procFs).some(
+    (worker) => worker.pid === pid && isLiveTrustedWorker(worker, queueRoot, procFs),
+  );
+}
+
+function isLiveTrustedWorker(
+  worker: RecordedWorkerIdentity,
+  queueRoot: string,
+  procFs: ProcFsReader,
+): boolean {
+  const stat = readProcStat(worker.pid, procFs);
+  if (!stat.starttime || stat.starttime !== worker.startTicks) return false;
+  return isTrustedShipQueueProcess(worker.pid, queueRoot, procFs);
+}
+
 export function isQueueDaemonInAncestry(
   queueRoot: string,
   startPid?: number,
@@ -463,13 +493,7 @@ export function isQueueDaemonInAncestry(
 
   // MarsCode's detached systemd-scope `ship-queue work` workers record `{ pid, startTicks }`
   // in `<queueRoot>/worker.json` or `<queueRoot>/workers/<version>.json`.
-  for (const worker of collectRecordedQueueWorkers(queueRoot, procFs)) {
-    if (!ancestorPids.has(worker.pid)) continue;
-    const stat = readProcStat(worker.pid, procFs);
-    if (!stat.starttime || stat.starttime !== worker.startTicks) continue;
-    if (isTrustedShipQueueProcess(worker.pid, queueRoot, procFs)) {
-      return true;
-    }
-  }
-  return false;
+  return collectRecordedQueueWorkers(queueRoot, procFs).some(
+    (worker) => ancestorPids.has(worker.pid) && isLiveTrustedWorker(worker, queueRoot, procFs),
+  );
 }

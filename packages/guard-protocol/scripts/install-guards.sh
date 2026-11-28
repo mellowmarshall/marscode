@@ -76,7 +76,9 @@ MODULES=(
   bundleInspect.ts
   cli.ts
   client.ts
+  commandRedact.ts
   digests.ts
+  plan.ts
   protocol.ts
   redaction.ts
   signing.ts

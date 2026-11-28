@@ -141,7 +141,15 @@ function buildGuardApproval(req: PendingGuardRequest): ThreadDevtoolsApproval {
     : m(msg("Host guard ({guard})"), { guard: guardName });
 
   let detail = cmdText;
-  if (req.bundle) {
+  if (req.plan && req.plan.length > 0) {
+    const header = m(
+      msg("One approval covers these {count} commands, each usable once for 30 minutes:"),
+      {
+        count: req.plan.length,
+      },
+    );
+    detail = [header, "", ...req.plan.map((e) => formatSafeCommandArgv(e.command))].join("\n");
+  } else if (req.bundle) {
     const lines: string[] = [];
     const gateNames = req.bundle.gates
       .map((g) => sanitizeApprovalDisplayText(g.gateId, 48))
@@ -168,9 +176,11 @@ function buildGuardApproval(req: PendingGuardRequest): ThreadDevtoolsApproval {
   }
 
   const reason = sanitizeApprovalDisplayText(req.proposedReason || req.refusal, 280);
-  const approveLabel = req.bundleEligible
-    ? m(msg("Approve for this diff"))
-    : m(msg("Approve once"));
+  const approveLabel = req.plan
+    ? m(msg("Approve all listed"))
+    : req.bundleEligible
+      ? m(msg("Approve for this diff"))
+      : m(msg("Approve once"));
   const options: ReadonlyArray<ProviderApprovalOption> = [
     { decision: "decline", label: m(msg("Deny")) },
     { decision: "accept", label: approveLabel },

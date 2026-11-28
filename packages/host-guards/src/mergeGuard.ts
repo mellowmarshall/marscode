@@ -3,6 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 
 import { decideGhApiCall } from "./ghApiGuard.ts";
+import { decideGhRepoAdmin } from "./ghRepoAdmin.ts";
 import {
   expandGhAlias,
   extractGhCommandTokens,
@@ -291,6 +292,10 @@ export function decideGh(
     const idx = tokens[0]!.index;
     const normalizedArgs = ["api", ...args.slice(0, idx), ...args.slice(idx + 1)];
     return decideGhApiCall(normalizedArgs, cwd, config, queued, env);
+  }
+
+  if (words[0] === "repo" && words[1] && words[1] !== "sync") {
+    return decideGhRepoAdmin(args, words, tokens[1]!.index, cwd, config, env);
   }
 
   if (words[0] === "repo" && words[1] === "sync") {

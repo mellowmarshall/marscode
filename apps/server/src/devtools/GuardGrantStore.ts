@@ -30,6 +30,7 @@ import {
   type SecretGrantProvider,
   type StoredOnceGrant,
 } from "./GuardBrokerTypes.ts";
+import { GuardPlanGrants, PLAN_KEY_PREFIX } from "./GuardPlanGrants.ts";
 import { canonicalCwd, resolveConfiguredStateDir } from "./GuardSocketPath.ts";
 
 function memoryBundleKey(bundleKey: string, threadId: string): string {
@@ -61,6 +62,7 @@ function toPublicBundleGrant(row: StoredGuardBundleGrant): ActiveGuardBundleGran
 
 export class GuardGrantStore {
   private readonly preapproved = new Map<string, StoredOnceGrant>();
+  readonly plans = new GuardPlanGrants();
   private readonly memoryBundles = new Map<string, StoredGuardBundleGrant>();
   private readonly signingKeyPair: GuardSigningKeyPair | null;
   private readonly bundlePersistence: GuardBundlePersistence | undefined;
@@ -129,6 +131,7 @@ export class GuardGrantStore {
 
   clearOnceGrants(): void {
     this.preapproved.clear();
+    this.plans.clear();
   }
 
   pruneExpiredOnce(): void {
@@ -138,9 +141,10 @@ export class GuardGrantStore {
     }
   }
 
-  canAddOnceGrant(): boolean {
+  canAddOnceGrant(count = 1): boolean {
     this.pruneExpiredOnce();
-    return this.preapproved.size < this.maxPreapproved;
+    this.plans.pruneExpired();
+    return this.preapproved.size + this.plans.size + count <= this.maxPreapproved;
   }
 
   preapproveOnce(input: {
@@ -196,11 +200,13 @@ export class GuardGrantStore {
     }
     const unscopedKey = onceGrantKey(guard, digest, cwd, "");
     const unscoped = this.preapproved.get(unscopedKey);
-    return unscoped ? { key: unscopedKey, grant: unscoped } : null;
+    if (unscoped) return { key: unscopedKey, grant: unscoped };
+    return this.plans.lookup(guard, digest, cwd, threadId);
   }
 
   deleteOnce(key: string): void {
-    this.preapproved.delete(key);
+    if (key.startsWith(PLAN_KEY_PREFIX)) this.plans.delete(key);
+    else this.preapproved.delete(key);
   }
 
   async lookupBundle(

@@ -14,6 +14,8 @@ import type {
   StoredGuardBundleGrant,
 } from "../persistence/GuardGrants.ts";
 import type { PeerThreadResolution } from "./GuardPeerIdentity.ts";
+import type { QueueWorkerTrust } from "./GuardQueueWorker.ts";
+import type { GuardThreadNotice } from "./GuardThreadNotice.ts";
 import { canonicalCwd } from "./GuardSocketPath.ts";
 import type { TrustedCodexAppServer } from "./TrustedProviderRegistry.ts";
 
@@ -67,6 +69,9 @@ export interface GuardGrantBrokerOptions {
   readonly resolvePeerThreadId?:
     | ((socket: NodeNet.Socket) => Promise<PeerThreadResolution>)
     | undefined;
+  readonly queueWorkerTrust?: QueueWorkerTrust | undefined;
+  /** Wakes the requesting thread when no caller is still waiting on the decision. */
+  readonly notifyThread?: ((notice: GuardThreadNotice) => void) | undefined;
 }
 
 export interface StoredOnceGrant {
@@ -86,6 +91,8 @@ export interface PendingEntry {
   readonly coalesceKey: string;
   readonly sockets: Set<NodeNet.Socket>;
   readonly timer: ReturnType<typeof setTimeout>;
+  /** Approval is stored for the guarded command to consume, never handed to the waiting caller. */
+  readonly storeGrant: boolean;
   settled: boolean;
 }
 

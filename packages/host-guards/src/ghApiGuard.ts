@@ -4,6 +4,7 @@ import * as NodePath from "node:path";
 
 import { resolveEnvGhRepoSlug } from "./ghArgParse.ts";
 import { decideGhGraphqlCall, GH_UNREADABLE_INPUT } from "./ghGraphqlGuard.ts";
+import { createsManagedRepo, isEverydayApiWrite, repoAdminRefusal } from "./ghRepoAdmin.ts";
 import type { HostGuardsConfig } from "./hostConfig.ts";
 import { ALLOW_VERDICT, type GuardVerdict } from "./pushGuard.ts";
 import { FALLBACK_BASES, formatMergeRefusal, inspectRepo, isSlugInScope } from "./repoScope.ts";
@@ -137,6 +138,9 @@ export function decideGhApiCall(
     return decideGhGraphqlCall({ endpoint, fields, raw, hasInputFlag }, here, config, queued);
   }
 
+  if (createsManagedRepo(method, path, fields, raw, config)) {
+    return repoAdminRefusal(`gh api ${method} ${path}`);
+  }
   const repoMatch = /^repos\/([^/]+)\/([^/]+)(?:\/(.*))?$/.exec(path);
   if (!repoMatch || method === "GET") return ALLOW_VERDICT;
 
@@ -168,7 +172,12 @@ export function decideGhApiCall(
   }
 
   if (!isSlugInScope(owner, config, name)) return ALLOW_VERDICT;
-  if (queued) return ALLOW_VERDICT;
+  // Deny by default: only everyday writes run without the owner, even for the queue.
+  if (queued) {
+    return isEverydayApiWrite(method, rest, true)
+      ? ALLOW_VERDICT
+      : repoAdminRefusal(`gh api ${method} ${path}`);
+  }
 
   const target = hereSlug && hereSlug[0] === owner && hereSlug[1] === name ? here : null;
   const bases = target ? target.bases() : FALLBACK_BASES;
@@ -184,13 +193,7 @@ export function decideGhApiCall(
     };
   }
 
-  if (
-    /^pulls\/\d+\/merge$/.test(rest) ||
-    rest === "merges" ||
-    rest === "merge-upstream" ||
-    rest === "" ||
-    /^rulesets(?:\/.*)?$/.test(rest)
-  ) {
+  if (/^pulls\/\d+\/merge$/.test(rest) || rest === "merges" || rest === "merge-upstream") {
     return {
       verdict: "deny",
       reason: formatMergeRefusal(`gh api ${method} ${path}`, target, config),
@@ -249,5 +252,7 @@ export function decideGhApiCall(
       };
     }
   }
-  return ALLOW_VERDICT;
+  return isEverydayApiWrite(method, rest, false)
+    ? ALLOW_VERDICT
+    : repoAdminRefusal(`gh api ${method} ${path}`);
 }

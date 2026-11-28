@@ -3,7 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import { cleanupMergedJob } from "./cleanup.ts";
-import { houseStages } from "./houseGate.ts";
+import { houseStages, protectedDiffDigest } from "./houseGate.ts";
 import {
   appendLog,
   cancelRequested,
@@ -37,6 +37,38 @@ export interface DueWorkResult {
   readonly blocked: ReadonlyArray<string>;
   /** Repos whose landing lock another live worker holds. */
   readonly busyRepos: ReadonlyArray<string>;
+}
+
+/** How often a job parked on an owner action re-checks its grant (read-only) on the worker's tick. */
+const ACTION_RECHECK_MS = 10_000;
+const lastActionCheck = new Map<string, string>();
+
+/**
+ * A parked job resumes on its own once the owner's grant lands: the worker peeks (never
+ * consumes) the grant for the digest it waits on, so no watch re-arm is needed and no rebase
+ * runs while nothing changed.
+ */
+async function ownerActionGranted(deps: ShipQueueDeps, job: JobRecord): Promise<boolean> {
+  const now = deps.clock.now();
+  const last = lastActionCheck.get(job.id);
+  if (last !== undefined && elapsedMs(last, now) < ACTION_RECHECK_MS) return false;
+  lastActionCheck.set(job.id, now);
+  if (!job.rebased_onto || !job.action_digest) return true;
+  const bundle = deps.guard.inspect({
+    worktree: job.worktree,
+    branch: job.branch,
+    baseRef: job.rebased_onto,
+  });
+  if (!bundle || protectedDiffDigest(bundle) !== job.action_digest) return true;
+  const grant = await deps.guard.check({
+    worktree: job.worktree,
+    branch: job.branch,
+    bundle,
+    jobId: job.id,
+    consume: false,
+  });
+  if (grant.ok) lastActionCheck.delete(job.id);
+  return grant.ok;
 }
 
 function elapsedMs(from: string | undefined, to: string): number {
@@ -180,8 +212,16 @@ export async function runJob(deps: ShipQueueDeps, id: string): Promise<JobStep> 
   };
   if (cancelled()) return "ended";
 
-  const watcher = await awaitWatcher(deps, job);
-  if (watcher !== "go") return watcher;
+  // The watch that started the job exits on ACTION_REQUIRED by design; the owner's approval
+  // (and the thread notice the broker sends) is what resumes it, not a re-armed watch.
+  const parkedOnAction = job.state === "waiting" && job.waiting_for === "action";
+  if (parkedOnAction) {
+    if (!(await ownerActionGranted(deps, job))) return "blocked";
+    appendLog(deps.root, id, `owner approval landed at ${deps.clock.now()}; resuming`);
+  } else {
+    const watcher = await awaitWatcher(deps, job);
+    if (watcher !== "go") return watcher;
+  }
   if (job.state === "queued") {
     const versionPatch =
       deps.workerVersion && (!job.worker_version || !job.worker_entry)

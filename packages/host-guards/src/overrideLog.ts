@@ -1,9 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off - Standalone Node CLI log persistence for overrides.log and refusals.jsonl with injectable clock.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import type { GuardGrantReply } from "@t3tools/guard-protocol/client";
 import { argvSha256 } from "@t3tools/guard-protocol/digests";
 
-import { redactGuardCommand } from "./commandRedact.ts";
+import { redactGuardCommand } from "@t3tools/guard-protocol/command-redact";
 import { safeRealpath, type HostGuardsConfig } from "./hostConfig.ts";
 import { defaultProcFs, type ProcFsReader } from "./procFs.ts";
 import { resolveCallerIdentity } from "./procIdentity.ts";
@@ -222,4 +223,37 @@ export function writeRefusalRecord(
   } catch {
     // Refusal logging is best-effort.
   }
+}
+
+/** Records an override the broker granted (owner approval in MarsCode). */
+export function recordBrokerGrant(
+  reply: GuardGrantReply,
+  input: {
+    readonly guard: string;
+    readonly command: ReadonlyArray<string>;
+    readonly cwd: string;
+    readonly refusal: string;
+    readonly proposedReason: string;
+    readonly session: string;
+    readonly threadId: string;
+    readonly extra?: Readonly<Record<string, unknown>> | undefined;
+  },
+  runtime: OverrideLogRuntime,
+): boolean {
+  return writeOverrideRecord(
+    {
+      guard: input.guard,
+      command: input.command,
+      cwd: input.cwd,
+      refusal: input.refusal,
+      why: reply.reason || input.proposedReason || "Approved via MarsCode",
+      session: input.session,
+      via: "t3-input-request",
+      threadId: reply.threadId || input.threadId,
+      grantId: reply.grantId,
+      approvedVia: reply.approvedVia,
+      extra: input.extra,
+    },
+    runtime,
+  );
 }

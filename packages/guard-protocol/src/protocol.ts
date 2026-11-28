@@ -6,6 +6,8 @@ export const GUARD_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 export const MAX_GUARD_ARGS = 256;
 export const MAX_BUNDLE_GATES = 32;
 export const MAX_BUNDLE_PATHS = 128;
+/** v2: `check` and `peek` are read-only and `use` consumes. v1 `check` keeps consuming for old clients. */
+export const GUARD_PROTOCOL_VERSION = 2;
 
 /**
  * Whole-commit gates judge the entire tree at HEAD (not isolated protected files).
@@ -72,6 +74,12 @@ export interface GuardBundleSpec {
   readonly summary: string;
 }
 
+export interface GuardPlanEntry {
+  /** The host guard whose refusal this entry lifts; it matches no other guard. */
+  readonly guard: string;
+  readonly command: ReadonlyArray<string>;
+}
+
 export interface PendingGuardRequest {
   readonly requestId: string;
   readonly guard: string;
@@ -88,6 +96,8 @@ export interface PendingGuardRequest {
   readonly bundle?: GuardBundleSpec | undefined;
   readonly bundleEligible?: boolean | undefined;
   readonly wholeCommitGates?: ReadonlyArray<string> | undefined;
+  /** A batch request: one approval covers each listed command once. */
+  readonly plan?: ReadonlyArray<GuardPlanEntry> | undefined;
 }
 
 export interface ActiveGuardBundleGrant {
