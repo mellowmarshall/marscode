@@ -107,6 +107,50 @@ describe("playbook check (evidence-only) on a real worktree", () => {
     expect(statusOf(granted, "ratchet")).toBe("PASS");
   });
 
+  it("lets a repo that is still on a playbook 7 declaration ship, only while the declaration equals the base", async () => {
+    // The shape of a real unmigrated declaration: settings playbook 8 no longer runs.
+    const v7 = {
+      contracts: {
+        size: { command: "scripts/size.sh" },
+        tools: { steps: ["lint"] },
+        generations: { command: "scripts/generate.sh" },
+      },
+      ci: { none: "not used in this fixture repository" },
+    };
+    const repo = makeFixtureRepo();
+    repo.writeJson("playbook.json", v7);
+    repo.write("src/a.ts", "export const a = 1;\n");
+    const base = repo.commit("base");
+    repo.branch("feat/change");
+    repo.write("src/a.ts", "export const a = 2;\n");
+    repo.commit("an ordinary change");
+    const same = await check(repo.root, base);
+    expect(same.exitCode).toBe(0);
+    expect(same.results).toHaveLength(1);
+    expect(same.results[0]).toMatchObject({ check: "declaration", status: "PASS" });
+    expect(same.results[0]?.summary).toContain("playbook 7 declaration, the same as the base");
+
+    // A change to the playbook 7 declaration itself is not "unmigrated": it must be valid.
+    repo.writeJson("playbook.json", { ...v7, contracts: { size: { command: "true" } } });
+    repo.commit("edit the old declaration");
+    const edited = await check(repo.root, base);
+    expect(edited.exitCode).toBe(1);
+    expect(statusOf(edited, "declaration")).toBe("FAIL");
+  });
+
+  it("still fails a migrated repo whose change adds a retired playbook 7 setting", async () => {
+    const { repo, base } = repoWithBase();
+    const head = evidenceDeclaration() as { contracts: Record<string, unknown> };
+    repo.writeJson("playbook.json", {
+      ...head,
+      contracts: { ...head.contracts, size: { command: "true" } },
+    });
+    repo.commit("add a retired setting");
+    const report = await check(repo.root, base);
+    expect(report.exitCode).toBe(1);
+    expect(statusOf(report, "declaration")).toBe("FAIL");
+  });
+
   it("fails when a repo's evidence receipt reports a failing check", async () => {
     const { repo, base } = repoWithBase();
     writeEvidence(repo, "tools", {
