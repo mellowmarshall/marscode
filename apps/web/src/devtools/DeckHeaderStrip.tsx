@@ -1,14 +1,12 @@
 /**
- * Fleet Console instrument strip: host chips (a select area with status, uptime and load that wraps
- * rather than truncates, and a separate CI switch) and the selected host's telemetry gauges and actions.
+ * Fleet Console instrument strip: host chips (status, uptime and load on their own full-width line
+ * that wraps rather than truncates, CI switch) and the selected host's telemetry gauges and actions.
  */
 import { T, useGT } from "gt-react";
 import { BotIcon, FileSearchIcon, RefreshCwIcon } from "lucide-react";
 
 import { Button } from "../components/ui/button";
 import type { MergedFleetHost } from "./devdeckTypes";
-import { FleetCiSwitch, type FleetCiToggle } from "./FleetCiSwitch";
-import "./fleetHostChip.css";
 import { formatJobBytes } from "./jobs/jobTypes";
 
 function formatUptimeShort(seconds: number | undefined): string {
@@ -90,7 +88,7 @@ export function DeckHeaderStrip({
   readonly selectedHost: MergedFleetHost | null;
   readonly busyKeys: ReadonlySet<string>;
   readonly onSelectHost: (id: string) => void;
-  readonly onToggleCi: FleetCiToggle;
+  readonly onToggleCi: (host: MergedFleetHost, enabled: boolean) => void;
   readonly onCheckHosts: () => void;
   readonly onRunStorageReport: (host: MergedFleetHost) => void;
   readonly onStartCleanupReview: (host: MergedFleetHost) => void;
@@ -134,7 +132,7 @@ export function DeckHeaderStrip({
   return (
     <div className="border-b border-border bg-background">
       <div className="px-4 py-2.5">
-        <div data-fd="host-grid" role="group" aria-label={gt("Fleet machines")}>
+        <div data-fd="host-grid" role="tablist" aria-label={gt("Fleet machines")}>
           {hosts.map((host) => {
             const active = selectedHost?.id === host.id;
             const up = formatUptimeShort(host.telemetry?.uptime_s);
@@ -146,6 +144,7 @@ export function DeckHeaderStrip({
               load !== null && host.telemetry?.cpus ? load > host.telemetry.cpus : false;
             const dotState =
               host.status === "offline" ? "offline" : host.problem !== null ? "degraded" : "up";
+            const ciEnabled = !host.ciOff;
             const probeName = host.probeHostName ?? host.id;
             const toggling = busyKeys.has(`ci:${probeName}`);
             const canToggleCi = Boolean(host.probeHostName);
@@ -154,42 +153,44 @@ export function DeckHeaderStrip({
             return (
               <div
                 key={host.id}
+                role="tab"
+                tabIndex={0}
+                aria-selected={active}
                 data-fd="host-badge"
                 data-selected={active}
                 data-remote={!host.isLocal}
                 data-has-right={hasRight}
+                onClick={() => onSelectHost(host.id)}
+                onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return;
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onSelectHost(host.id);
+                  }
+                }}
               >
-                {/* Selecting the host and switching its CI are separate targets: no click on the
-                    select area ever reaches the switch, and the switch never selects. */}
-                <button
-                  type="button"
-                  aria-pressed={active}
-                  data-fd="host-select"
-                  onClick={() => onSelectHost(host.id)}
-                >
-                  <span data-fd="host-line">
-                    <span data-fd="dot" data-s={dotState} />
-                    <span data-fd="host-name">{host.shortName}</span>
-                  </span>
-                  <span data-fd="host-meta">
-                    {host.status === "offline" ? (
-                      <span>{gt("offline")}</span>
-                    ) : (
-                      <>
-                        {up ? <span>{`up ${up}`}</span> : null}
-                        {up && load !== null ? <span aria-hidden>{"·"}</span> : null}
-                        {load !== null ? (
-                          <span>
-                            {`${gt("load")} `}
-                            <b data-warn={loadHot}>{load.toFixed(2)}</b>
-                          </span>
-                        ) : !up ? (
-                          <span>{host.platform}</span>
-                        ) : null}
-                      </>
-                    )}
-                  </span>
-                </button>
+                <div data-fd="host-line">
+                  <span data-fd="dot" data-s={dotState} />
+                  <span data-fd="host-name">{host.shortName}</span>
+                </div>
+                <div data-fd="host-meta">
+                  {host.status === "offline" ? (
+                    <span>{gt("offline")}</span>
+                  ) : (
+                    <>
+                      {up ? <span>{`up ${up}`}</span> : null}
+                      {up && load !== null ? <span aria-hidden>{"·"}</span> : null}
+                      {load !== null ? (
+                        <span>
+                          {`${gt("load")} `}
+                          <b data-warn={loadHot}>{load.toFixed(2)}</b>
+                        </span>
+                      ) : !up ? (
+                        <span>{host.platform}</span>
+                      ) : null}
+                    </>
+                  )}
+                </div>
 
                 {hasRight ? (
                   <div data-fd="host-right">
@@ -199,7 +200,35 @@ export function DeckHeaderStrip({
                       </span>
                     ) : null}
                     {canToggleCi ? (
-                      <FleetCiSwitch host={host} toggling={toggling} onToggleCi={onToggleCi} />
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={ciEnabled}
+                        aria-label={
+                          ciEnabled
+                            ? gt("Disable CI on {host}", { host: host.shortName })
+                            : gt("Enable CI on {host}", { host: host.shortName })
+                        }
+                        disabled={toggling}
+                        className={
+                          ciEnabled
+                            ? "inline-flex shrink-0 items-center gap-1.5 rounded-full border border-success/40 bg-success/15 px-2.5 py-1 font-mono text-2xs font-semibold text-success-foreground transition hover:bg-success/25"
+                            : "inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-muted/60 px-2.5 py-1 font-mono text-2xs font-semibold text-muted-foreground transition hover:text-foreground"
+                        }
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleCi(host, !ciEnabled);
+                        }}
+                      >
+                        <span
+                          className={
+                            ciEnabled
+                              ? "size-1.5 rounded-full bg-success"
+                              : "size-1.5 rounded-full bg-muted-foreground/50"
+                          }
+                        />
+                        <span>{ciEnabled ? gt("CI on") : gt("CI off")}</span>
+                      </button>
                     ) : null}
                   </div>
                 ) : null}

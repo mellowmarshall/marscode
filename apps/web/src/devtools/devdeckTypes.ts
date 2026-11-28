@@ -196,7 +196,6 @@ export interface DevdeckHostProbeReport {
   readonly ci_off_at?: string | null;
   readonly ci_off_by?: string | null;
   readonly ci_off_reason?: string | null;
-  readonly ci_off_version?: string | null;
   readonly no_grant?: boolean | ReadonlyArray<unknown>;
   readonly grant_error?: string | null;
 }

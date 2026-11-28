@@ -4,8 +4,7 @@ import * as NodePath from "node:path";
 
 import { normalizeArch, type CiHostEntry, type CiHostsManifest } from "./ciHosts.ts";
 import { computeHostLacks } from "./ciToolVersion.ts";
-import { readProbeFile } from "./hostProbe.ts";
-import { isHostOff } from "./hostOffMarker.ts";
+import { isHostOff, readProbeFile } from "./hostProbe.ts";
 
 export const NODE_MAX_AGE_S = 120;
 export const NODE_SAMPLES = 10;

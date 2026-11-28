@@ -7,13 +7,13 @@ import { shellSingleQuote } from "@t3tools/ssh/command";
 
 import {
   expandDataRoot,
+  isSafeHostName,
   loadCiHostsManifest,
   normalizeArch,
   type CiHostEntry,
   type CiHostsManifest,
 } from "./ciHosts.ts";
 import { dataRootUnderHome, dataRootUnderHomeNote } from "./dataRootPolicy.ts";
-import { readHostOffState } from "./hostOffMarker.ts";
 import { evaluateToolState, type ToolCheckState } from "./ciToolVersion.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
 import { buildRootGrantRequest, planToolProvides } from "./rootGrant.ts";
@@ -23,6 +23,12 @@ import type { ProcessResult, ProcessRunner } from "./types.ts";
 
 const MEASURED_PROBES = new Set(["hardware-gpu", "webkit-video"]);
 const DEFAULT_PROBE_TTL_MS = 300_000;
+
+export interface HostOffState {
+  readonly at: string;
+  readonly by: string;
+  readonly reason: string;
+}
 
 export interface HostCheckToolRow {
   readonly name: string;
@@ -77,6 +83,84 @@ export interface HostExecDeps {
   readonly homeDir?: string | undefined;
   readonly nowMs?: (() => number) | undefined;
   readonly nowIso?: (() => string) | undefined;
+}
+
+export function hostOffFilePath(queueRoot: string, hostName: string): string {
+  return NodePath.join(queueRoot, "hosts", `${hostName}.off`);
+}
+
+export function readHostOffState(queueRoot: string, hostName: string): HostOffState | null {
+  const filePath = hostOffFilePath(queueRoot, hostName);
+  if (!NodeFS.existsSync(filePath)) return null;
+  const text = NodeFS.readFileSync(filePath, "utf8");
+  const fields: Record<string, string> = {};
+  for (const line of text.split(/\r?\n/)) {
+    const eq = line.indexOf("=");
+    if (eq > 0) fields[line.slice(0, eq)] = line.slice(eq + 1);
+  }
+  return {
+    at: fields.at ?? "",
+    by: fields.by ?? "",
+    reason: fields.reason ?? "",
+  };
+}
+
+export function isHostOff(queueRoot: string, hostName: string): boolean {
+  return NodeFS.existsSync(hostOffFilePath(queueRoot, hostName));
+}
+
+export function setCiHostAvailability(input: {
+  readonly queueRoot: string;
+  readonly hostName: string;
+  readonly enabled: boolean;
+  readonly reason?: string | undefined;
+  readonly actor?: string | undefined;
+  readonly manifestPath?: string | undefined;
+  readonly nowIso?: (() => string) | undefined;
+}): { readonly ok: boolean; readonly message: string; readonly changed: boolean } {
+  const name = input.hostName.trim();
+  if (!isSafeHostName(name)) {
+    return { ok: false, message: `Invalid host name: ${name}`, changed: false };
+  }
+  const loaded = loadCiHostsManifest({ overridePath: input.manifestPath });
+  const declared =
+    loaded.ok && loaded.manifest ? loaded.manifest.hosts.some((h) => h.name === name) : false;
+  const filePath = hostOffFilePath(input.queueRoot, name);
+
+  if (input.enabled) {
+    if (!declared && !NodeFS.existsSync(filePath)) {
+      return { ok: false, message: `no CI host ${name} in manifest`, changed: false };
+    }
+    if (!NodeFS.existsSync(filePath)) {
+      return { ok: true, message: `ci host ${name} is already on for CI`, changed: false };
+    }
+    NodeFS.rmSync(filePath, { force: true });
+    return { ok: true, message: `CI enabled on ${name}`, changed: true };
+  }
+
+  if (loaded.ok && !declared) {
+    return { ok: false, message: `no CI host ${name} in manifest`, changed: false };
+  }
+  if (NodeFS.existsSync(filePath)) {
+    return { ok: true, message: `ci host ${name} is already off for CI`, changed: false };
+  }
+  const dir = NodePath.dirname(filePath);
+  NodeFS.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const cleanReason = (input.reason ?? "").replace(/[\n\r\t]/g, " ").trim();
+  const actor = input.actor ?? safeUsername();
+  const at = (input.nowIso ?? (() => new Date().toISOString()))();
+  const tmp = `${filePath}.tmp.${process.pid}`;
+  NodeFS.writeFileSync(tmp, `at=${at}\nby=${actor}\nreason=${cleanReason}\n`, { mode: 0o600 });
+  NodeFS.renameSync(tmp, filePath);
+  return { ok: true, message: `CI disabled on ${name}`, changed: true };
+}
+
+function safeUsername(): string {
+  try {
+    return NodeOS.userInfo().username || "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 /**
