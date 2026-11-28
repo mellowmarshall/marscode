@@ -7,8 +7,13 @@ import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
+import { gitCannotAnswer, realGitTracksFiles } from "../ReaperRulePathChecks.testkit.ts";
 import { buildStorageManifest } from "../StorageManifest.ts";
-import { ephemeralRootsFromEntries, sweepEphemeralRoots } from "./ReaperEphemeralSweep.ts";
+import {
+  ephemeralRootsFromEntries,
+  sweepApprovedPolicy,
+  sweepEphemeralRoots,
+} from "./ReaperEphemeralSweep.ts";
 import {
   inside,
   manifestHistoryRoots,
@@ -277,6 +282,7 @@ describe.skipIf(platform !== "linux" && platform !== "darwin")("reaper sweeps", 
         uid,
         nowMs: NOW_MS,
         homeDir: home,
+        tracksFiles: gitCannotAnswer,
         log: () => undefined,
       });
 
@@ -292,6 +298,54 @@ describe.skipIf(platform !== "linux" && platform !== "darwin")("reaper sweeps", 
     expect(trusted.tmp.removed).toBe(1);
     expect(trusted.exhaust).toBe(1);
     expect(NodeFS.existsSync(staleTmp)).toBe(false);
+  });
+
+  it("keeps stale git data below an approved rule and removes ordinary stale output", async () => {
+    const home = tempDir("t3-reaper-approved-");
+    const cache = NodePath.join(home, ".cache", "acme");
+    const bareRepo = (dir: string) => {
+      for (const sub of ["objects/pack", "refs/heads"]) {
+        NodeFS.mkdirSync(NodePath.join(dir, sub), { recursive: true });
+      }
+      NodeFS.writeFileSync(NodePath.join(dir, "HEAD"), "ref: refs/heads/main\n");
+    };
+    bareRepo(NodePath.join(cache, "mirror"));
+    bareRepo(NodePath.join(cache, "vendor", "deps", "lib"));
+    NodeFS.mkdirSync(NodePath.join(cache, "suffixed", "pkg", "upstream.git"), { recursive: true });
+    NodeFS.mkdirSync(NodePath.join(cache, "checkout", "src", ".GIT"), { recursive: true });
+    writeAged(NodePath.join(cache, "worktree-file", ".git"), 30 * DAY, "gitdir: /x\n");
+    writeAged(NodePath.join(cache, "build-old", "obj", "main.o"), 30 * DAY);
+    // Every entry old, deepest first, so only the git data can keep a folder.
+    const paths: string[] = [];
+    const collect = (dir: string) => {
+      for (const entry of NodeFS.readdirSync(dir, { withFileTypes: true })) {
+        const child = NodePath.join(dir, entry.name);
+        if (entry.isDirectory()) collect(child);
+        paths.push(child);
+      }
+    };
+    collect(cache);
+    for (const target of paths) age(target, 30 * DAY);
+    const logs: string[] = [];
+    const totals = await sweepApprovedPolicy(
+      [{ path: cache, maxAgeDays: 7, keepLatest: 0, enabled: true }],
+      {
+        ...ctx(new PathGuard([])),
+        log: (line: string) => void logs.push(line),
+        homeDir: home,
+        historyRoots: [],
+      },
+      await realGitTracksFiles(),
+    );
+
+    expect(totals.removed).toBe(1);
+    expect(NodeFS.existsSync(NodePath.join(cache, "build-old"))).toBe(false);
+    for (const kept of ["mirror", "vendor", "suffixed", "checkout", "worktree-file"]) {
+      expect(NodeFS.existsSync(NodePath.join(cache, kept))).toBe(true);
+    }
+    expect(NodeFS.existsSync(NodePath.join(cache, "mirror", "objects", "pack"))).toBe(true);
+    expect(logs.filter((line) => line.includes("Kept stale"))).toHaveLength(5);
+    expect(logs.join("\n")).toContain(`bare git repository ${NodePath.join(cache, "mirror")}`);
   });
 
   it("treats only random mktemp suffixes as mktemp, never words in any case", () => {

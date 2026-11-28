@@ -15,6 +15,7 @@ import * as ServerConfig from "../../config.ts";
 import * as Scheduler from "../../scheduling/Scheduler.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ReaperPolicy from "../ReaperPolicy.ts";
+import { makeGitTracksFiles } from "../ReaperRulePathChecks.ts";
 import * as StorageManifest from "../StorageManifest.ts";
 import { defaultCargoRoots, reapCargo } from "./ReaperCargo.ts";
 import { readReaperCargoRootsSync } from "./ReaperCargoPolicy.ts";
@@ -85,6 +86,7 @@ const make = Effect.gen(function* () {
   const latest = yield* Ref.make<ReaperHostScan | null>(null);
   const lastScanAt = yield* Ref.make(0);
   const permit = yield* Semaphore.make(1);
+  const tracksFiles = yield* makeGitTracksFiles();
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const log = (message: string) => void runFork(Effect.logInfo(`[reaper] ${message}`));
 
@@ -158,6 +160,7 @@ const make = Effect.gen(function* () {
         historyRoots: ctx.historyRoots,
         manifest: ctx.manifest,
         policyRules: policy.rules,
+        tracksFiles,
         tmpRoots: await tmpCandidateRoots(platform, env),
         devRoots: ["/data/Dev", NodePath.join(homeDir, "Dev-data")],
         uid,

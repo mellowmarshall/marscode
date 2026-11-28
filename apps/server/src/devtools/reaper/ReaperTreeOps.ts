@@ -59,6 +59,56 @@ export async function hasRecentEntry(
   });
 }
 
+/** Entries a git-data check reads before it gives up and treats the tree as unsafe. */
+const GIT_DATA_SCAN_LIMIT = 200_000;
+
+/** Git's data by name: a `.git` entry or a `*.git` directory, in any case. */
+function gitDataName(name: string, isDirectory: boolean): boolean {
+  const lower = name.toLowerCase();
+  return lower === ".git" || (isDirectory && lower.endsWith(".git"));
+}
+
+/** A bare repository or mirror: `HEAD` beside `objects/` and `refs/`. */
+function bareRepoLayout(children: ReadonlyArray<NodeFS.Dirent>): boolean {
+  const has = (name: string, dir: boolean) =>
+    children.some((c) => c.name === name && (!dir || c.isDirectory()));
+  return has("HEAD", false) && has("objects", true) && has("refs", true);
+}
+
+/**
+ * Why removing target could destroy git history, or null when its tree holds no git data:
+ * a `.git` entry, a `*.git` directory, or a bare repo layout, at target or anywhere below.
+ * Stops at the first match. A folder it cannot read, or a tree past the scan limit, counts as
+ * unsafe, since a forced removal unlocks and deletes what this check could not see.
+ */
+export async function gitDataIn(target: string): Promise<string | null> {
+  const st = await NodeFSP.lstat(target).catch(() => null);
+  if (st === null) return null;
+  if (gitDataName(NodePath.basename(target), st.isDirectory())) return `git data ${target}`;
+  if (!st.isDirectory()) return null;
+  const stack = [target];
+  let seen = 0;
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    let children: Array<NodeFS.Dirent>;
+    try {
+      children = await NodeFSP.readdir(dir, { withFileTypes: true });
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException)?.code === "ENOENT") continue;
+      return `unreadable folder ${dir}`;
+    }
+    if (bareRepoLayout(children)) return `bare git repository ${dir}`;
+    for (const child of children) {
+      const childPath = NodePath.join(dir, child.name);
+      if (gitDataName(child.name, child.isDirectory())) return `git data ${childPath}`;
+      if (child.isDirectory()) stack.push(childPath);
+    }
+    seen += children.length;
+    if (seen > GIT_DATA_SCAN_LIMIT) return `more than ${GIT_DATA_SCAN_LIMIT} entries to check`;
+  }
+  return null;
+}
+
 /** Allocated bytes under target; a hard-linked file counts once. */
 export async function diskBytes(target: string): Promise<number> {
   let total = 0;

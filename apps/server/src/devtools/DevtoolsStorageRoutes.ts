@@ -20,6 +20,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as StorageCleanup from "../storageCleanup.ts";
 import { jsonResponse, readJsonBody } from "./DevtoolsHttpContext.ts";
 import * as ReaperPolicy from "./ReaperPolicy.ts";
+import type { ReaperPolicyRule } from "./ReaperPolicyToml.ts";
 import * as ReaperProposals from "./reaper/ReaperProposals.ts";
 import * as ReaperReviewPrompt from "./reaper/ReaperReviewPrompt.ts";
 import * as Reaper from "./reaper/ReaperService.ts";
@@ -111,7 +112,7 @@ export const handleStorageAndToolRoute = Effect.fn("DevtoolsStorageRoutes.handle
       if (!parsed.ok) return jsonResponse({ error: parsed.error }, parsed.status);
       const rawRules = Array.isArray(parsed.value.rules) ? parsed.value.rules : null;
       if (!rawRules) return jsonResponse({ error: "rules array is required" }, 400);
-      const rules: ReaperPolicy.ReaperPolicyRule[] = [];
+      const rules: ReaperPolicyRule[] = [];
       for (const item of rawRules) {
         if (!item || typeof item !== "object" || Array.isArray(item)) {
           return jsonResponse({ error: "Invalid rule object" }, 400);

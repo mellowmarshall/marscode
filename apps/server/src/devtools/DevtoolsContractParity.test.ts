@@ -49,6 +49,7 @@ import {
   parseDevdeckStageFromLogText,
 } from "./jobs/shipQueueLogParser.ts";
 import * as ReaperPolicy from "./ReaperPolicy.ts";
+import { realGitTracksFiles } from "./ReaperRulePathChecks.testkit.ts";
 
 const cleanupDirs: string[] = [];
 
@@ -491,6 +492,7 @@ describe("Devtools server contract parity", () => {
     NodeFS.symlinkSync(protectedHistory, symlinkEscape);
 
     const policyPath = NodePath.join(dir, "policy.toml");
+    const tracksFiles = await realGitTracksFiles();
     const protectedRoots = [
       NodePath.join(fakeHome, ".t3", "userdata", "statev2.sqlite"),
       protectedHistory,
@@ -502,6 +504,7 @@ describe("Devtools server contract parity", () => {
       protectedRoots,
       policyPath,
       fakeHome,
+      tracksFiles,
     );
     expect(symBlocked.ok).toBe(false);
 
@@ -511,6 +514,7 @@ describe("Devtools server contract parity", () => {
       protectedRoots,
       policyPath,
       fakeHome,
+      tracksFiles,
     );
     expect(dotBlocked.ok).toBe(false);
 
@@ -520,6 +524,7 @@ describe("Devtools server contract parity", () => {
       protectedRoots,
       policyPath,
       fakeHome,
+      tracksFiles,
     );
     expect(repoBlocked.ok).toBe(false);
 
@@ -529,6 +534,7 @@ describe("Devtools server contract parity", () => {
       protectedRoots,
       policyPath,
       fakeHome,
+      tracksFiles,
     );
     expect(externalBlocked.ok).toBe(false);
 
@@ -538,6 +544,7 @@ describe("Devtools server contract parity", () => {
       protectedRoots,
       policyPath,
       fakeHome,
+      tracksFiles,
     );
     expect(ctrlBlocked.ok).toBe(false);
 
@@ -550,6 +557,7 @@ describe("Devtools server contract parity", () => {
       protectedRoots,
       policyPath,
       fakeHome,
+      tracksFiles,
     );
     expect(gitBlocked.ok).toBe(false);
 
@@ -559,6 +567,7 @@ describe("Devtools server contract parity", () => {
       protectedRoots,
       policyPath,
       fakeHome,
+      tracksFiles,
     );
     expect(subDayBlocked.ok).toBe(false);
 
@@ -589,6 +598,7 @@ describe("Devtools server contract parity", () => {
       protectedRoots,
       policyPath,
       fakeHome,
+      tracksFiles,
     );
     expect(allowed.ok).toBe(true);
     const rawSaved = NodeFS.readFileSync(policyPath, "utf8");

@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - The reaper's file sweeps, run only on a trusted live-process scan.
-import type { ReaperPolicyRule } from "../ReaperPolicy.ts";
+import type { ReaperPolicyRule } from "../ReaperPolicyToml.ts";
+import type { GitTracksFiles } from "../ReaperRulePathChecks.ts";
 import type { StorageManifest } from "../StorageManifest.ts";
 import {
   ephemeralRootsFromEntries,
@@ -18,6 +19,7 @@ export interface HostSweepInput {
   readonly historyRoots: ReadonlyArray<string>;
   readonly manifest: StorageManifest;
   readonly policyRules: ReadonlyArray<ReaperPolicyRule>;
+  readonly tracksFiles: GitTracksFiles;
   readonly tmpRoots: ReadonlyArray<string>;
   readonly devRoots: ReadonlyArray<string>;
   readonly uid: number;
@@ -70,7 +72,7 @@ export async function sweepHost(input: HostSweepInput): Promise<HostSweepResult>
     ephemeralRootsFromEntries(reapableEphemeralEntries(input.manifest)),
     ephemeralCtx,
   );
-  const approved = await sweepApprovedPolicy(input.policyRules, ephemeralCtx);
+  const approved = await sweepApprovedPolicy(input.policyRules, ephemeralCtx, input.tracksFiles);
   return {
     refused: null,
     tmp: { removed: tmp.dirs + tmp.files, bytes: tmp.bytes, skipped: tmp.skippedActive },

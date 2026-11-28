@@ -1,8 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - Dry-run of the approved-policy sweep for one rule, measured before the user accepts it.
 import type { ReaperRulePreview } from "@t3tools/contracts";
 
-import type { ReaperPolicyRule } from "../ReaperPolicy.ts";
-import { gitCheckoutAt } from "../ReaperRulePathChecks.ts";
+import type { ReaperPolicyRule } from "../ReaperPolicyToml.ts";
+import { gitCheckoutAt, type GitTracksFiles } from "../ReaperRulePathChecks.ts";
 import { sweepApprovedPolicy } from "./ReaperEphemeralSweep.ts";
 import { PathGuard } from "./ReaperPathGuard.ts";
 import { trustedScan, type ProcPathScan } from "./ReaperProcPaths.ts";
@@ -18,17 +18,22 @@ export async function previewRule(
     readonly uid: number;
     readonly nowMs: number;
     readonly homeDir: string;
+    readonly tracksFiles: GitTracksFiles;
   },
 ): Promise<ReaperRulePreview> {
-  const totals = await sweepApprovedPolicy([{ ...rule, enabled: true }], {
-    uid: input.uid,
-    nowMs: input.nowMs,
-    guard: new PathGuard([...(input.scan?.paths ?? []), ...input.historyRoots]),
-    dryRun: true,
-    log: () => undefined,
-    homeDir: input.homeDir,
-    historyRoots: input.historyRoots,
-  });
+  const totals = await sweepApprovedPolicy(
+    [{ ...rule, enabled: true }],
+    {
+      uid: input.uid,
+      nowMs: input.nowMs,
+      guard: new PathGuard([...(input.scan?.paths ?? []), ...input.historyRoots]),
+      dryRun: true,
+      log: () => undefined,
+      homeDir: input.homeDir,
+      historyRoots: input.historyRoots,
+    },
+    input.tracksFiles,
+  );
   const ageDays = (mtimeMs: number | undefined) =>
     mtimeMs === undefined ? null : Math.round(((input.nowMs - mtimeMs) / DAY_MS) * 10) / 10;
   return {

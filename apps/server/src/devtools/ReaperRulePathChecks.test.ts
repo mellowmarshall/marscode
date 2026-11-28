@@ -9,6 +9,7 @@ import { afterAll, expect, it } from "@effect/vitest";
 import { validateReaperPolicyRules } from "./ReaperPolicy.ts";
 import { sweepApprovedPolicy } from "./reaper/ReaperEphemeralSweep.ts";
 import { PathGuard } from "./reaper/ReaperPathGuard.ts";
+import { gitCannotAnswer, realGitTracksFiles } from "./ReaperRulePathChecks.testkit.ts";
 
 const root = NodeFS.realpathSync(NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "rules-")));
 const home = NodePath.join(root, "home");
@@ -30,40 +31,50 @@ for (const dir of ["objects", "refs"]) {
 }
 NodeFS.writeFileSync(NodePath.join(bare, "HEAD"), "ref: refs/heads/main\n");
 afterAll(() => NodeFS.rmSync(root, { recursive: true, force: true }));
+const tracksFiles = await realGitTracksFiles();
 
-const check = (path: string, agentProposal = true) => {
-  const result = validateReaperPolicyRules(
+const check = async (path: string, agentProposal = true, git = tracksFiles) => {
+  const result = await validateReaperPolicyRules(
     [{ path, maxAgeDays: 7, keepLatest: 0, enabled: false }],
     [],
     home,
+    git,
     { agentProposal },
   );
   return result.ok ? null : result.error;
 };
 
-it("refuses git data, bare repos, and checkout contents, and allows untracked build output", () => {
-  expect(check(NodePath.join(repo, ".git"))).toContain("git repository data");
-  expect(check(NodePath.join(repo, ".git", "objects"))).toContain("git repository data");
-  expect(check(NodePath.join(repo, ".GIT", "worktrees", "build"))).toContain("git repository data");
-  expect(check(mirror)).toContain("git repository data");
-  expect(check(NodePath.join(mirror, "objects"))).toContain("git repository data");
-  expect(check(NodePath.join(bare, "objects"))).toContain("git repository data");
-  expect(check(NodePath.join(repo, "src"))).toContain("inside git checkout");
-  expect(check(`${repo}/target/../src`)).toContain("inside git checkout");
-  expect(check(repo)).toContain("checkout/worktree root");
-  expect(check(NodePath.join(repo, "build"))).toContain("contains tracked files");
-  expect(check(NodePath.join(repo, "target"))).toBeNull();
-  expect(check(NodePath.join(repo, "node_modules"))).toBeNull();
+it("refuses git data, bare repos, and checkout contents, and allows untracked build output", async () => {
+  expect(await check(NodePath.join(repo, ".git"))).toContain("git repository data");
+  expect(await check(NodePath.join(repo, ".git", "objects"))).toContain("git repository data");
+  expect(await check(NodePath.join(repo, ".GIT", "worktrees", "build"))).toContain(
+    "git repository data",
+  );
+  expect(await check(mirror)).toContain("git repository data");
+  expect(await check(NodePath.join(mirror, "objects"))).toContain("git repository data");
+  expect(await check(NodePath.join(bare, "objects"))).toContain("git repository data");
+  expect(await check(NodePath.join(repo, "src"))).toContain("inside git checkout");
+  expect(await check(`${repo}/target/../src`)).toContain("inside git checkout");
+  expect(await check(repo)).toContain("checkout/worktree root");
+  expect(await check(NodePath.join(repo, "build"))).toContain("contains tracked files");
+  expect(await check(NodePath.join(repo, "target"))).toBeNull();
+  expect(await check(NodePath.join(repo, "node_modules"))).toBeNull();
   // The same checks hold for the user's own rules.
-  expect(check(NodePath.join(repo, "src"), false)).toContain("inside git checkout");
+  expect(await check(NodePath.join(repo, "src"), false)).toContain("inside git checkout");
 });
 
-it("holds agent proposals under /data to a final build output, tmp, or cache name", () => {
-  expect(check("/data/postgres/main")).toContain("not build output, tmp, or cache");
-  expect(check("/data/acme/tmp/main")).toContain("not build output, tmp, or cache");
-  expect(check("/data/postgres/main", false)).toBeNull();
-  expect(check("/data/acme/tmp")).toBeNull();
-  expect(check("/data/acme/web/dist")).toBeNull();
+it("refuses build output in a checkout when git cannot answer", async () => {
+  expect(await check(NodePath.join(repo, "target"), true, gitCannotAnswer)).toContain(
+    "could not check it for tracked files",
+  );
+});
+
+it("holds agent proposals under /data to a final build output, tmp, or cache name", async () => {
+  expect(await check("/data/postgres/main")).toContain("not build output, tmp, or cache");
+  expect(await check("/data/acme/tmp/main")).toContain("not build output, tmp, or cache");
+  expect(await check("/data/postgres/main", false)).toBeNull();
+  expect(await check("/data/acme/tmp")).toBeNull();
+  expect(await check("/data/acme/web/dist")).toBeNull();
 });
 
 it("skips a saved rule at sweep time once its parent has become a repo", async () => {
@@ -86,10 +97,12 @@ it("skips a saved rule at sweep time once its parent has become a repo", async (
     homeDir: home,
     historyRoots: [],
   };
-  expect((await sweepApprovedPolicy([rule], ctx)).removed).toBe(1);
+  expect((await sweepApprovedPolicy([rule], ctx, tracksFiles)).removed).toBe(1);
 
   NodeFS.mkdirSync(NodePath.join(parent, ".git"));
-  expect((await sweepApprovedPolicy([rule], { ...ctx, dryRun: false })).removed).toBe(0);
+  expect((await sweepApprovedPolicy([rule], { ...ctx, dryRun: false }, tracksFiles)).removed).toBe(
+    0,
+  );
   expect(NodeFS.existsSync(old)).toBe(true);
   expect(logs.at(-1)).toContain("Skipped approved rule");
 });

@@ -1,7 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - Git-repository and /data checks for cleanup rule paths, on canonical paths, at save and sweep time.
-import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Effect from "effect/Effect";
+
+import * as ProcessRunner from "../processRunner.ts";
 
 /** Build output a checkout regenerates; the only rule targets allowed inside one. */
 const BUILD_OUTPUT_NAMES = new Set([
@@ -68,32 +72,55 @@ export function gitCheckoutAt(canonicalPath: string): string | null {
   return ancestorsAndSelf(canonicalPath).find((dir) => exists(NodePath.join(dir, ".git"))) ?? null;
 }
 
-/** Whether git tracks anything at or under `canonicalPath`; null when git could not answer. */
-function tracksFiles(checkout: string, canonicalPath: string): boolean | null {
-  const result = NodeChildProcess.spawnSync(
-    "git",
-    [...HARDENED_GIT_CONFIG, "-C", checkout, "ls-files", "-z", "--", canonicalPath],
-    {
-      encoding: "utf8",
-      timeout: 10_000,
-      maxBuffer: 1024 * 1024,
-      env: {
-        PATH: process.env.PATH ?? "/usr/bin:/bin",
-        GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_GLOBAL: "/dev/null",
-        GIT_TERMINAL_PROMPT: "0",
-      },
-    },
-  );
-  if (result.error || result.status !== 0) return null;
-  return result.stdout.length > 0;
-}
+/** Whether git tracks anything at or under a path in a checkout; null when git could not answer. */
+export type GitTracksFiles = (checkout: string, canonicalPath: string) => Promise<boolean | null>;
+
+const GIT_CHECK_TIMEOUT = "10 seconds";
+
+/** `git ls-files` through the server's process runner, off the event loop and bounded in time. */
+export const makeGitTracksFiles = Effect.fn("ReaperRulePathChecks.makeGitTracksFiles")(
+  function* () {
+    const runner = yield* ProcessRunner.ProcessRunner;
+    const hostEnv = yield* HostProcess.Environment;
+    // The runner extends the server's env; undefined clears each inherited variable, so no
+    // GIT_DIR or GIT_CONFIG_* reaches git.
+    const inherited = new Set([...Object.keys(hostEnv), ...Object.keys(process.env)]);
+    const env: NodeJS.ProcessEnv = {
+      ...Object.fromEntries([...inherited].map((key) => [key, undefined])),
+      PATH: hostEnv.PATH ?? "/usr/bin:/bin",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_TERMINAL_PROMPT: "0",
+    };
+    const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+    const tracksFiles: GitTracksFiles = (checkout, canonicalPath) =>
+      runPromise(
+        runner
+          .run({
+            command: "git",
+            args: [...HARDENED_GIT_CONFIG, "-C", checkout, "ls-files", "-z", "--", canonicalPath],
+            env,
+            timeout: GIT_CHECK_TIMEOUT,
+            maxOutputBytes: 4096,
+            outputMode: "truncate",
+          })
+          .pipe(
+            Effect.map((out) => (out.code === 0 && !out.timedOut ? out.stdout.length > 0 : null)),
+            Effect.orElseSucceed(() => null),
+          ),
+      ).catch(() => null);
+    return tracksFiles;
+  },
+);
 
 /**
  * Refuses git data, bare repos, and anything inside a checkout except untracked build output.
  * Runs when a rule is saved and again before each sweep, since a parent can become a repo later.
  */
-export function gitRuleRefusal(canonicalPath: string): string | null {
+export async function gitRuleRefusal(
+  canonicalPath: string,
+  tracksFiles: GitTracksFiles,
+): Promise<string | null> {
   const gitData = ancestorsAndSelf(canonicalPath).find(isGitDataDir);
   if (gitData !== undefined) {
     return `Refusing cleanup rule inside git repository data ${gitData}: ${canonicalPath}`;
@@ -106,7 +133,7 @@ export function gitRuleRefusal(canonicalPath: string): string | null {
   if (!BUILD_OUTPUT_NAMES.has(NodePath.basename(canonicalPath))) {
     return `Refusing cleanup rule inside git checkout ${checkout}; only build output (${[...BUILD_OUTPUT_NAMES].join(", ")}) may be targeted there: ${canonicalPath}`;
   }
-  const tracked = tracksFiles(checkout, canonicalPath);
+  const tracked = await tracksFiles(checkout, canonicalPath);
   if (tracked === null) {
     return `Refusing cleanup rule inside git checkout ${checkout}: could not check it for tracked files: ${canonicalPath}`;
   }
