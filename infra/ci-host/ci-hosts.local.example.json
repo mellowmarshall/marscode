@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "note": "Template for the host-local CI host list. Copy to ~/.local/lib/marscode/ci-hosts.json and edit. Keep only \"hosts\" here: the toolchain and guards come from the tracked catalog, infra/ci-host/ci-hosts.json, so every host gets the same tools.",
+  "hosts": [
+    {
+      "name": "local",
+      "ssh": null,
+      "role": "ci",
+      "data_root": "~/Dev-data",
+      "note": "local queue host"
+    },
+    {
+      "name": "ci-host-1",
+      "ssh": "ci-host-1.example",
+      "role": "ci",
+      "priority": 1,
+      "data_root": "~/Dev-data",
+      "note": "example remote CI host"
+    }
+  ]
+}

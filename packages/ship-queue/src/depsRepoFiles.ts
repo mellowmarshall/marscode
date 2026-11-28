@@ -9,6 +9,7 @@ import {
   type DepRepoState,
   type DepUpdateItem,
 } from "./depsTypes.ts";
+import { readRegistration } from "./jobStore.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
 import { computePinDigests, validatePinsSpec } from "./pins.ts";
 import type { ProcessRunner } from "./types.ts";
@@ -72,16 +73,27 @@ export function computeReportDigest(report: DepReportRecord): string {
   return NodeCrypto.createHash("sha256").update(stableJsonValue(payload)).digest("hex");
 }
 
-/** Resolves the registered primary checkout path for `repo` under `<queueRoot>/repos/<repo>/primary`. */
+/**
+ * Resolves the registered primary checkout for `repo`: `<queueRoot>/repos/<repo>/registration.json`
+ * (what `ship-queue submit` writes), else the legacy `<queueRoot>/repos/<repo>/primary` file.
+ */
 export function resolveRegisteredRepoPrimary(queueRoot: string, repo: string): string | null {
   if (!DEP_REPO_NAME_RE.test(repo)) return null;
-  const primaryFile = NodePath.join(queueRoot, "repos", repo, "primary");
-  if (!NodeFS.existsSync(primaryFile)) return null;
+  const registered = readRegistration(queueRoot, repo)?.primary;
+  let target = typeof registered === "string" ? registered.trim() : "";
+  if (!target) {
+    try {
+      target = NodeFS.readFileSync(
+        NodePath.join(queueRoot, "repos", repo, "primary"),
+        "utf8",
+      ).trim();
+    } catch {
+      return null;
+    }
+  }
+  if (!target || !NodePath.isAbsolute(target)) return null;
   try {
-    const target = NodeFS.readFileSync(primaryFile, "utf8").trim();
-    if (!target || !NodePath.isAbsolute(target)) return null;
-    if (!NodeFS.existsSync(target) || !NodeFS.statSync(target).isDirectory()) return null;
-    return target;
+    return NodeFS.statSync(target).isDirectory() ? target : null;
   } catch {
     return null;
   }

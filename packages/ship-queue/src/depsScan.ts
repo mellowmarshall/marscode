@@ -3,7 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import { defaultScanRepo } from "./depsRepoFiles.ts";
+import { defaultScanRepo, resolveRegisteredRepoPrimary } from "./depsRepoFiles.ts";
 import { SqliteDepsStore } from "./depsStore.ts";
 import {
   ACTIVE_DEP_ATTEMPT_STATES,
@@ -201,7 +201,7 @@ export async function scanDueDepsRepos(options: DepsScanOptions): Promise<{
       (e) =>
         e.isDirectory() &&
         DEP_REPO_NAME_RE.test(e.name) &&
-        NodeFS.existsSync(NodePath.join(reposDir, e.name, "primary")),
+        resolveRegisteredRepoPrimary(options.queueRoot, e.name) !== null,
     )
     .map((e) => e.name)
     .toSorted();

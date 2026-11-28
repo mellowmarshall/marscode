@@ -25,6 +25,13 @@ export const DEFAULT_SCCACHE_CACHE_SIZE = "20G";
 export const DEFAULT_SCCACHE_IDLE_TIMEOUT = "60";
 export const SCCACHE_VERBATIM_ENV_DEPS = "CARGO_MANIFEST_DIR,CARGO_MANIFEST_PATH";
 
+/**
+ * Tools this module wires into every CI step's environment. Each one must have an entry in the
+ * tracked catalog (`infra/ci-host/ci-hosts.json`), so a host that lacks it shows as drift and
+ * provisioning installs it everywhere, instead of the env quietly skipping it on one host.
+ */
+export const TOOLCHAIN_ENV_TOOLS: ReadonlyArray<string> = ["node", "pnpm", "sccache", "uv", "vp"];
+
 export const TOOLCHAIN_STATIC_ENV: Readonly<Record<string, string>> = {
   FLY_NO_UPDATE_CHECK: "1",
   UV_PYTHON_PREFERENCE: "only-managed",

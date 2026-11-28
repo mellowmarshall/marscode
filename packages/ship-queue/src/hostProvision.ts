@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - CI host payload sync (infra/ci-host + MarsCode packages) and tool provisioning.
 import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { loadCiHostsManifest, type CiHostEntry } from "./ciHosts.ts";
@@ -33,11 +34,23 @@ export function resolveHostSyncPaths(marscodeRoot: string): ReadonlyArray<string
   return paths;
 }
 
-/** Ships `marscode@sourceRef:infra/ci-host` + bundled MarsCode packages (`runlog`, `guard-protocol`, and `host-guards`/`playbook` if present) to a CI host. */
+/** MarsCode CLIs whose prebuilt bundles ride in the payload for `infra/ci-host/ci-marscode-cli.sh`. */
+export const PAYLOAD_CLI_BUNDLES: ReadonlyArray<string> = ["runlog", "playbook"];
+
+/** Where the post-merge sync installs MarsCode CLI bundles (`<dir>/<name>/dist/bin.mjs`). */
+export function defaultCliBundleDir(homeDir: string = NodeOS.homedir()): string {
+  return NodePath.join(homeDir, ".local", "lib", "marscode-tools");
+}
+
+/**
+ * Ships `marscode@sourceRef:infra/ci-host` + bundled MarsCode packages to a CI host, plus each
+ * present prebuilt CLI bundle from `bundleDir` at `packages/<name>/dist/bin.mjs`.
+ */
 export async function syncCiHostPayload(input: {
   readonly host: CiHostEntry;
   readonly marscodeRoot: string;
   readonly sourceRef?: string | undefined;
+  readonly bundleDir?: string | undefined;
   readonly deps?: HostExecDeps | undefined;
 }): Promise<{
   readonly ok: boolean;
@@ -49,15 +62,29 @@ export async function syncCiHostPayload(input: {
   if (!ref || ref.startsWith("-") || /[\s\0]/.test(ref)) {
     return { ok: false, paths, error: `invalid sourceRef: ${JSON.stringify(input.sourceRef)}` };
   }
+  const bundleDir = input.bundleDir ?? defaultCliBundleDir();
+  const clis = PAYLOAD_CLI_BUNDLES.filter((name) =>
+    NodeFS.existsSync(NodePath.join(bundleDir, name, "dist", "bin.mjs")),
+  );
   const runLocal = input.deps?.runLocal ?? nodeProcessRunner;
   const archive = await runLocal({
     command: "bash",
     args: [
       "-c",
-      'set -euo pipefail; sha=$(git -C "$1" rev-parse --verify --end-of-options "$2^{commit}"); git -C "$1" archive --format=tar "$sha" -- "${@:3}" | base64',
+      [
+        "set -euo pipefail",
+        "t=$(mktemp); trap 'rm -f \"$t\"' EXIT",
+        'r=$1; sha=$(git -C "$r" rev-parse --verify --end-of-options "$2^{commit}")',
+        'b=$3; IFS=, read -r -a clis <<< "$4"; shift 4',
+        'git -C "$r" archive --format=tar -o "$t" "$sha" -- "$@"',
+        'for n in "${clis[@]}"; do [ -f "$b/$n/dist/bin.mjs" ] && tar -rf "$t" -C "$b/$n/" --transform "s,^dist/,packages/$n/dist/," dist/bin.mjs; done',
+        'base64 < "$t"',
+      ].join("; "),
       "--",
       input.marscodeRoot,
       ref,
+      bundleDir,
+      clis.join(","),
       ...paths,
     ],
     cwd: input.marscodeRoot,
@@ -81,7 +108,7 @@ export async function syncCiHostPayload(input: {
       error: unpack.stderr.trim() || `remote unpack exited ${unpack.exitCode}`,
     };
   }
-  return { ok: true, paths };
+  return { ok: true, paths: [...paths, ...clis.map((name) => `packages/${name}/dist/bin.mjs`)] };
 }
 
 /** Provisions missing user-level tools (and optionally WSL/passwordless-sudo root tools) on one CI host. */

@@ -5,16 +5,18 @@ import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { decideShipQueueDeps, listShipQueueDeps } from "./depsEngine.ts";
-import { computeReportDigest } from "./depsRepoFiles.ts";
+import { computeReportDigest, resolveRegisteredRepoPrimary } from "./depsRepoFiles.ts";
 import { rollbackShipQueueDepsAttempt, type OwnerApprovalInput } from "./depsRollback.ts";
 import { evaluateDepsGate, scanDueDepsRepos, scanShipQueueDepsRepo } from "./depsScan.ts";
 import { SqliteDepsStore } from "./depsStore.ts";
 import type { DepReportRecord } from "./depsTypes.ts";
+import { writeRegistration } from "./jobStore.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
 import {
   buildRenovateCustomManagers,
   computePinDigests,
   extractCurrentPinValue,
+  extractPinVersions,
   loadPinsSpec,
 } from "./pins.ts";
 
@@ -468,7 +470,22 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
   it("scans due repos on cadence via scanDueDepsRepos and admits clean reports through evaluateDepsGate", async () => {
     const queueRoot = mkTempDir("sq-deps-scan-");
     NodeFS.mkdirSync(NodePath.join(queueRoot, "repos", "alpha"), { recursive: true });
-    NodeFS.writeFileSync(NodePath.join(queueRoot, "repos", "alpha", "primary"), "/tmp/alpha\n");
+    const alphaCheckout = mkTempDir("sq-deps-alpha-");
+    NodeFS.writeFileSync(
+      NodePath.join(queueRoot, "repos", "alpha", "primary"),
+      `${alphaCheckout}\n`,
+    );
+    // `ship-queue submit` registers a repo in registration.json; the due scan must find it too.
+    const betaCheckout = mkTempDir("sq-deps-beta-");
+    writeRegistration(queueRoot, "beta", {
+      primary: betaCheckout,
+      remoteUrl: "https://example.invalid/beta.git",
+    });
+    // A registration whose checkout is gone is not scanned.
+    writeRegistration(queueRoot, "gone", {
+      primary: NodePath.join(betaCheckout, "missing"),
+      remoteUrl: "",
+    });
 
     let now = fixedNow;
     let scans = 0;
@@ -488,8 +505,10 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
       nowEpochSec: () => now,
       runRepoScan,
     });
-    expect(pass1.scanned).toEqual(["alpha"]);
+    expect(pass1.scanned).toEqual(["alpha", "beta"]);
     expect(pass1.skipped).toEqual([]);
+    expect(resolveRegisteredRepoPrimary(queueRoot, "beta")).toBe(betaCheckout);
+    expect(resolveRegisteredRepoPrimary(queueRoot, "gone")).toBeNull();
 
     // Immediate second pass skips because interval hasn't elapsed.
     const pass2 = await scanDueDepsRepos({
@@ -498,7 +517,7 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
       runRepoScan,
     });
     expect(pass2.scanned).toEqual([]);
-    expect(pass2.skipped).toEqual(["alpha"]);
+    expect(pass2.skipped).toEqual(["alpha", "beta"]);
 
     // Gate allows a job matching the clean report's file digests.
     expect(
@@ -520,7 +539,7 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
     );
     expect(pass3.ok).toBe(true);
     expect(pass3.skipped).toBe(false);
-    expect(scans).toBe(2);
+    expect(scans).toBe(3);
   });
 });
 
@@ -540,25 +559,29 @@ describe("sq_pins.json specification validation, version extraction, digests, an
     expect(sccachePin).toBeDefined();
     expect(sccachePin?.depName).toBe("mozilla/sccache");
 
-    const sampleHostsObj = JSON.parse(
-      NodeFS.readFileSync(
-        NodePath.join(repoRoot, "infra", "ci-host", "ci-hosts.example.json"),
-        "utf8",
-      ),
-    ) as { toolchain: Record<string, unknown> };
-    const singleLineVpManifest = `{\n  "vp": ${JSON.stringify(sampleHostsObj.toolchain.vp)}\n}`;
-    expect(extractCurrentPinValue(singleLineVpManifest, vpPin!)).toBe("0.1.18");
-    const singleLineSccacheManifest = `{\n  "sccache": ${JSON.stringify(sampleHostsObj.toolchain.sccache)}\n}`;
-    expect(extractCurrentPinValue(singleLineSccacheManifest, sccachePin!)).toBe("0.20.1");
-
-    const digests = computePinDigests(
-      { "infra/ci-host/ci-hosts.json": singleLineVpManifest },
-      spec,
+    const catalogText = NodeFS.readFileSync(
+      NodePath.join(repoRoot, "infra", "ci-host", "ci-hosts.json"),
+      "utf8",
     );
+    expect(extractCurrentPinValue(catalogText, sccachePin!)).toBe("0.20.1");
+    const digests = computePinDigests({ "infra/ci-host/ci-hosts.json": catalogText }, spec);
     expect(digests["pin:vp"]).toMatch(/^[0-9a-f]{64}$/);
 
     const managers = buildRenovateCustomManagers(spec);
     expect(managers).toHaveLength(spec.pins.length);
     expect(managers.some((m) => m.depNameTemplate === "voidzero-dev/vite-plus")).toBe(true);
+  });
+
+  it("anchors every pin in a tracked file, exactly once", () => {
+    const repoRoot = NodePath.resolve(import.meta.dirname, "../../..");
+    const spec = loadPinsSpec(NodePath.join(repoRoot, "infra", "ci-host", "sq_pins.json"));
+    for (const pin of spec.pins) {
+      const target = NodePath.join(repoRoot, pin.file);
+      expect(NodeFS.existsSync(target), `${pin.name}: ${pin.file}`).toBe(true);
+      const text = NodeFS.readFileSync(target, "utf8");
+      const hits = [...text.matchAll(new RegExp(pin.match, "g"))];
+      expect(hits.length, `${pin.name}: anchor matches in ${pin.file}`).toBe(1);
+      expect(extractPinVersions({ ...spec, pins: [pin] }, repoRoot)).toHaveLength(1);
+    }
   });
 });
