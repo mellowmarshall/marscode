@@ -121,56 +121,87 @@ function readShipJob(jobDir: string, jobId: string): ReviewStatRecord | null {
   });
 }
 
-/** A repo's short name: a ship job's `owner_name` and a challenge's `name` compare equal. */
-function repoName(repo: string): string {
-  return (repo.split(/[_/]/).at(-1) ?? repo).toLowerCase();
+/** A queue repo (`owner_name`) and a challenge's repo (`name`) name the same repository. */
+function sameRepo(queueRepo: string, challengeRepo: string): boolean {
+  const q = queueRepo.toLowerCase();
+  const c = challengeRepo.toLowerCase();
+  return q === c || q.endsWith(`_${c}`) || q.endsWith(`/${c}`);
 }
 
-/**
- * `repo\0tip` keys of challenges the queue overrode, from its override index
- * (`<queue root>/challenge-overrides.jsonl`, beside the jobs directory): one file, not every job.
- */
-function readOverriddenTips(shipJobsDir: string): ReadonlySet<string> {
-  const indexPath = NodePath.join(NodePath.dirname(shipJobsDir), "challenge-overrides.jsonl");
-  let stamp: string;
-  try {
-    const st = NodeFS.statSync(indexPath);
-    stamp = `${st.mtimeMs}:${st.size}`;
-  } catch {
-    return new Set();
-  }
-  const hit = overrideIndexCache.get(indexPath);
-  if (hit?.stamp === stamp) return hit.keys;
-  const keys = new Set<string>();
-  let text = "";
-  try {
-    text = NodeFS.readFileSync(indexPath, "utf8");
-  } catch {
-    return keys;
-  }
+export interface OverrideDecision {
+  readonly repo: string;
+  readonly tip: string;
+  readonly at: string;
+  readonly job: string;
+}
+
+interface OverrideIndexState {
+  readonly mtimeMs: number;
+  readonly size: number;
+  readonly decisions: ReadonlyArray<OverrideDecision>;
+}
+
+const overrideIndexCache = new Map<string, OverrideIndexState>();
+
+function parseDecisions(text: string): ReadonlyArray<OverrideDecision> {
+  const out: OverrideDecision[] = [];
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
     try {
-      const row = JSON.parse(line) as { readonly repo?: unknown; readonly tip?: unknown };
+      const row = JSON.parse(line) as Record<string, unknown>;
       if (
         typeof row.repo === "string" &&
         typeof row.tip === "string" &&
-        /^[0-9a-f]{40,64}$/i.test(row.tip)
+        /^[0-9a-f]{40,64}$/i.test(row.tip) &&
+        typeof row.at === "string"
       ) {
-        keys.add(`${repoName(row.repo)}\0${row.tip.toLowerCase()}`);
+        out.push({
+          repo: row.repo,
+          tip: row.tip.toLowerCase(),
+          at: row.at,
+          job: String(row.job ?? ""),
+        });
       }
     } catch {
       // A torn line adds nothing.
     }
   }
-  overrideIndexCache.set(indexPath, { stamp, keys });
-  return keys;
+  return out;
 }
 
-const overrideIndexCache = new Map<
-  string,
-  { readonly stamp: string; readonly keys: ReadonlySet<string> }
->();
+/**
+ * Every override decision in the queue's index (`<queue root>/challenge-overrides.jsonl`, beside
+ * the jobs directory). The file only grows, so after an append only the new bytes are read.
+ */
+export function readOverrideDecisions(shipJobsDir: string): ReadonlyArray<OverrideDecision> {
+  const indexPath = NodePath.join(NodePath.dirname(shipJobsDir), "challenge-overrides.jsonl");
+  let st: NodeFS.Stats;
+  try {
+    st = NodeFS.statSync(indexPath);
+  } catch {
+    overrideIndexCache.delete(indexPath);
+    return [];
+  }
+  const prev = overrideIndexCache.get(indexPath);
+  if (prev && prev.size === st.size && prev.mtimeMs === st.mtimeMs) return prev.decisions;
+  const from = prev && st.size > prev.size ? prev.size : 0;
+  let added: ReadonlyArray<OverrideDecision> = [];
+  try {
+    const fd = NodeFS.openSync(indexPath, "r");
+    try {
+      const buf = Buffer.alloc(st.size - from);
+      NodeFS.readSync(fd, buf, 0, buf.length, from);
+      added = parseDecisions(buf.toString("utf8"));
+    } finally {
+      NodeFS.closeSync(fd);
+    }
+  } catch {
+    return prev?.decisions ?? [];
+  }
+  const decisions = from > 0 && prev ? [...prev.decisions, ...added] : added;
+  overrideIndexCache.set(indexPath, { mtimeMs: st.mtimeMs, size: st.size, decisions });
+  return decisions;
+}
 
 function listDir(dir: string): ReadonlyArray<NodeFS.Dirent> {
   try {
@@ -211,18 +242,26 @@ export function collectReviewRecords(
   }
   const shipIdByReviewThread = new Map<string, string>();
   const shipJobsDir = paths.shipJobsDir ?? defaultShipJobsDir();
-  // Each override marks one challenge: the newest record of that repo and challenged tip.
-  const overridden = readOverriddenTips(shipJobsDir);
-  const newestByKey = new Map<string, ReviewStatRecord>();
-  for (const rec of byId.values()) {
-    if (rec.source !== "playbook_challenge" || rec.commit.length < 7) continue;
-    if (rec.verdict !== "challenged" && rec.verdict !== "rejected_budget") continue;
-    const key = `${repoName(rec.repo)}\0${rec.commit.toLowerCase()}`;
-    if (!overridden.has(key)) continue;
-    const seen = newestByKey.get(key);
-    if (!seen || rec.timestamp > seen.timestamp) newestByKey.set(key, rec);
+  // Each override decision credits one challenge: the newest of that repo and challenged tip
+  // made before the decision. A later challenge of the same tip gets no credit.
+  const challenges = [...byId.values()].filter(
+    (rec) =>
+      rec.source === "playbook_challenge" &&
+      rec.commit.length >= 7 &&
+      (rec.verdict === "challenged" || rec.verdict === "rejected_budget"),
+  );
+  for (const decision of readOverrideDecisions(shipJobsDir)) {
+    let best: ReviewStatRecord | undefined;
+    for (const rec of challenges) {
+      if (rec.commit.toLowerCase() !== decision.tip) continue;
+      if (!sameRepo(decision.repo, rec.repo) || rec.timestamp > decision.at) continue;
+      if (!best || rec.timestamp > best.timestamp) best = rec;
+    }
+    if (best) {
+      const current = byId.get(best.id) ?? best;
+      byId.set(best.id, { ...current, overridden: true });
+    }
   }
-  for (const rec of newestByKey.values()) byId.set(rec.id, { ...rec, overridden: true });
   for (const entry of listDir(shipJobsDir)) {
     if (!entry.isDirectory()) continue;
     const rec = readShipJob(NodePath.join(shipJobsDir, entry.name), entry.name);
