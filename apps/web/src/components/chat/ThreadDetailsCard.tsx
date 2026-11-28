@@ -3,14 +3,17 @@ import { workspaceAreaProps } from "../../lib/workspaceFocus";
 import {
   useLayoutEffect,
   useState,
+  type CSSProperties,
   type MouseEventHandler,
   type ReactNode,
   type RefObject,
 } from "react";
 import type { ScopedThreadRef } from "@t3tools/contracts";
+import { RESIZABLE_WIDTH_PROPERTY } from "../../hooks/useResizableWidth";
 import { ScrollArea } from "../ui/scroll-area";
 import { cn } from "../../lib/utils";
 import { Popover, PopoverPopup, PopoverCreateHandle } from "../ui/popover";
+import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
 import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore";
 import { useChatCanvas } from "./ChatCanvasContext";
 import {
@@ -41,6 +44,7 @@ export function ThreadDetailsCard({
   const canvas = useChatCanvas();
   const preferredPlacement = canvas?.preferredDetailsCard ?? null;
   const placement = canvas?.detailsCardPlacement ?? null;
+  const resize = canvas?.detailsCardResize ?? null;
   const mode = placement ? "inline" : "popover";
   const topInset = canvas?.detailsCardTopInset ?? 0;
   const inlineOpen = useRightPanelStore((state) =>
@@ -157,15 +161,29 @@ export function ThreadDetailsCard({
             "absolute z-20",
             topInset > 0 && "transition-[top] duration-150 ease-out motion-reduce:transition-none",
           )}
-          style={{
-            right: placement.right,
-            top: placement.y,
-            width: placement.width,
-            maxHeight: height,
-          }}
+          style={
+            {
+              right: placement.right,
+              top: placement.y,
+              [RESIZABLE_WIDTH_PROPERTY]: `${placement.width}px`,
+              width: `var(${RESIZABLE_WIDTH_PROPERTY})`,
+              maxHeight: height,
+            } as CSSProperties
+          }
           data-density={density}
           data-thread-details-panel="inline"
         >
+          {resize ? (
+            <RightPanelResizeHandle
+              handlers={resize.handlers}
+              label={gt("Resize thread details")}
+              width={placement.width}
+              minWidth={resize.minWidth}
+              maxWidth={resize.maxWidth}
+              onWidthChange={resize.setWidth}
+              className="inset-y-3 left-0 w-2"
+            />
+          ) : null}
           {card}
         </aside>
       ) : null}

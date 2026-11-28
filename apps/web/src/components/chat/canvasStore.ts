@@ -3,7 +3,11 @@ import { createStore } from "zustand";
 import type { ThreadPanelPresentation } from "../../rightPanelLayout";
 import type { DetailsCardMeasurement } from "./ChatCanvasContext";
 import { resolveChatCanvasLayout, type ChatCanvasPreview } from "./chatCanvasLayout";
-import { resolveThreadDetailsCardLayout } from "./threadDetailsCardLayout";
+import {
+  clampThreadDetailsCardWidth,
+  readSavedThreadDetailsCardWidth,
+  resolveThreadDetailsCardLayout,
+} from "./threadDetailsCardLayout";
 
 interface CanvasEdges {
   readonly left: number;
@@ -22,12 +26,15 @@ export interface ChatCanvasMeasurements {
   readonly timelineGutter: number;
   /** The find bar's box in canvas coordinates while it is shown. */
   readonly findBar: CanvasEdges | null;
+  /** The user's preferred inline details card width, persisted per client. */
+  readonly detailsCardWidth?: number | undefined;
 }
 
 interface ChatCanvasStoreState {
   readonly measurements: ChatCanvasMeasurements;
   readonly detailsCardMeasurement: DetailsCardMeasurement | null;
   readonly setMeasurements: (next: ChatCanvasMeasurements) => void;
+  readonly setDetailsCardWidth: (next: number) => void;
   readonly measureDetailsCard: (next: DetailsCardMeasurement) => void;
 }
 
@@ -55,6 +62,7 @@ const sameMeasurements = (a: ChatCanvasMeasurements, b: ChatCanvasMeasurements) 
   a.minChatWidth === b.minChatWidth &&
   a.composerHeight === b.composerHeight &&
   a.timelineGutter === b.timelineGutter &&
+  a.detailsCardWidth === b.detailsCardWidth &&
   sameEdges(a.findBar, b.findBar);
 
 /**
@@ -63,10 +71,26 @@ const sameMeasurements = (a: ChatCanvasMeasurements, b: ChatCanvasMeasurements) 
  */
 export const createChatCanvasStore = () =>
   createStore<ChatCanvasStoreState>()((set) => ({
-    measurements: INITIAL_MEASUREMENTS,
+    measurements: {
+      ...INITIAL_MEASUREMENTS,
+      detailsCardWidth: readSavedThreadDetailsCardWidth(),
+    },
     detailsCardMeasurement: null,
     setMeasurements: (next) =>
-      set((state) => (sameMeasurements(state.measurements, next) ? state : { measurements: next })),
+      set((state) => {
+        const merged =
+          next.detailsCardWidth === undefined && state.measurements.detailsCardWidth !== undefined
+            ? { ...next, detailsCardWidth: state.measurements.detailsCardWidth }
+            : next;
+        return sameMeasurements(state.measurements, merged) ? state : { measurements: merged };
+      }),
+    setDetailsCardWidth: (next) =>
+      set((state) => {
+        const detailsCardWidth = clampThreadDetailsCardWidth(next);
+        return state.measurements.detailsCardWidth === detailsCardWidth
+          ? state
+          : { measurements: { ...state.measurements, detailsCardWidth } };
+      }),
     measureDetailsCard: (next) =>
       set((state) => {
         const current = state.detailsCardMeasurement;
@@ -107,6 +131,7 @@ export function resolveChatCanvasModel({
     lane,
     frame: null,
     topInset: detailsCardTopInset,
+    preferredWidth: measurements.detailsCardWidth,
   });
   // The canvas outlives thread switches, so a measurement only counts for the
   // thread whose card is shown now.
@@ -147,6 +172,7 @@ export function resolveChatCanvasModel({
     frame: layout.frame,
     overlapsDetailsCard: layout.overlapsDetailsCard,
     topInset: detailsCardTopInset,
+    preferredWidth: measurements.detailsCardWidth,
   });
   const detailsCardMode: ThreadPanelPresentation = detailsCardPlacement ? "inline" : "popover";
   return {

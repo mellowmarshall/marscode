@@ -16,6 +16,7 @@ export interface UseResizableWidthOptions {
   readonly minWidth: number;
   readonly maxWidth: number;
   readonly edge: "left" | "right";
+  readonly onWidthCommit?: ((width: number) => void) | undefined;
 }
 
 export interface ResizableWidthHandlers {
@@ -33,7 +34,10 @@ export function useResizableWidth(options: UseResizableWidthOptions): {
   readonly setWidth: (width: number) => void;
   readonly handlers: ResizableWidthHandlers;
 } {
-  const { storageKey, defaultWidth, minWidth, maxWidth, edge } = options;
+  const { storageKey, defaultWidth, minWidth, maxWidth, edge, onWidthCommit } = options;
+  const notifyWidthCommit = useStableCallback((nextWidth: number) => {
+    onWidthCommit?.(nextWidth);
+  });
 
   const clamp = (value: number): number => {
     if (!Number.isFinite(value)) return defaultWidth;
@@ -68,6 +72,7 @@ export function useResizableWidth(options: UseResizableWidthOptions): {
     } catch (error) {
       console.error("Could not persist panel width.", error);
     }
+    notifyWidthCommit(nextWidth);
   };
 
   const drag = useResizeDrag<HTMLElement>((event) => {

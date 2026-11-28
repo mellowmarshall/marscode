@@ -2,8 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { resolveChatCanvasLayout, type ChatCanvasPreview } from "./chatCanvasLayout";
 import { resizePreviewMiniPlayer } from "../preview/previewMiniPlayerLayout";
 import {
+  THREAD_DETAILS_CARD_DEFAULT_WIDTH,
+  THREAD_DETAILS_CARD_MAX_WIDTH,
+  THREAD_DETAILS_CARD_MIN_WIDTH,
+  clampThreadDetailsCardWidth,
   resolveThreadDetailsCardDensity,
   resolveThreadDetailsCardLayout,
+  resolveThreadDetailsCardMaxWidth,
 } from "./threadDetailsCardLayout";
 
 const preview: ChatCanvasPreview = {
@@ -370,5 +375,57 @@ describe("workspace card beside chat", () => {
     expect(place(1344, 1124)).toMatchObject({ x: 1052 });
     // A window resize mid-animation leaves the sampled ends wider than the canvas.
     expect(place(900, 1344)).toBeNull();
+  });
+  it("supports widening and narrowing the details card within bounds while keeping chat readable", () => {
+    const lane = { padding: 48, minChatWidth: 640 };
+    expect(clampThreadDetailsCardWidth(100)).toBe(THREAD_DETAILS_CARD_MIN_WIDTH);
+    expect(clampThreadDetailsCardWidth(900)).toBe(THREAD_DETAILS_CARD_MAX_WIDTH);
+    expect(clampThreadDetailsCardWidth(Number.NaN)).toBe(THREAD_DETAILS_CARD_DEFAULT_WIDTH);
+
+    const widened = resolveThreadDetailsCardLayout({
+      container: { width: 1400, height: 900 },
+      lane,
+      frame: null,
+      preferredWidth: 420,
+    });
+    expect(widened).toMatchObject({ width: 420, x: 1400 - 420 - 12, right: 12 });
+
+    // Narrowing the canvas clamps a widened card down to what fits before collapsing to a popover.
+    const clampedToFit = resolveThreadDetailsCardLayout({
+      container: { width: 1100, height: 900 },
+      lane,
+      frame: null,
+      preferredWidth: 420,
+    });
+    const maxAt1100 = resolveThreadDetailsCardMaxWidth({ fitWidth: 1100, lane });
+    expect(maxAt1100).toBe(368);
+    expect(clampedToFit).toMatchObject({ width: 368, x: 1100 - 368 - 12 });
+
+    // A widened card still falls back to a popover once the default width no longer fits.
+    expect(
+      resolveThreadDetailsCardLayout({
+        container: { width: 1000, height: 900 },
+        lane,
+        frame: null,
+        preferredWidth: 420,
+      }),
+    ).toBeNull();
+
+    // An explicitly narrowed card stays inline on slightly narrower canvases down to min width.
+    const narrowed = resolveThreadDetailsCardLayout({
+      container: { width: 972, height: 900 },
+      lane,
+      frame: null,
+      preferredWidth: THREAD_DETAILS_CARD_MIN_WIDTH,
+    });
+    expect(narrowed).toMatchObject({ width: THREAD_DETAILS_CARD_MIN_WIDTH, x: 972 - 240 - 12 });
+    expect(
+      resolveThreadDetailsCardLayout({
+        container: { width: 971, height: 900 },
+        lane,
+        frame: null,
+        preferredWidth: THREAD_DETAILS_CARD_MIN_WIDTH,
+      }),
+    ).toBeNull();
   });
 });
