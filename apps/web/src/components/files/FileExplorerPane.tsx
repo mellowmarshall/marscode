@@ -81,33 +81,10 @@ export function FileExplorerPane({
         <RightPanelResizeHandle
           handlers={handlers}
           label={resizeLabel ?? gt("Resize file explorer")}
-          tabIndex={0}
-          aria-valuenow={width}
-          aria-valuemin={minWidth}
-          aria-valuemax={maxWidth}
-          onKeyDown={(event) => {
-            if (event.altKey || event.ctrlKey || event.metaKey) return;
-            let nextWidth: number;
-            switch (event.key) {
-              case "ArrowLeft":
-                nextWidth = width + 16;
-                break;
-              case "ArrowRight":
-                nextWidth = width - 16;
-                break;
-              case "Home":
-                nextWidth = minWidth;
-                break;
-              case "End":
-                nextWidth = maxWidth;
-                break;
-              default:
-                return;
-            }
-            event.preventDefault();
-            event.stopPropagation();
-            setWidth(nextWidth);
-          }}
+          width={width}
+          minWidth={minWidth}
+          maxWidth={maxWidth}
+          onWidthChange={setWidth}
         />
       ) : null}
       {children}

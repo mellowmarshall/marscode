@@ -152,6 +152,17 @@ const browserTestProject = {
         resetPointer: async ({ page }) => {
           await page.mouse.move(-1, -1);
         },
+        // A real mouse drag: synthetic pointer events cannot take pointer capture.
+        dragHorizontally: async ({ page, frame }, selector: string, deltaX: number) => {
+          const box = await (await frame()).locator(selector).boundingBox();
+          if (!box) throw new Error(`No box for ${selector}`);
+          const x = box.x + box.width / 2;
+          const y = box.y + box.height / 2;
+          await page.mouse.move(x, y);
+          await page.mouse.down();
+          await page.mouse.move(x + deltaX, y, { steps: 8 });
+          await page.mouse.up();
+        },
       },
     },
   },
