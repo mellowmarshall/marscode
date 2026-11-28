@@ -328,7 +328,8 @@ export class CernoProcessBridge {
     }
     const removedIds = this.pruneCompleted();
     this.observedTicks = observedTicks;
-    this.lastRefreshAtMs = now;
+    // Stamp the end of the scan: a slow scan must not read as stale right after it finishes.
+    this.lastRefreshAtMs = this.nowMs();
     if (!this.disposed && (changedIds.length > 0 || removedIds.length > 0)) {
       this.onChanged?.(changedIds, removedIds);
     }
