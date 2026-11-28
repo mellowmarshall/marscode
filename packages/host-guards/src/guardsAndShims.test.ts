@@ -922,7 +922,10 @@ exit ${REFUSED_EXIT_CODE}
     );
   });
 
-  it("keeps a tool alias working when it links one shim destination to another (fly -> flyctl)", () => {
+  it.each([
+    ["directly", false],
+    ["through a link outside the shim directories", true],
+  ])("keeps a tool alias working when fly links to flyctl %s", (_how, viaOutside) => {
     const tmpRoot = NodeFS.existsSync("/tmp") ? "/tmp" : NodeOS.tmpdir();
     const root = NodeFS.mkdtempSync(NodePath.join(tmpRoot, "hg-alias-"));
     tempDirs.push(root);
@@ -938,7 +941,15 @@ exit ${REFUSED_EXIT_CODE}
         mode: 0o755,
       },
     );
-    NodeFS.symlinkSync("flyctl", NodePath.join(guards, "fly"));
+    if (viaOutside) {
+      // fly -> /outside/fly -> guards/flyctl: the chain leaves guards/ and comes back.
+      const outside = NodePath.join(root, "outside");
+      NodeFS.mkdirSync(outside);
+      NodeFS.symlinkSync(NodePath.join(guards, "flyctl"), NodePath.join(outside, "fly"));
+      NodeFS.symlinkSync(NodePath.join(outside, "fly"), NodePath.join(guards, "fly"));
+    } else {
+      NodeFS.symlinkSync("flyctl", NodePath.join(guards, "fly"));
+    }
     const env = {
       ...process.env,
       HOME: fakeHome,

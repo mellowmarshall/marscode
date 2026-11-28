@@ -170,24 +170,18 @@ keep_real() {
   fi
   mkdir -p "$INSTALL_DIR/real"
   if [ -L "$real" ]; then
-    # Keep a link as a link (absolute), under the same name: a multiplexer dispatches on it. A link
-    # to another shim destination (fly -> flyctl) is followed past it, because a shim replaces
-    # that file too: a link there would run the other shim, which would run this one again.
-    target="$real"
-    local hops=0 next=""
-    while [ -L "$target" ] && is_shim_dest "$target" && [ "$hops" -lt 16 ]; do
-      next="$(readlink "$target")"
-      case "$next" in /*) ;; *) next="$(phys_dir "$target")/$next" ;; esac
-      target="$next"
-      hops=$((hops + 1))
-    done
-    if is_shim_dest "$target"; then
-      # The chain ends at a file where a shim goes: keep that file's bytes, never a link to it.
-      if [ ! -f "$target" ] || is_guard_shim "$target"; then
-        printf 'install.sh: fatal: %s leads to %s, which is not a real binary\n' "$real" "$target" >&2
+    # Keep a link as a link (absolute), under the same name: a multiplexer dispatches on it. When
+    # the chain past this link reaches another shim destination anywhere (fly -> flyctl, or
+    # fly -> /opt/x/fly -> guards/flyctl), a shim replaces that file too, and a link would run that
+    # shim, which would run this one again: keep the bytes the whole chain ends at instead.
+    target="$(readlink "$real")"
+    case "$target" in /*) ;; *) target="$(phys_dir "$real")/$target" ;; esac
+    if [ -n "$(shim_dest_in_chain "$target")" ]; then
+      if [ ! -f "$real" ] || is_guard_shim "$real"; then
+        printf 'install.sh: fatal: %s leads to a shim destination that holds no real binary\n' "$real" >&2
         exit 1
       fi
-      cp -p "$target" "$kept.new.$$" || { rm -f "$kept.new.$$"; exit 1; }
+      cp -pL "$real" "$kept.new.$$" || { rm -f "$kept.new.$$"; exit 1; }
     else
       ln -s "$target" "$kept.new.$$"
     fi
