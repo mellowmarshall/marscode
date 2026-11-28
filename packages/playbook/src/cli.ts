@@ -109,6 +109,20 @@ function readOptional(path: string | undefined): string | null {
   return NodeFS.readFileSync(path, "utf8");
 }
 
+const NO_JOB_CI_OUTPUT =
+  "(no CI output: this ship-queue job ran no CI before the review, so judge the diff alone)";
+
+/** ship-queue reviews a job before its merge gates run CI, so the job dir normally has no `ci-output.txt`. */
+function jobCiOutput(bodyFile: string | undefined): string | null {
+  if (!bodyFile) return null;
+  try {
+    return NodeFS.readFileSync(NodePath.join(NodePath.dirname(bodyFile), "ci-output.txt"), "utf8");
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return NO_JOB_CI_OUTPUT;
+    throw cause;
+  }
+}
+
 async function cmdCheck(root: string, args: ReadonlyArray<string>, io: CliIo): Promise<number> {
   const { values, positionals } = NodeUtil.parseArgs({
     args: [...args],
@@ -181,11 +195,7 @@ async function cmdChallenge(root: string, args: ReadonlyArray<string>, io: CliIo
     stateDir: defaultPlaybookStateDir(io.env),
     base: values.base,
     tip: values.tip,
-    ciOutput: readOptional(
-      io.env.SHIP_QUEUE_BODYFILE
-        ? NodePath.join(NodePath.dirname(io.env.SHIP_QUEUE_BODYFILE), "ci-output.txt")
-        : undefined,
-    ),
+    ciOutput: jobCiOutput(io.env.SHIP_QUEUE_BODYFILE),
     advisory,
     threadId: io.env.T3CODE_THREAD_ID,
     signal: ac.signal,
