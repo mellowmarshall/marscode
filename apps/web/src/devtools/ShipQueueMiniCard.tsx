@@ -44,6 +44,7 @@ export function ShipQueueMiniCard({
   });
   const current =
     steps.find((s) => s.state === "failed") ??
+    steps.find((s) => s.state === "warning") ??
     steps.find((s) => s.state === "active") ??
     steps.find((s) => s.state === "waiting") ??
     steps.findLast((s) => s.state === "done") ??
@@ -51,7 +52,7 @@ export function ShipQueueMiniCard({
   const dotCls =
     current?.state === "failed"
       ? "bg-destructive"
-      : current?.state === "waiting"
+      : current?.state === "waiting" || current?.state === "warning"
         ? "bg-warning"
         : current?.state === "active"
           ? "bg-info animate-pulse"
@@ -61,7 +62,7 @@ export function ShipQueueMiniCard({
   const txtCls =
     current?.state === "failed"
       ? "text-destructive-foreground"
-      : current?.state === "waiting"
+      : current?.state === "waiting" || current?.state === "warning"
         ? "text-warning-foreground"
         : current?.state === "active"
           ? "text-info-foreground"
@@ -158,7 +159,7 @@ export function ShipQueueMiniCard({
                 ? "h-1 flex-1 rounded-full bg-success"
                 : step.state === "active"
                   ? "h-1 flex-1 rounded-full bg-info"
-                  : step.state === "waiting"
+                  : step.state === "waiting" || step.state === "warning"
                     ? "h-1 flex-1 rounded-full bg-warning"
                     : step.state === "failed"
                       ? "h-1 flex-1 rounded-full bg-destructive"

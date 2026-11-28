@@ -5,8 +5,10 @@ import * as NodePath from "node:path";
 
 import { getShipQueueStatus } from "../ShipQueueEventStream.ts";
 import { readShipJobLogInfo } from "./shipQueueLogParser.ts";
+import { postMergeSyncReason, readShipJobLogTail } from "./shipQueueLogTail.ts";
 import {
   sanitizeJobText,
+  type JobDetail,
   type JobSummary,
   type JobsQueueMeta,
   type TrackedJobState,
@@ -106,12 +108,22 @@ export function adaptShipQueueJob(
     typeof (raw.route as { host?: unknown }).host === "string"
       ? String((raw.route as { host: string }).host).trim()
       : undefined;
+  const syncExit = Number(raw.sync_exit);
+  const syncFailed =
+    raw.sync_exit !== undefined &&
+    raw.sync_exit !== null &&
+    String(raw.sync_exit).trim() !== "" &&
+    Number.isFinite(syncExit) &&
+    syncExit !== 0;
+  const syncTail = rawId && syncFailed ? readShipJobLogTail(jobsRootDir, rawId) : null;
+  const syncReason = syncTail ? postMergeSyncReason(syncTail) : undefined;
   const enrichedShipJob: Record<string, unknown> =
-    stage || logInfo.hasPostMerge
+    stage || logInfo.hasPostMerge || syncReason
       ? {
           ...raw,
           ...(stage ? { stage } : {}),
           ...(logInfo.hasPostMerge ? { post_merge: true } : {}),
+          ...(syncReason ? { sync_reason: syncReason } : {}),
         }
       : raw;
 
@@ -212,6 +224,19 @@ export class ShipQueueBridge {
     this.current.clear();
     this.queueMeta = {};
     this.queueMetaFp = "";
+  }
+
+  /** The job's redacted log tail for the Ship Queue row's log excerpt. */
+  getDetail(summary: JobSummary): JobDetail {
+    const rawId = summary.id.startsWith("ship:") ? summary.id.slice("ship:".length) : "";
+    const tail = readShipJobLogTail(this.jobsRootDir, rawId);
+    return {
+      id: summary.id,
+      revision: summary.revision,
+      logState: tail === null ? "unreadable" : tail.length > 0 ? "attached" : "no_output",
+      series: [],
+      logTail: tail ?? [],
+    };
   }
 
   getSnapshot(): {

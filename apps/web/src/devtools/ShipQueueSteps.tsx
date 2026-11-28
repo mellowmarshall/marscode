@@ -10,14 +10,36 @@ import type { ShipQueueJob } from "./devtoolsClient";
 
 const SAFE_GH_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const JOB_KEY_EPOCH_RE = /^(\d{9,11})-j/;
-const MARKER_AT_RE = /\bat=(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:?\d{2}|Z)?)/;
+// The queue writes `at=` with milliseconds (`…T19:43:56.898Z`); without them the zone is lost.
+const MARKER_AT_RE = /\bat=(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[+-]\d{2}:?\d{2}|Z)?)/;
+// Log stages a worker reaches only after STARTED (`@t3tools/ship-queue/markers`).
+const STARTED_STAGES = new Set([
+  "rebase",
+  "ci",
+  "pr",
+  "github",
+  "cleanup",
+  "post-merge",
+  "deploy",
+  "deployed",
+]);
 const MARKER_REBASED_RE = /^REBASED\s+([0-9a-f]{7,40})\b/i;
 
+/** The job's GitHub `owner/name`: its `pr_repo`, else its queue `repo`, which the queue keys by `owner/name`. */
+export function resolveShipJobGhRepo(job: ShipQueueJob): string | null {
+  for (const candidate of [job.pr_repo, job.repo]) {
+    const value = candidate?.trim();
+    if (value && SAFE_GH_REPO_RE.test(value)) return value;
+  }
+  return null;
+}
+
 export function buildSafePrUrl(job: ShipQueueJob): string | null {
-  if (!job.pr_repo || !SAFE_GH_REPO_RE.test(job.pr_repo)) return null;
+  const ghRepo = resolveShipJobGhRepo(job);
+  if (!ghRepo) return null;
   const prNum = typeof job.pr === "number" ? job.pr : Number(job.pr);
   if (!Number.isInteger(prNum) || prNum <= 0) return null;
-  return `https://github.com/${job.pr_repo}/pull/${prNum}`;
+  return `https://github.com/${ghRepo}/pull/${prNum}`;
 }
 
 export function isShipQueueJobLive(job: ShipQueueJob): boolean {
@@ -63,10 +85,9 @@ export function formatShipJobElapsed(job: ShipQueueJob, nowMs: number): string |
   if (isShipQueueJobLive(job)) {
     return formatDurationSeconds((nowMs - startMs) / 1000);
   }
-  const marker = job.last_marker ?? "";
-  const atMatch = MARKER_AT_RE.exec(marker);
-  if (atMatch?.[1]) {
-    const endMs = Date.parse(atMatch[1]);
+  const endRaw = job.ended_at ?? MARKER_AT_RE.exec(job.last_marker ?? "")?.[1];
+  if (endRaw) {
+    const endMs = Date.parse(endRaw);
     if (Number.isFinite(endMs) && endMs >= startMs) {
       return formatDurationSeconds((endMs - startMs) / 1000);
     }
@@ -129,7 +150,8 @@ export function shipQueueStatusVariant(
   return "outline";
 }
 
-export type StepState = "done" | "active" | "waiting" | "failed" | "pending";
+/** `warning`: the step failed after the job's outcome was already settled (a merged PR's post-merge sync). */
+export type StepState = "done" | "active" | "waiting" | "warning" | "failed" | "pending";
 
 export interface DerivedShipStep {
   readonly id: string;
@@ -209,6 +231,9 @@ export function deriveShipJobSteps(
       ciPassed ||
       isTruthyFlag(job.ci_done) ||
       Boolean(job.route?.host) ||
+      Boolean(job.rebased_onto) ||
+      (job.steps?.length ?? 0) > 0 ||
+      STARTED_STAGES.has((job.stage ?? "").trim().toLowerCase()) ||
       marker.startsWith("STARTED") ||
       marker.startsWith("REBASED"));
   const waitingWatcher =
@@ -310,7 +335,8 @@ export function deriveShipJobSteps(
 
   if (hasDeployStep) {
     if (syncExit !== null && syncExit !== 0) {
-      states[6] = "failed";
+      // The PR stays merged whatever the sync does: a done job's failed sync is a warning, not a failure.
+      states[6] = isDone ? "warning" : "failed";
     } else if (syncExit === 0 || (stageLower === "deployed" && !isFailed)) {
       states[6] = "done";
     } else if (isFailed) {
@@ -405,14 +431,22 @@ export function deriveShipJobSteps(
     },
   ];
   if (hasDeployStep) {
+    const syncDetail =
+      syncExit !== null && syncExit !== 0
+        ? job.sync_reason
+          ? m(msg("exit {code}: {reason}"), { code: syncExit, reason: job.sync_reason })
+          : m(msg("exit {code}"), { code: syncExit })
+        : undefined;
     steps.push({
       id: "land",
       label: labels.land,
       state: states[6]!,
       detail:
-        states[6] === "failed"
-          ? reason || m(msg("exit {code}"), { code: syncExit ?? "" })
-          : undefined,
+        states[6] === "warning"
+          ? syncDetail
+          : states[6] === "failed"
+            ? (syncDetail ?? (reason || m(msg("exit {code}"), { code: syncExit ?? "" })))
+            : undefined,
     });
   }
   return steps;

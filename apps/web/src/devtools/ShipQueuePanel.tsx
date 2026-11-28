@@ -22,8 +22,9 @@ import { DevtoolsErrorBoundary } from "./DevtoolsErrorBoundary";
 import { DevtoolsStateBanner } from "./DevtoolsStateBanner";
 import { cancelTrackedJob, refreshSharedJobs, useSharedJobs } from "./jobs/jobsStore";
 import { useLiveClockMs } from "./liveClock";
+import { compareShipJobsNewestFirst, shipJobRepoName } from "./shipQueueJobFacts";
 import { isShipQueueJobLive } from "./ShipQueueSteps";
-import { ShipQueueTableRow } from "./ShipQueueTableRow";
+import { SHIP_QUEUE_GRID_COLUMNS, ShipQueueTableRow } from "./ShipQueueTableRow";
 import { findActionableDepHoldForJob } from "./threadApprovals";
 
 function ShipQueuePanelInner({ environmentId }: { readonly environmentId: EnvironmentId | null }) {
@@ -56,9 +57,12 @@ function ShipQueuePanelInner({ environmentId }: { readonly environmentId: Enviro
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const shipJobs: ReadonlyArray<ShipQueueJob> = jobsState.jobs.flatMap((j) =>
-    j.source === "ship-queue" && j.shipJob ? [j.shipJob] : [],
-  );
+  const revisions = new Map<ShipQueueJob, number>();
+  const shipJobs: ReadonlyArray<ShipQueueJob> = jobsState.jobs.flatMap((j) => {
+    if (j.source !== "ship-queue" || !j.shipJob) return [];
+    revisions.set(j.shipJob, j.revision);
+    return [j.shipJob];
+  });
   const hasLive = shipJobs.some(isShipQueueJobLive);
   const nowMs = useLiveClockMs(hasLive);
   const depsState = useSharedShipQueueDeps(environmentId, !jobsState.unsupported && hasLive);
@@ -77,7 +81,11 @@ function ShipQueuePanelInner({ environmentId }: { readonly environmentId: Enviro
   });
 
   const activeJobs = filtered.filter(isShipQueueJobLive);
-  const recentJobs = filtered.filter((j) => !isShipQueueJobLive(j)).slice(0, 40);
+  const recentJobs = filtered
+    .filter((j) => !isShipQueueJobLive(j))
+    .toSorted(compareShipJobsNewestFirst)
+    .slice(0, 40);
+  const repoLabel = (repo: string) => shipJobRepoName({ repo }) ?? repo;
   const failedRecentCount = recentJobs.filter((j) =>
     (j.state ?? j.display_state ?? "").toLowerCase().includes("fail"),
   ).length;
@@ -125,13 +133,15 @@ function ShipQueuePanelInner({ environmentId }: { readonly environmentId: Enviro
           {repos.length > 1 ? (
             <Select value={repoFilter} onValueChange={(v) => v && setRepoFilter(v)}>
               <SelectTrigger size="sm" className="w-36" aria-label={gt("Filter by repository")}>
-                <SelectValue>{repoFilter === "all" ? gt("All repos") : repoFilter}</SelectValue>
+                <SelectValue>
+                  {repoFilter === "all" ? gt("All repos") : repoLabel(repoFilter)}
+                </SelectValue>
               </SelectTrigger>
               <SelectPopup align="start">
                 <SelectItem value="all">{gt("All repos")}</SelectItem>
                 {repos.map((r) => (
                   <SelectItem key={r} value={r}>
-                    {r}
+                    {repoLabel(r)}
                   </SelectItem>
                 ))}
               </SelectPopup>
@@ -185,13 +195,15 @@ function ShipQueuePanelInner({ environmentId }: { readonly environmentId: Enviro
       ) : null}
 
       <div className="overflow-hidden rounded-lg border border-border/70 bg-card/40">
-        <div className="grid grid-cols-[1.25rem_4.5rem_5.5rem_4rem_minmax(0,1fr)_5.75rem_4.5rem_2rem] items-center gap-2 border-b border-border/70 bg-muted/25 px-3 py-1.5 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
+        <div
+          className={`${SHIP_QUEUE_GRID_COLUMNS} items-center border-b border-border/70 bg-muted/25 px-3 py-1.5 text-3xs font-medium uppercase tracking-wide text-muted-foreground`}
+        >
           <span />
           <span>
             <T>Queue #</T>
           </span>
           <span>
-            <T>Repo</T>
+            <T>Repo · CI host</T>
           </span>
           <span>
             <T>PR</T>
@@ -235,6 +247,8 @@ function ShipQueuePanelInner({ environmentId }: { readonly environmentId: Enviro
                 <ShipQueueTableRow
                   key={id}
                   job={job}
+                  revision={revisions.get(job) ?? 0}
+                  environmentId={environmentId}
                   depHeld={depHold !== null}
                   expanded={expandedId === id}
                   nowMs={nowMs}
@@ -261,6 +275,8 @@ function ShipQueuePanelInner({ environmentId }: { readonly environmentId: Enviro
                     <ShipQueueTableRow
                       key={id}
                       job={job}
+                      revision={revisions.get(job) ?? 0}
+                      environmentId={environmentId}
                       expanded={expandedId === id}
                       nowMs={nowMs}
                       cancelling={cancellingId === id}

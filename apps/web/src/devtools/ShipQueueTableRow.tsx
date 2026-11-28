@@ -1,11 +1,13 @@
-/** DevDeck-style hairline Ship Queue table row with inline step strip and expandable vertical tracker. */
-import { T, Var, useGT } from "gt-react";
+/** DevDeck-style hairline Ship Queue table row with inline step strip and expandable job facts. */
+import type { EnvironmentId } from "@t3tools/contracts";
+import { T, useGT } from "gt-react";
 import {
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   CircleDotIcon,
   ExternalLinkIcon,
+  TriangleAlertIcon,
   XCircleIcon,
 } from "lucide-react";
 
@@ -14,18 +16,23 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import type { ShipQueueJob } from "./devtoolsClient";
 import { openFleetConsole } from "./devtoolsStore";
+import { shipJobCiHost, shipJobRepoName, shipJobSync } from "./shipQueueJobFacts";
+import { ShipQueueJobDetails } from "./ShipQueueJobDetails";
 import {
   buildSafePrUrl,
   deriveShipJobSteps,
   formatShipJobElapsed,
   isShipQueueJobLive,
   resolveShipJobDisplayState,
+  resolveShipJobGhRepo,
   shipQueueStatusVariant,
   shouldHideRedundantStatusBadge,
 } from "./ShipQueueSteps";
-import { ShipQueueVerticalTracker } from "./ShipQueueVerticalTracker";
+import { TruncatedText } from "./TruncatedText";
 
-const SAFE_GH_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+/** Shared by the table header (`ShipQueuePanel`) and every row. */
+export const SHIP_QUEUE_GRID_COLUMNS =
+  "grid grid-cols-[1.25rem_3.75rem_7.5rem_4rem_minmax(0,1fr)_5.75rem_4.5rem_2rem] gap-2";
 
 function extractIssueRefs(
   job: ShipQueueJob,
@@ -39,7 +46,7 @@ function extractIssueRefs(
       found.add(n);
     }
   }
-  const safeRepo = job.pr_repo && SAFE_GH_REPO_RE.test(job.pr_repo) ? job.pr_repo : null;
+  const safeRepo = resolveShipJobGhRepo(job);
   return [...found].slice(0, 3).map((num) => ({
     num,
     url: safeRepo ? `https://github.com/${safeRepo}/issues/${num}` : null,
@@ -102,6 +109,17 @@ function ShipQueueInlineSteps({ job }: { readonly job: ShipQueueJob }) {
             </span>
           );
         }
+        if (step.state === "warning") {
+          return (
+            <span
+              key={step.id}
+              className="inline-flex items-center gap-0.5 font-medium text-warning"
+            >
+              <TriangleAlertIcon className="size-2.5" />
+              <span>{step.label}</span>
+            </span>
+          );
+        }
         if (step.state === "failed") {
           return (
             <span
@@ -123,8 +141,25 @@ function ShipQueueInlineSteps({ job }: { readonly job: ShipQueueJob }) {
   );
 }
 
+function SyncWarning({ job }: { readonly job: ShipQueueJob }) {
+  const gt = useGT();
+  const sync = shipJobSync(job);
+  if (!sync || sync.exit === 0 || !sync.merged) return null;
+  const text = sync.reason
+    ? gt("post-merge sync exit {code}: {reason}", { code: sync.exit, reason: sync.reason })
+    : gt("post-merge sync exit {code}", { code: sync.exit });
+  return (
+    <div className="flex min-w-0 items-center gap-1 font-mono text-3xs text-warning">
+      <TriangleAlertIcon className="size-2.5 shrink-0" />
+      <TruncatedText as="span" text={text} variant="code" className="min-w-0 truncate" />
+    </div>
+  );
+}
+
 export function ShipQueueTableRow({
   job,
+  revision,
+  environmentId,
   depHeld = false,
   expanded,
   nowMs,
@@ -134,6 +169,8 @@ export function ShipQueueTableRow({
   onOpenThread,
 }: {
   readonly job: ShipQueueJob;
+  readonly revision: number;
+  readonly environmentId: EnvironmentId | null;
   readonly depHeld?: boolean;
   readonly expanded: boolean;
   readonly nowMs: number;
@@ -152,10 +189,14 @@ export function ShipQueueTableRow({
   const issueRefs = extractIssueRefs(job);
   const elapsed = formatShipJobElapsed(job, nowMs);
   const when = formatWhenStamp(job.submitted_at);
+  const repoName = shipJobRepoName(job);
+  const ciHost = shipJobCiHost(job);
 
   return (
-    <div className="border-b border-border/60 last:border-b-0">
-      <div className="grid grid-cols-[1.25rem_4.5rem_5.5rem_4rem_minmax(0,1fr)_5.75rem_4.5rem_2rem] items-start gap-2 px-3 py-2.5 text-xs hover:bg-muted/20">
+    <div data-testid="ship-queue-row" className="border-b border-border/60 last:border-b-0">
+      <div
+        className={`${SHIP_QUEUE_GRID_COLUMNS} items-start px-3 py-2.5 text-xs hover:bg-muted/20`}
+      >
         <button
           type="button"
           className="mt-0.5 text-muted-foreground hover:text-foreground"
@@ -177,7 +218,20 @@ export function ShipQueueTableRow({
           {`#${id}`}
         </button>
 
-        <span className="truncate font-mono text-2xs text-muted-foreground">{job.repo ?? "-"}</span>
+        <div className="min-w-0 space-y-0.5 font-mono">
+          <div className="text-2xs text-foreground/85 wrap-anywhere">{repoName ?? "-"}</div>
+          {ciHost ? (
+            <button
+              type="button"
+              data-testid="ship-queue-ci-host"
+              className="block max-w-full text-left text-3xs text-muted-foreground wrap-anywhere hover:text-foreground hover:underline"
+              aria-label={gt("CI host {host}", { host: ciHost })}
+              onClick={() => openFleetConsole({ section: "machines", host: ciHost })}
+            >
+              {ciHost}
+            </button>
+          ) : null}
+        </div>
 
         <div className="min-w-0">
           {prUrl ? (
@@ -190,6 +244,8 @@ export function ShipQueueTableRow({
               <PullRequestGlyph.pullRequest className="size-3 shrink-0" />
               <span>{`#${job.pr}`}</span>
             </a>
+          ) : job.pr !== undefined && String(job.pr).trim() !== "" ? (
+            <span className="font-mono text-2xs text-foreground/85">{`#${job.pr}`}</span>
           ) : (
             <span className="font-mono text-2xs text-muted-foreground/50">-</span>
           )}
@@ -224,24 +280,13 @@ export function ShipQueueTableRow({
             )}
           </div>
           {job.branch ? (
-            <div className="flex flex-wrap items-center gap-2 font-mono text-3xs text-muted-foreground">
-              <span className="truncate">{job.branch}</span>
-              {job.route?.host ? (
-                <button
-                  type="button"
-                  className="rounded border border-border/70 bg-muted/30 px-1 py-px text-3xs text-muted-foreground hover:text-foreground"
-                  onClick={() =>
-                    openFleetConsole({ section: "machines", host: job.route?.host ?? null })
-                  }
-                >
-                  {job.route.host}
-                </button>
-              ) : null}
-            </div>
+            <div className="truncate font-mono text-3xs text-muted-foreground">{job.branch}</div>
           ) : null}
           {live || status.toLowerCase().includes("fail") ? (
             <ShipQueueInlineSteps job={job} />
-          ) : null}
+          ) : (
+            <SyncWarning job={job} />
+          )}
         </div>
 
         <div className="flex flex-col items-end gap-0.5">
@@ -287,30 +332,7 @@ export function ShipQueueTableRow({
       </div>
 
       {expanded ? (
-        <div className="border-t border-border/50 bg-muted/15 px-6 py-3">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <ShipQueueVerticalTracker job={job} />
-            <div className="space-y-1.5 text-2xs">
-              {job.reason ? (
-                <div className="rounded border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 font-mono text-destructive">
-                  {job.reason}
-                </div>
-              ) : null}
-              {job.last_marker ? (
-                <div className="rounded border border-border/60 bg-background/70 px-2.5 py-1.5 font-mono text-3xs text-muted-foreground">
-                  {job.last_marker}
-                </div>
-              ) : null}
-              {job.waiting ? (
-                <div className="font-mono text-3xs text-muted-foreground">
-                  <T>
-                    Waiting: <Var>{job.waiting}</Var>
-                  </T>
-                </div>
-              ) : null}
-            </div>
-          </div>
-        </div>
+        <ShipQueueJobDetails job={job} environmentId={environmentId} revision={revision} />
       ) : null}
     </div>
   );

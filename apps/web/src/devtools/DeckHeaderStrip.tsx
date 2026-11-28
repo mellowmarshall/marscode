@@ -1,8 +1,6 @@
 /**
- * DevDeck-style top instrument strip for Fleet Console:
- *   - 4-host top strip (status dot, uptime/load, devtools state, clickable CI on/off switch)
- *   - Selected-host single-row telemetry gauges (CPU 5m graph, Mem, GPU 5m graph + VRAM on every GPU host, disks)
- *     with the host and storage actions at the row's end
+ * Fleet Console instrument strip: host chips (status, uptime and load on their own full-width line
+ * that wraps rather than truncates, CI switch) and the selected host's telemetry gauges and actions.
  */
 import { T, useGT } from "gt-react";
 import { BotIcon, FileSearchIcon, RefreshCwIcon } from "lucide-react";
@@ -171,29 +169,27 @@ export function DeckHeaderStrip({
                   }
                 }}
               >
-                <div className="min-w-0">
-                  <div data-fd="host-line">
-                    <span data-fd="dot" data-s={dotState} />
-                    <span data-fd="host-name">{host.shortName}</span>
-                  </div>
-                  <div data-fd="host-meta">
-                    {host.status === "offline" ? (
-                      <span>{gt("offline")}</span>
-                    ) : (
-                      <>
-                        {up ? <span>{`up ${up}`}</span> : null}
-                        {up && load !== null ? <span>{" · "}</span> : null}
-                        {load !== null ? (
-                          <span>
-                            {`${gt("load")} `}
-                            <b data-warn={loadHot}>{load.toFixed(2)}</b>
-                          </span>
-                        ) : !up ? (
-                          <span>{host.platform}</span>
-                        ) : null}
-                      </>
-                    )}
-                  </div>
+                <div data-fd="host-line">
+                  <span data-fd="dot" data-s={dotState} />
+                  <span data-fd="host-name">{host.shortName}</span>
+                </div>
+                <div data-fd="host-meta">
+                  {host.status === "offline" ? (
+                    <span>{gt("offline")}</span>
+                  ) : (
+                    <>
+                      {up ? <span>{`up ${up}`}</span> : null}
+                      {up && load !== null ? <span aria-hidden>{"·"}</span> : null}
+                      {load !== null ? (
+                        <span>
+                          {`${gt("load")} `}
+                          <b data-warn={loadHot}>{load.toFixed(2)}</b>
+                        </span>
+                      ) : !up ? (
+                        <span>{host.platform}</span>
+                      ) : null}
+                    </>
+                  )}
                 </div>
 
                 {hasRight ? (

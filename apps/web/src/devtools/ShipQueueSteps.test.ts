@@ -27,6 +27,37 @@ const LABELS = {
 } as const;
 
 describe("deriveShipJobSteps", () => {
+  it("places a failure after STARTED in CI even when only the log stage records the start", () => {
+    const steps = deriveShipJobSteps(
+      {
+        id: "300",
+        state: "failed",
+        reason: "rebase_conflict",
+        stage: "rebase",
+        last_marker: "FAILED reason=rebase_conflict",
+      },
+      LABELS,
+    );
+    expect(steps.find((s) => s.id === "queued")?.state).toBe("done");
+    expect(steps.find((s) => s.id === "ci")).toMatchObject({
+      state: "failed",
+      detail: "rebase_conflict",
+    });
+  });
+
+  it("times a finished job from its millisecond `at=` stamp or ended_at, keeping the zone", () => {
+    const base = { id: "301", state: "done", submitted_at: "2026-01-02T10:00:00.000Z" };
+    expect(
+      formatShipJobElapsed(
+        { ...base, last_marker: "DONE job=301 pr=63 at=2026-01-02T10:00:42.898Z" },
+        0,
+      ),
+    ).toBe("42s");
+    expect(formatShipJobElapsed({ ...base, ended_at: "2026-01-02T10:03:05.000Z" }, 0)).toBe(
+      "3m 05s",
+    );
+  });
+
   it("marks CI & Checks failed when ci_done=1 on a CI failure", () => {
     const steps = deriveShipJobSteps(
       {
@@ -264,6 +295,11 @@ describe("deriveShipJobSteps", () => {
       "https://github.com/example-org/example-repo/pull/108",
     );
     expect(buildSafePrUrl({ id: "bad", pr: 1, pr_repo: "../evil/repo" })).toBeNull();
+    // The queue keys jobs by `owner/name`, so a job without `pr_repo` still links its PR.
+    expect(buildSafePrUrl({ id: "63", pr: 63, repo: "example-org/example-repo" })).toBe(
+      "https://github.com/example-org/example-repo/pull/63",
+    );
+    expect(buildSafePrUrl({ id: "64", pr: 64, repo: "example-repo" })).toBeNull();
 
     // Exact job 10984 shape (tools): DONE with MERGE_EXIT=0 -> CLEANED -> DONE, NO POST_MERGE, NO sync_exit.
     const noDeployDone = {
@@ -350,7 +386,7 @@ describe("deriveShipJobSteps", () => {
       "failed",
     );
 
-    // Non-zero SYNC_EXIT must always mark Deploy failed even if stage is "deployed" and state is "done".
+    // A done job's non-zero SYNC_EXIT is a warning on Deploy (the PR stays merged), never done or failed.
     const failedSyncDone = {
       id: "206",
       state: "done",
@@ -362,9 +398,17 @@ describe("deriveShipJobSteps", () => {
       stage: "deployed",
       post_merge: true,
     };
-    expect(deriveShipJobSteps(failedSyncDone, LABELS).find((s) => s.id === "land")?.state).toBe(
-      "failed",
-    );
+    const failedSyncLand = deriveShipJobSteps(
+      { ...failedSyncDone, sync_reason: "install.sh: unknown argument" },
+      LABELS,
+    ).find((s) => s.id === "land");
+    expect(failedSyncLand?.state).toBe("warning");
+    expect(failedSyncLand?.detail).toBe("exit 1: install.sh: unknown argument");
+    expect(
+      deriveShipJobSteps({ ...failedSyncDone, state: "failed" }, LABELS).find(
+        (s) => s.id === "land",
+      )?.state,
+    ).toBe("failed");
 
     // M2: Post-merge failures on repos with NO Deploy step (remote_branch_left, pre_cleanup_failed, post-merge cancel)
     // must mark Merge failed instead of rendering 6 green done steps, and L5 must not misclassify pre_cleanup_failed as PR failure.

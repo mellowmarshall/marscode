@@ -314,7 +314,15 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
         return bgDetail;
       }
       const ship = shipJobs.get(id);
-      return ship ? { id: ship.id, revision: ship.revision, series: [], logTail: [] } : null;
+      if (!ship) return null;
+      return (
+        shipBridge?.getDetail(ship) ?? {
+          id: ship.id,
+          revision: ship.revision,
+          series: [],
+          logTail: [],
+        }
+      );
     },
 
     async cancelJob(id, signal) {
