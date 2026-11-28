@@ -1,8 +1,8 @@
 // The design rules' scan (PLAYBOOK §10).
-// Vendored verbatim from the original playbook's design scan; only comments differ.
-import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
+// From the original playbook's design scan; only comments and the node: import style differ.
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
 import { aliasResolver } from "./pb_design_aliases.mjs";
 import { blankComments, scanScript } from "./pb_design_script.mjs";
@@ -12,7 +12,8 @@ import { camelProperty } from "./pb_design_values.mjs";
 const SCRIPT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const STYLESHEET = /\.(css|html)$/;
 const JSON_FILE = /\.json$/;
-const NOT_CLIENT = /(^|\/)(tests?|__tests__|__mocks__|fixtures)\/|\.(test|spec)\.[cm]?[jt]sx?$|\.d\.ts$/;
+const NOT_CLIENT =
+  /(^|\/)(tests?|__tests__|__mocks__|fixtures)\/|\.(test|spec)\.[cm]?[jt]sx?$|\.d\.ts$/;
 const EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
 const ASSET = /\.(png|jpe?g|gif|webp|svg|json|ttf|otf|woff2?|mp3|mp4|m4a|webm|ogg|wav|lottie)$/i;
 
@@ -20,20 +21,39 @@ const ASSET = /\.(png|jpe?g|gif|webp|svg|json|ttf|otf|woff2?|mp3|mp4|m4a|webm|og
 function gitEnv() {
   const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: "/dev/null" };
   for (const name of Object.keys(env)) {
-    if (/^GIT_(DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|REPLACE_REF_BASE|CONFIG_PARAMETERS|CONFIG_COUNT|CONFIG_KEY_\d+|CONFIG_VALUE_\d+)$/.test(name)) delete env[name];
+    if (
+      /^GIT_(DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|REPLACE_REF_BASE|CONFIG_PARAMETERS|CONFIG_COUNT|CONFIG_KEY_\d+|CONFIG_VALUE_\d+)$/.test(
+        name,
+      )
+    )
+      delete env[name];
   }
   return env;
 }
 
 /** Tracked and untracked (not ignored) files in the working tree. */
 export function listedFiles(root) {
-  return execFileSync("git", ["-C", root, "-c", "core.quotePath=false", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
-    env: gitEnv(),
-    encoding: "utf8",
-    maxBuffer: 256 * 1024 * 1024
-  })
+  return NodeChildProcess.execFileSync(
+    "git",
+    [
+      "-C",
+      root,
+      "-c",
+      "core.quotePath=false",
+      "ls-files",
+      "-z",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+    ],
+    {
+      env: gitEnv(),
+      encoding: "utf8",
+      maxBuffer: 256 * 1024 * 1024,
+    },
+  )
     .split("\0")
-    .filter((rel) => rel && existsSync(path.join(root, rel)));
+    .filter((rel) => rel && NodeFS.existsSync(NodePath.join(root, rel)));
 }
 
 /**
@@ -44,7 +64,8 @@ export function listedFiles(root) {
  */
 export function closedList(names) {
   const out = new Set(names ?? []);
-  for (const name of out) if (!name.startsWith("--") && name.includes("-")) out.add(camelProperty(name));
+  for (const name of out)
+    if (!name.startsWith("--") && name.includes("-")) out.add(camelProperty(name));
   return out;
 }
 
@@ -59,7 +80,7 @@ export function designSettings(block) {
     client: block.client,
     touchCalls: new Set(block.touch_calls ?? []),
     chokepoint: Boolean(block.chokepoint),
-    packages: block.packages ?? {}
+    packages: block.packages ?? {},
   };
 }
 
@@ -72,19 +93,30 @@ export function isClientFile(rel, scopes) {
 }
 
 function resolveImport(spec, fromRel, known) {
-  const target = fromRel ? path.posix.normalize(path.posix.join(path.posix.dirname(fromRel), spec)) : path.posix.normalize(spec);
-  const candidates = [target, ...EXTENSIONS.map((ext) => target + ext), ...EXTENSIONS.map((ext) => `${target}/index${ext}`)];
+  const target = fromRel
+    ? NodePath.posix.normalize(NodePath.posix.join(NodePath.posix.dirname(fromRel), spec))
+    : NodePath.posix.normalize(spec);
+  const candidates = [
+    target,
+    ...EXTENSIONS.map((ext) => target + ext),
+    ...EXTENSIONS.map((ext) => `${target}/index${ext}`),
+  ];
   return candidates.find((candidate) => known.has(candidate)) ?? target;
 }
 
 function runtimeImportsOf(clean, rel, aliasTarget) {
   const out = [];
-  for (const m of clean.matchAll(/\b(?:import|export)\s+(?:([\s\S]*?)\s+from\s*)?["']([^"']+)["']/g)) {
+  for (const m of clean.matchAll(
+    /\b(?:import|export)\s+(?:([\s\S]*?)\s+from\s*)?["']([^"']+)["']/g,
+  )) {
     const clause = (m[1] ?? "").trim();
     if (/^type\b(?!\s*[,{])/.test(clause)) continue;
     const namedOnly = /^\{([^}]*)\}$/.exec(clause);
     if (namedOnly) {
-      const parts = namedOnly[1].split(",").map((p) => p.trim()).filter(Boolean);
+      const parts = namedOnly[1]
+        .split(",")
+        .map((p) => p.trim())
+        .filter(Boolean);
       if (parts.length > 0 && parts.every((p) => /^type\s+/.test(p))) continue;
     }
     const spec = m[2];
@@ -101,7 +133,7 @@ function runtimeImportsOf(clean, rel, aliasTarget) {
 
 function uiImportGraphFindings(scripts, settings) {
   if (!settings.ui || !settings.tokens) return [];
-  const design = path.posix.dirname(settings.tokens);
+  const design = NodePath.posix.dirname(settings.tokens);
   const inside = (rel, dir) => rel === dir || rel.startsWith(`${dir}/`);
   const byRel = new Map(scripts.map((s) => [s.rel, s]));
   const known = new Set(byRel.keys());
@@ -109,13 +141,15 @@ function uiImportGraphFindings(scripts, settings) {
   const importsOf = (rel) => {
     if (!edges.has(rel)) {
       const entry = byRel.get(rel);
-      const list = entry ? runtimeImportsOf(blankComments(entry.text), rel, settings.aliasTarget) : [];
+      const list = entry
+        ? runtimeImportsOf(blankComments(entry.text), rel, settings.aliasTarget)
+        : [];
       edges.set(
         rel,
         list.map((item) => ({
           ...item,
-          target: resolveImport(item.aliased ?? item.spec, item.aliased ? "" : rel, known)
-        }))
+          target: resolveImport(item.aliased ?? item.spec, item.aliased ? "" : rel, known),
+        })),
       );
     }
     return edges.get(rel);
@@ -151,7 +185,7 @@ function uiImportGraphFindings(scripts, settings) {
         line: line + 1,
         text: lines[line] ?? "",
         message: `the UI package reaches app code through ${spec}: ${[rel, ...chain].join(" -> ")}`,
-        where: `${rel}:${line + 1}`
+        where: `${rel}:${line + 1}`,
       });
     }
   }
@@ -159,7 +193,9 @@ function uiImportGraphFindings(scripts, settings) {
 }
 
 function devOnlyModules(scripts) {
-  const byRel = new Map(scripts.map((s) => [s.rel, { text: s.text, clean: blankComments(s.text) }]));
+  const byRel = new Map(
+    scripts.map((s) => [s.rel, { text: s.text, clean: blankComments(s.text) }]),
+  );
   const known = new Set(byRel.keys());
   const importers = new Map();
   const unguardedRequire = new Set();
@@ -242,15 +278,17 @@ export function designFindings(root, settings, emitted) {
   const listed = listedFiles(root);
   const sources = listed
     .filter((rel) => isClientFile(rel, settings.client))
-    .map((rel) => ({ rel, text: readFileSync(path.join(root, rel), "utf8") }));
+    .map((rel) => ({ rel, text: NodeFS.readFileSync(NodePath.join(root, rel), "utf8") }));
   const scanned = sources.filter(({ rel }) => !emitted.has(rel));
   if (settings.chokepoint) {
     return { findings: [], files: scanned.length };
   }
   const findings = [];
-  for (const { rel, text } of scanned.filter(({ rel }) => STYLESHEET.test(rel))) findings.push(...scanStylesheet(text, rel, settings));
+  for (const { rel, text } of scanned.filter(({ rel }) => STYLESHEET.test(rel)))
+    findings.push(...scanStylesheet(text, rel, settings));
   const inTokens = (rel) => rel.startsWith(`${settings.tokens}/`);
-  for (const { rel, text } of scanned.filter(({ rel }) => JSON_FILE.test(rel) && !inTokens(rel))) findings.push(...scanJson(text, rel, settings));
+  for (const { rel, text } of scanned.filter(({ rel }) => JSON_FILE.test(rel) && !inTokens(rel)))
+    findings.push(...scanJson(text, rel, settings));
   const scripts = scanned.filter(({ rel }) => SCRIPT.test(rel));
   if (scripts.length) {
     for (const { rel, text } of scripts) {
@@ -258,7 +296,10 @@ export function designFindings(root, settings, emitted) {
     }
     findings.push(...uiImportGraphFindings(scripts, settings));
     const devOnly = devOnlyModules(scripts);
-    return { findings: findings.filter((finding) => !devOnly.has(finding.file)), files: scanned.length };
+    return {
+      findings: findings.filter((finding) => !devOnly.has(finding.file)),
+      files: scanned.length,
+    };
   }
   return { findings, files: scanned.length };
 }
@@ -266,10 +307,11 @@ export function designFindings(root, settings, emitted) {
 function workspacePackages(root) {
   const out = {};
   for (const rel of listedFiles(root)) {
-    if (path.posix.basename(rel) !== "package.json" || `/${rel}`.includes("node_modules/")) continue;
+    if (NodePath.posix.basename(rel) !== "package.json" || `/${rel}`.includes("node_modules/"))
+      continue;
     try {
-      const name = JSON.parse(readFileSync(path.join(root, rel), "utf8")).name;
-      if (typeof name === "string" && name) out[name] = path.posix.dirname(rel) || ".";
+      const name = JSON.parse(NodeFS.readFileSync(NodePath.join(root, rel), "utf8")).name;
+      if (typeof name === "string" && name) out[name] = NodePath.posix.dirname(rel) || ".";
     } catch {
       /* ignore malformed package.json */
     }
@@ -291,7 +333,7 @@ async function main() {
     generated = new Set(input.generated ?? []);
   } else {
     root = process.cwd();
-    const decl = JSON.parse(readFileSync(path.join(root, "playbook.json"), "utf8"));
+    const decl = JSON.parse(NodeFS.readFileSync(NodePath.join(root, "playbook.json"), "utf8"));
     const s = decl?.contracts?.design ?? {};
     settings = designSettings({ ...s, packages: workspacePackages(root) });
     generated = new Set();
@@ -300,7 +342,10 @@ async function main() {
   process.stdout.write(JSON.stringify(result));
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
+if (
+  process.argv[1] &&
+  NodePath.resolve(process.argv[1]) === NodePath.resolve(new URL(import.meta.url).pathname)
+) {
   main().catch((error) => {
     process.stderr.write(`${error.stack ?? error.message}\n`);
     process.exit(2);

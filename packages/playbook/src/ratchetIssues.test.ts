@@ -231,6 +231,14 @@ describe("playbook check ratchet with issue-backed size exceptions", () => {
     expect(sameRepo.result.status).toBe("PASS");
   });
 
+  it("asks GitHub once per issue, however many files cite it", async () => {
+    const seen: string[] = [];
+    const { repo, base } = branchWith([exception("src/big.ts"), exception("src/gen/a.ts")]);
+    const { result } = await run(repo.root, base, states({ 41: { kind: "open" } }, seen));
+    expect(seen).toEqual(["acme-fixture/sample-repo#41"]);
+    expect(result.summary).toContain("2 size exception(s) with an open issue (§1.3)");
+  });
+
   it("asks the owner for an issue of another repository, without asking GitHub", async () => {
     const seen: string[] = [];
     const { result } = await ratchetOf(
@@ -279,16 +287,18 @@ describe("playbook check ratchet with issue-backed size exceptions", () => {
     ]);
   });
 
-  it("reports UNPROVEN when the base's playbook.json does not parse", async () => {
-    const { result } = await ratchetOf(
-      [exception("src/big.ts")],
-      states({ 41: { kind: "open" } }),
-      {
-        base: '{"contracts": ',
-      },
-    );
-    expect(result.status).toBe("UNPROVEN");
-    expect(result.summary).toMatch(/^the base's playbook\.json does not parse: /);
+  it("reports UNPROVEN when the base's playbook.json is empty, does not parse, or breaks the schema", async () => {
+    for (const base of ["", '{"contracts": ', '{"contracts": {"size": {"maxLines": "many"}}}']) {
+      const { result } = await ratchetOf(
+        [exception("src/big.ts")],
+        states({ 41: { kind: "open" } }),
+        {
+          base,
+        },
+      );
+      expect(result.status, JSON.stringify(base)).toBe("UNPROVEN");
+      expect(result.summary).toMatch(/^the base's playbook\.json is not a valid declaration: /);
+    }
   });
 });
 

@@ -104,19 +104,23 @@ export async function runCheck(options: CheckOptions): Promise<CheckReport> {
   const base = options.base ?? gateBase(root, options.env);
   const results: CheckResult[] = [passed("declaration", "playbook.json is valid")];
   const baseText = base.sha ? showFile(root, base.sha, "playbook.json") : null;
-  const baseParsed = baseText ? parseDeclarationText(baseText, { base: true }) : null;
-  const baseData = baseParsed?.data ?? null;
+  // Presence, not truthiness: an empty base playbook.json exists and must parse.
+  const baseParsed = baseText !== null ? parseDeclarationText(baseText, { base: true }) : null;
+  const baseInvalid =
+    baseParsed !== null && (baseParsed.data === null || baseParsed.errors.length > 0);
+  const baseData = baseInvalid ? null : (baseParsed?.data ?? null);
   let reported: ReadonlyArray<string> = [];
   if (!base.sha) {
     results.push(unproven("ratchet", base.problem ?? "no base", { fix: "git fetch origin" }));
   } else if (bypassReason(bypasses, "ratchet")) {
     results.push(passed("ratchet", `bypassed by owner (${bypassReason(bypasses, "ratchet")})`));
-  } else if (baseParsed && !baseData) {
-    // A base declaration that exists but does not parse cannot be compared: never a silent pass.
+  } else if (baseParsed && baseInvalid) {
+    // A base declaration that exists but is empty, does not parse, or breaks the schema cannot
+    // be compared: never a silent pass.
     results.push(
       unproven(
         "ratchet",
-        `the base's playbook.json does not parse: ${baseParsed.errors[0] ?? "?"}`,
+        `the base's playbook.json is not a valid declaration: ${baseParsed.errors[0] ?? "?"}`,
         {
           fix: "repair playbook.json on the base branch first",
         },

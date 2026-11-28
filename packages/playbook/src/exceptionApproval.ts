@@ -7,7 +7,14 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import { ghIssueState, inBatches, showRef, type IssueLookup } from "./exceptionIssues.ts";
+import {
+  ghIssueState,
+  inBatches,
+  showRef,
+  type IssueLookup,
+  type IssueRef,
+  type IssueState,
+} from "./exceptionIssues.ts";
 import { git, originSlug } from "./git.ts";
 import type { IssueBackedException } from "./ratchet.ts";
 
@@ -62,29 +69,39 @@ export async function judgeIssueBacked(
   const deadline = AbortSignal.timeout(DEADLINE_MS);
   const signal = options.signal ? AbortSignal.any([deadline, options.signal]) : deadline;
   const own = originSlug(root);
-  const reasons = await inBatches(
-    entries.map((entry) => async (): Promise<string[]> => {
-      const why: string[] = [];
-      for (const ref of entry.refs) {
-        const repo = ref.repo ?? own;
-        if (own === null) {
-          why.push(`issue ${showRef(ref)} cannot be checked: the repo has no GitHub origin`);
-        } else if (repo === null || repo.toLowerCase() !== own.toLowerCase()) {
-          why.push(`issue ${showRef(ref)} is not in this repository (${own})`);
-        } else if (signal.aborted) {
-          why.push(`issue ${showRef(ref)} cannot be checked (the issue checks ran out of time)`);
-        } else {
-          const state = await lookup(own, ref.number, signal);
-          if (state.kind === "closed") why.push(`issue ${showRef(ref)} is closed`);
-          else if (state.kind === "unknown") {
-            why.push(`issue ${showRef(ref)} cannot be checked (${state.why})`);
-          }
-        }
-      }
-      return why;
-    }),
+  const inThisRepo = (ref: IssueRef) =>
+    own !== null && (ref.repo ?? own).toLowerCase() === own.toLowerCase();
+  // One gh request per distinct issue, however many files cite it.
+  const numbers = [
+    ...new Set(entries.flatMap((e) => e.refs.filter(inThisRepo).map((r) => r.number))),
+  ];
+  const answers = await inBatches(
+    numbers.map(
+      (n) => (): Promise<IssueState> =>
+        signal.aborted
+          ? Promise.resolve({ kind: "unknown", why: "the issue checks ran out of time" })
+          : lookup(own!, n, signal),
+    ),
     PARALLEL,
   );
+  const stateOf = new Map(numbers.map((n, i) => [n, answers[i]!]));
+  const reasons = entries.map((entry) => {
+    const why: string[] = [];
+    for (const ref of entry.refs) {
+      if (own === null) {
+        why.push(`issue ${showRef(ref)} cannot be checked: the repo has no GitHub origin`);
+      } else if (!inThisRepo(ref)) {
+        why.push(`issue ${showRef(ref)} is not in this repository (${own})`);
+      } else {
+        const state = stateOf.get(ref.number)!;
+        if (state.kind === "closed") why.push(`issue ${showRef(ref)} is closed`);
+        else if (state.kind === "unknown") {
+          why.push(`issue ${showRef(ref)} cannot be checked (${state.why})`);
+        }
+      }
+    }
+    return why;
+  });
   const accepted: string[] = [];
   const problems: string[] = [];
   entries.forEach((entry, i) => {

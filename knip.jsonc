@@ -193,8 +193,6 @@
     },
     "packages/playbook": {
       "includeEntryExports": true,
-      // The original playbook's design scan, vendored as it is: its unused exports stay.
-      "ignoreIssues": { "vendor/**": ["exports"] },
     },
     "packages/host-guards": {
       "includeEntryExports": true,
