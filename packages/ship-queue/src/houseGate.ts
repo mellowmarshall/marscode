@@ -5,7 +5,7 @@ import {
   inspectWorktreeBundle,
   type WireGuardBundle,
 } from "@t3tools/guard-protocol/bundle-inspect";
-import { checkGuardGrant, useGuardGrant } from "@t3tools/guard-protocol/client";
+import { checkGuardGrant, requestGuardGrant, useGuardGrant } from "@t3tools/guard-protocol/client";
 import { computeBundleKey } from "@t3tools/guard-protocol/digests";
 
 import { appendLog, jobBodyPath, mark, updateJob } from "./jobStore.ts";
@@ -52,6 +52,19 @@ export function makeGuardProtocolGuard(options?: {
         cwd: worktree,
         bundle,
         jobId,
+        ...(options?.socketPath ? { socketPath: options.socketPath } : {}),
+      });
+      return { ok: reply.ok, reason: reply.error ?? reply.reason };
+    },
+    request: async ({ worktree, branch, bundle, jobId }) => {
+      const reply = await requestGuardGrant({
+        guard: "ship-queue",
+        command: shipGrantCommand(worktree, branch),
+        cwd: worktree,
+        bundle,
+        jobId,
+        refusal: `protected diff: ${bundle.protected_paths.join(", ")}`,
+        wait: false,
         ...(options?.socketPath ? { socketPath: options.socketPath } : {}),
       });
       return { ok: reply.ok, reason: reply.error ?? reply.reason };
@@ -191,10 +204,20 @@ export async function houseStages(
   }
   if (digestChanged || job.waiting_for !== "action") {
     const gates = bundle.gates.map((g) => g.gate_id).join(",");
+    // The queue opens the owner's window itself; the agent only watches.
+    const asked = await deps.guard.request?.({
+      worktree: job.worktree,
+      branch: job.branch,
+      bundle,
+      jobId: job.id,
+    });
+    const window = asked?.ok
+      ? "the queue opened the owner's approval window"
+      : `the queue could not open the owner's window (${asked?.reason ?? "no broker"}); run: marscode-guard override ship-queue`;
     mark(
       deps.root,
       job.id,
-      `ACTION_REQUIRED job=${job.id} gates=${gates} paths=${bundle.protected_paths.join(",")} digest=${digest}: the owner approves this protected diff (marscode-guard override ship-queue); the job resumes on its own once approved. If MarsCode restarts before then, the job cannot resume: cancel it and resubmit`,
+      `ACTION_REQUIRED job=${job.id} gates=${gates} paths=${bundle.protected_paths.join(",")} digest=${digest}: the owner approves this protected diff; ${window}. The job resumes on its own once approved. If MarsCode restarts before then, the job cannot resume: cancel it and resubmit`,
     );
   }
   return { kind: "action", digest };

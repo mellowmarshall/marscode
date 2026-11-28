@@ -222,10 +222,7 @@ async function handleGuardProtocolMessage(
   }
   let effectiveThreadId = peer.threadId;
   if (jobId) {
-    if (op === "request") {
-      writeAndCloseSocket(socket, { ok: false, error: "queue workers cannot request grants" });
-      return;
-    }
+    // A verified worker may ask for its own job's bundle: the window opens in the job's thread.
     const worker = verifyQueueWorkerJob(ctx.queueWorkerTrust, ctx.jobBindings, {
       peerPid: peer.peerPid,
       jobId,
