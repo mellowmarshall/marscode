@@ -195,6 +195,31 @@ describe("NativeCiHosts direct @t3tools/ship-queue integration (zero shell-out)"
     expect(ciHosts.getPanel().report?.hosts.find((h) => h.name === "host-b")?.ci_off).toBe(false);
   });
 
+  it.skipIf(process.getuid?.() === 0)(
+    "returns a panel when the queue root cannot be traversed",
+    () => {
+      const dir = mkTempDir("t3-native-cihosts-eacces-");
+      const queueRoot = NodePath.join(dir, "sq");
+      NodeFS.mkdirSync(NodePath.join(queueRoot, "hosts"), { recursive: true });
+      const manifestPath = NodePath.join(dir, "ci-hosts.json");
+      NodeFS.writeFileSync(
+        manifestPath,
+        JSON.stringify({ schema: 1, hosts: [{ name: "host-a", ssh: null }] }),
+      );
+      const ciHosts = new NativeCiHosts({
+        stateFile: NodePath.join(dir, "hosts-check.json"),
+        queueRoot,
+        manifestPath,
+      });
+      NodeFS.chmodSync(queueRoot, 0o000);
+      try {
+        expect(() => ciHosts.getPanel()).not.toThrow();
+      } finally {
+        NodeFS.chmodSync(queueRoot, 0o755);
+      }
+    },
+  );
+
   it("wires server SQLite deps reads and pre-approval validated idempotent decisions end-to-end", async () => {
     const queueRoot = mkTempDir("t3-native-deps-");
     const fixedNow = 1_700_000_000;
