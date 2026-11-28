@@ -49,6 +49,15 @@ export {
   type Verdict,
 } from "./surfaceIntentCheck.ts";
 export {
+  intentDiffRows,
+  renderIntentDiff,
+  runIntentDiff,
+  type IntentDiffInput,
+  type IntentDiffRow,
+} from "./surfaceIntentDiff.ts";
+export { pythonJsonDumps } from "./surfaceRender.ts";
+export { gateBase, type GateBase } from "./surfaceBase.ts";
+export {
   AGENTS_BLURB,
   GENERATE_SCRIPT,
   initSurface,

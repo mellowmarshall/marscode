@@ -4,8 +4,18 @@
 # post-merge sync uses locally: ~/.local/lib/marscode-tools/<name> points at an
 # atomic release directory, and ~/.local/bin/<name> runs it with the host's node.
 #
+# It never replaces a ~/.local/bin/<name> that a MarsCode installer did not write (another
+# install's link or file) unless the new CLI passes its flag-parity check, the same rule as
+# scripts/ship/marscode-sync-parity.ts: runlog must print its --ci-suite begin and end lines;
+# playbook has no parity with the original (it lacks subcommands the original's callers use),
+# so it never replaces one. A refusal skips the install: it leaves everything in place, prints
+# one "warning: skipped" line (which hosts provision reports) and exits 0.
+#
 # Usage: ci-marscode-cli.sh runlog|playbook
 set -euo pipefail
+
+# The marker line every MarsCode wrapper carries (marscode-sync writes the same one).
+wrapper_marker='# Installed by MarsCode; reinstalls replace this file.'
 
 name=${1:-}
 case "$name" in
@@ -38,6 +48,62 @@ cp "$bundle" "$stage/dist/bin.mjs"
 chmod 755 "$stage/dist/bin.mjs"
 
 target="$lib_dir/$name"
+bin="$bin_dir/$name"
+
+# What sits at $bin when a MarsCode installer did not write it; empty when it did or nothing is there.
+foreign_cli() {
+  if [ -L "$bin" ]; then
+    printf 'a link to %s' "$(readlink "$bin")"
+  elif [ -e "$bin" ] && [ ! -f "$bin" ]; then
+    printf 'not a regular file'
+  elif [ -f "$bin" ]; then
+    # Wrappers written before the marker name the release link's bundle, plain or as printf %q wrote it.
+    if ! grep -qxF -- "$wrapper_marker" "$bin" && ! grep -qF -- "$target/dist/bin.mjs" "$bin" \
+      && ! grep -qF -- "$(printf %q "$target/dist/bin.mjs")" "$bin"; then
+      printf 'a file another install wrote'
+    fi
+  fi
+}
+
+# Why the staged CLI fails its flag-parity check; empty when it passes.
+parity_problem() {
+  case "$name" in
+    runlog)
+      local out rc=0 begin end
+      out=$("$node_bin" "$stage/dist/bin.mjs" --ci-suite x -- true 2>/dev/null) || rc=$?
+      [ "$rc" = 0 ] || { printf 'it exited %s' "$rc"; return; }
+      begin=$(printf '%s\n' "$out" | sed -n 1p)
+      end=$(printf '%s\n' "$out" | sed -n 2p)
+      if [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" != 2 ] \
+        || [[ ! "$begin" =~ ^ci-suite:\ begin\ x\ pid=([0-9]+)\ by=runlog$ ]]; then
+        printf 'it printed %q' "${out:0:200}"; return
+      fi
+      local pid=${BASH_REMATCH[1]}
+      if [[ ! "$end" =~ ^ci-suite:\ end\ x\ pass\ pid=([0-9]+)(\ cpu=[0-9]+\.[0-9][0-9])?\ by=runlog$ ]]; then
+        printf 'it printed %q' "${out:0:200}"; return
+      fi
+      [ "${BASH_REMATCH[1]}" = "$pid" ] || printf 'its begin and end lines name different pids'
+      ;;
+    *) printf 'the MarsCode %s has no flag-parity check' "$name" ;;
+  esac
+}
+
+foreign=$(foreign_cli)
+if [ -n "$foreign" ]; then
+  # The backticks are the message's literal text.
+  # shellcheck disable=SC2016
+  case "$name" in
+    runlog) what='`runlog --ci-suite x -- true` prints its begin and end lines and exits 0' ;;
+    *) what='' ;;
+  esac
+  problem=$(parity_problem)
+  if [ -n "$problem" ]; then
+    printf 'ci-marscode-cli.sh: warning: skipped %s: kept %s (%s, not installed by MarsCode) because %s%s; remove it to let MarsCode install its %s.\n' \
+      "$name" "$bin" "$foreign" "$problem" "${what:+ (the check: $what)}" "$name"
+    exit 0
+  fi
+fi
+
 if [ -e "$target" ] && [ ! -L "$target" ]; then
   mv "$target" "$releases/$name.legacy.$$"
 fi
@@ -48,13 +114,13 @@ mv -T "$link_tmp" "$target" 2>/dev/null || ln -sfn "$stage" "$target"
 # The single-quoted printf formats are the wrapper's literal text, expanded when it runs.
 # shellcheck disable=SC2016
 {
-  printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+  printf '#!/usr/bin/env bash\n%s\nset -euo pipefail\n' "$wrapper_marker"
   printf 'node_bin=%q\n' "$node_bin"
   printf 'if [ ! -x "$node_bin" ]; then\n  node_bin="$(command -v node)"\nfi\n'
   printf 'exec "$node_bin" %q "$@"\n' "$target/dist/bin.mjs"
 } > "$wrapper_tmp"
 chmod 755 "$wrapper_tmp"
-mv -f "$wrapper_tmp" "$bin_dir/$name"
+mv -f "$wrapper_tmp" "$bin"
 committed=1
 
 # Drop old releases, but never the one the link now names, and never a stage younger than ten

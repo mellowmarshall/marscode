@@ -433,6 +433,13 @@ describe("runlog log root", () => {
     expect(runIn(box)).toBe(NodePath.join(box.home, "Dev-data", "runs"));
   });
 
+  it("reads a data root that is the source root, spaced, as a single-drive host", () => {
+    const box = sandbox();
+    box.env.HOST_GUARDS_SOURCE_ROOT = box.source;
+    box.env.HOST_GUARDS_DATA_ROOT = `  ${box.source}  `;
+    expect(runIn(box)).toBe(NodePath.join(box.source, "runs"));
+  });
+
   it("takes the queue root first and expands ~", () => {
     const box = sandbox();
     configure(box.home, {

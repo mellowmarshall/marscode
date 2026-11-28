@@ -97,6 +97,21 @@ describe("fleet CLI", () => {
     expect(hosts.map((h) => h.name)).toEqual(["app-host"]);
   });
 
+  it("prints the original CLI's dashboard examples and its ASCII-only JSON", () => {
+    expect(fleet([]).stdout).toContain(
+      "  fleet --kind host          List all cloud servers and private IPs\n",
+    );
+    const file = NodePath.join(repo, "deploy", "fleet.json");
+    const shape = JSON.parse(NodeFS.readFileSync(file, "utf8"));
+    shape.roles.outbox.why = "drains the outbox \u2014 café\u007f";
+    NodeFS.writeFileSync(file, JSON.stringify(shape));
+    const r = fleet(["outbox", "--json"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('"why": "drains the outbox \\u2014 caf\\u00e9\\u007f"');
+    expect(r.stdout).toMatch(/^\[\n  \{\n    "name": "outbox",/);
+    expect(JSON.parse(r.stdout)[0].why).toBe("drains the outbox \u2014 café\u007f");
+  });
+
   it("reports an undeclared name as a finding", () => {
     const r = fleet(["NO_SUCH_THING"]);
     expect(r.status).toBe(1);

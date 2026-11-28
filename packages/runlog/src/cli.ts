@@ -7,18 +7,20 @@
 import * as NodePath from "node:path";
 import * as NodePerfHooks from "node:perf_hooks";
 
+import { runCiSuite, validSuiteName } from "./ciSuite.ts";
 import { listLogs, openLog, repoName } from "./runlogPaths.ts";
 import { readLog, runCommand, TAIL_BYTES } from "./runlogProcess.ts";
 import { type Env, logRoot } from "./runlogStorageRoots.ts";
 import { report } from "./runlogSummary.ts";
 
-export const USAGE = `usage: runlog [--name NAME] -- COMMAND [ARGS...]
+export const USAGE = `usage: runlog [--name NAME] -- COMMAND [ARGS...] | runlog --ci-suite NAME -- COMMAND [ARGS...]
        runlog summarize LOG [--exit CODE]
        runlog list [COUNT]`;
 
 export const HELP = `runlog: run a test command with its output in a log file, print a summary.
 
     runlog [--name NAME] -- COMMAND [ARGS...]
+    runlog --ci-suite NAME -- COMMAND [ARGS...]
     runlog summarize LOG [--exit CODE]   summarise a log written earlier
     runlog list [COUNT]                  this repository's latest logs (default 10)
 
@@ -33,13 +35,24 @@ lines instead. Its exit code is the command's (128+N when a signal N ended it).
 
 It reads vitest/jest, Playwright, node --test (TAP and spec), pytest, Python
 unittest, go test, cargo test (libtest, and cargo's compile errors), Maestro,
-and the ok/FAIL lines and "N passed, M failed" of *.test.sh suites.`;
+and the ok/FAIL lines and "N passed, M failed" of *.test.sh suites.
+
+--ci-suite NAME: the one writer of a CI suite's measured run. The command's
+output passes through unchanged (no log, no summary); runlog prints
+\`ci-suite: begin NAME pid=P by=runlog\` as it starts the command and
+\`ci-suite: end NAME pass|fail pid=P cpu=S by=runlog\` once it has reaped it,
+P being runlog's own pid (which pairs each begin with its end) and S the user
+and system seconds the command and its reaped children used. A line the
+command prints that starts with ci-suite: or ci-select: is passed on behind
+"(the suite printed) ". A CI never prints these lines itself: the playbook
+check refuses a CI file that does, and the queue judges only runlog's.`;
 
 export interface CliIo {
-  readonly out: (text: string) => void;
+  readonly out: (text: string | Uint8Array) => void;
   readonly err: (text: string) => void;
   readonly cwd: string;
   readonly env: Env;
+  readonly pid: number;
   /** The current time in epoch milliseconds. */
   readonly now: () => number;
 }
@@ -49,12 +62,14 @@ const DEFAULT_IO: CliIo = {
   err: (text) => process.stderr.write(text),
   cwd: process.cwd(),
   env: process.env,
+  pid: process.pid,
   // @effect-diagnostics-next-line globalDate:off
   now: () => Date.now(),
 };
 
 type Parsed =
   | { readonly kind: "run"; readonly name: string | null; readonly cmd: string[] }
+  | { readonly kind: "ci-suite"; readonly suite: string; readonly cmd: string[] }
   | { readonly kind: "summarize"; readonly log: string; readonly rc: number }
   | { readonly kind: "list"; readonly count: number }
   | { readonly kind: "help" }
@@ -79,13 +94,19 @@ export function parseArgs(argv: ReadonlyArray<string>): Parsed {
     return count === null || count < 1 ? { kind: "usage" } : { kind: "list", count };
   }
   let name: string | null = null;
+  let suite: string | null = null;
   for (let i = 0; i < argv.length;) {
     const a = argv[i] ?? "";
+    const next = argv[i + 1];
     if (a === "--") {
       const cmd = argv.slice(i + 1);
-      return cmd.length > 0 ? { kind: "run", name, cmd } : { kind: "usage" };
+      if (cmd.length === 0) return { kind: "usage" };
+      return suite === null ? { kind: "run", name, cmd } : { kind: "ci-suite", suite, cmd };
     }
-    if (a === "--name" && i + 1 < argv.length) {
+    if (a === "--ci-suite" && next !== undefined && validSuiteName(next)) {
+      suite = next;
+      i += 2;
+    } else if (a === "--name" && i + 1 < argv.length) {
       name = argv[i + 1] ?? null;
       i += 2;
     } else if (a.startsWith("--name=")) {
@@ -143,6 +164,8 @@ export async function runRunlogCli(
       }
       case "run":
         return await runAndReport(parsed.name, parsed.cmd, io);
+      case "ci-suite":
+        return await runCiSuite(parsed.suite, parsed.cmd, io);
     }
   } catch (error) {
     io.err(`runlog: ${error instanceof Error ? error.message : String(error)}\n`);

@@ -113,8 +113,13 @@ export interface DomainRow {
   readonly webServicesCount: number;
 }
 
-export function domainRows(surface: FeatureSurface): DomainRow[] {
-  return byKey(surface.domains).map(([domain, d]) => ({
+/** Each domain with its counts, by name; `sorted: false` keeps the file's order. */
+export function domainRows(
+  surface: FeatureSurface,
+  { sorted = true }: { readonly sorted?: boolean } = {},
+): DomainRow[] {
+  const domains = sorted ? byKey(surface.domains) : Object.entries(surface.domains ?? {});
+  return domains.map(([domain, d]) => ({
     domain,
     routesCount: d.routes?.length ?? 0,
     workersCount: d.workerRoles?.length ?? 0,

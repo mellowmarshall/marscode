@@ -23,6 +23,14 @@ function pyJson(v: unknown): string {
   return JSON.stringify(v);
 }
 
+/** Python's json.dumps(indent=2): two-space JSON with every non-ASCII character escaped (ensure_ascii). */
+export function pythonJsonDumps(v: unknown): string {
+  return JSON.stringify(v, null, 2).replace(
+    /[\u007f-\uffff]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
 /** Python's str.capitalize. */
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
@@ -53,7 +61,7 @@ export function renderDashboard(entities: ReadonlyArray<FleetEntity>, fleetFile:
     "  fleet <name>               Lookup any app, host, secret, role, or bucket",
     "  fleet outbox               Inspect role execution, secret reads, and SLAs",
     "  fleet DATABASE_URL         Find where a secret is stored, who reads and checks it",
-    "  fleet --kind host          List all cloud servers and their addresses",
+    "  fleet --kind host          List all cloud servers and private IPs",
     "  fleet --kind bucket        List all storage buckets",
     "  fleet --kind service       List all container services and applications",
     "  fleet check                Run full consistency and drift evaluation",

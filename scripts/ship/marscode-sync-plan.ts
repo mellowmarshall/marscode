@@ -17,6 +17,8 @@ export interface SyncBinaryTarget {
 export const APP_IMAGE_TARGET_ID = "desktop-appimage";
 
 const SHARED_BUILD_FILES = ["pnpm-lock.yaml", "vite.config.ts", "tsconfig.base.json"] as const;
+/** The flag-parity probes: a change to them retries every CLI that has one. */
+const PARITY_PROBE_FILE = "scripts/ship/marscode-sync-parity.ts";
 
 export const SYNC_BINARY_TARGETS: ReadonlyArray<SyncBinaryTarget> = [
   {
@@ -55,7 +57,7 @@ export const SYNC_BINARY_TARGETS: ReadonlyArray<SyncBinaryTarget> = [
     binName: "runlog",
     pkgName: "@t3tools/runlog",
     pkgRel: "packages/runlog",
-    watchPrefixes: ["packages/runlog/", ...SHARED_BUILD_FILES],
+    watchPrefixes: ["packages/runlog/", PARITY_PROBE_FILE, ...SHARED_BUILD_FILES],
   },
   {
     id: "fleet",
@@ -63,7 +65,7 @@ export const SYNC_BINARY_TARGETS: ReadonlyArray<SyncBinaryTarget> = [
     binName: "fleet",
     pkgName: "@t3tools/fleet",
     pkgRel: "packages/fleet",
-    watchPrefixes: ["packages/fleet/", ...SHARED_BUILD_FILES],
+    watchPrefixes: ["packages/fleet/", PARITY_PROBE_FILE, ...SHARED_BUILD_FILES],
   },
   {
     id: "surface",
@@ -71,7 +73,7 @@ export const SYNC_BINARY_TARGETS: ReadonlyArray<SyncBinaryTarget> = [
     binName: "surface",
     pkgName: "@t3tools/surface",
     pkgRel: "packages/surface",
-    watchPrefixes: ["packages/surface/", ...SHARED_BUILD_FILES],
+    watchPrefixes: ["packages/surface/", PARITY_PROBE_FILE, ...SHARED_BUILD_FILES],
   },
   {
     id: "marscode-guard",
@@ -101,6 +103,8 @@ export interface SyncState {
   readonly version: 1;
   readonly installSha?: string | undefined;
   readonly targets: Readonly<Record<string, string>>;
+  /** Target id -> the probe fingerprint of a CLI skipped for no flag parity; another fingerprint retries it. */
+  readonly paritySkips?: Readonly<Record<string, string>> | undefined;
 }
 
 export function emptySyncState(): SyncState {
@@ -111,12 +115,17 @@ export function parseSyncState(raw: string): SyncState {
   try {
     const parsed = JSON.parse(raw) as Partial<SyncState> | null;
     if (!parsed || typeof parsed !== "object") return emptySyncState();
-    const targets: Record<string, string> = {};
-    if (parsed.targets && typeof parsed.targets === "object") {
-      for (const [k, v] of Object.entries(parsed.targets)) {
-        if (typeof v === "string" && v.trim().length > 0) targets[k] = v.trim();
+    const strings = (value: unknown): Record<string, string> => {
+      const out: Record<string, string> = {};
+      if (value && typeof value === "object") {
+        for (const [k, v] of Object.entries(value)) {
+          if (typeof v === "string" && v.trim().length > 0) out[k] = v.trim();
+        }
       }
-    }
+      return out;
+    };
+    const targets = strings(parsed.targets);
+    const paritySkips = strings(parsed.paritySkips);
     return {
       version: 1,
       installSha:
@@ -124,10 +133,33 @@ export function parseSyncState(raw: string): SyncState {
           ? parsed.installSha.trim()
           : undefined,
       targets,
+      ...(Object.keys(paritySkips).length > 0 ? { paritySkips } : {}),
     };
   } catch {
     return emptySyncState();
   }
+}
+
+/**
+ * Records the CLIs skipped for no flag parity: each is settled at HEAD with
+ * its probe's fingerprint, so only a probe change (or a removed bin) retries
+ * it. A skip whose probe did not run is not recorded: the next sync retries.
+ */
+export function recordParitySkips(
+  records: {
+    readonly targets: Record<string, string>;
+    readonly paritySkips: Record<string, string>;
+  },
+  skipped: ReadonlyArray<{ readonly target: SyncBinaryTarget; readonly retry: boolean }>,
+  headSha: string,
+  fingerprint: (binName: string) => string,
+): boolean {
+  const settled = skipped.filter((s) => !s.retry);
+  for (const { target } of settled) {
+    records.targets[target.id] = headSha;
+    records.paritySkips[target.id] = fingerprint(target.binName);
+  }
+  return settled.length > 0;
 }
 
 export function matchesPathPrefix(filePath: string, prefix: string): boolean {
@@ -179,7 +211,7 @@ export function isDependencyManifestFile(filePath: string): boolean {
 export type TargetDecision =
   | {
       readonly action: "build";
-      readonly reason: "forced" | "missing" | "initial" | "changed";
+      readonly reason: "forced" | "missing" | "initial" | "changed" | "parity-probe-changed";
       readonly sinceSha: string | null;
     }
   | {
@@ -212,6 +244,8 @@ export interface PlanSyncInput {
   readonly desktopHost: DesktopHostStatus;
   /** Returns changed repo-relative files between `fromSha` and `headSha`, or `null` if unknown. */
   readonly listChangedFiles: (fromSha: string) => ReadonlyArray<string> | null;
+  /** The current flag-parity probe fingerprint of a CLI (see marscode-sync-parity.ts). */
+  readonly parityFingerprint?: ((binName: string) => string) | undefined;
 }
 
 export interface SyncPlan {
@@ -257,6 +291,13 @@ export function planSync(input: PlanSyncInput): SyncPlan {
       return {
         target,
         decision: { action: "build", reason: "initial", sinceSha: null } as const,
+      };
+    }
+    const skippedWith = input.state.paritySkips?.[target.id];
+    if (skippedWith !== undefined && skippedWith !== input.parityFingerprint?.(target.binName)) {
+      return {
+        target,
+        decision: { action: "build", reason: "parity-probe-changed", sinceSha: lastSha } as const,
       };
     }
     const changed = getChanged(lastSha);

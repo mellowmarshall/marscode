@@ -7,7 +7,8 @@
 #                                 branch whose PR already merged
 #   ship-steps.sh install         refresh workspace deps with Vite+ hooks off
 #   ship-steps.sh ci              scan the tree for §16 hygiene, check README
-#                                 media is current, then run
+#                                 media is current, shellcheck this file and
+#                                 the changed infra/**/*.sh, then run
 #                                 marscode's fast adaptive changed-file CI
 #   ship-steps.sh merge PR        squash-merge the gated head: 0 merged,
 #                                 75 the base moved, 76 transient
@@ -53,16 +54,22 @@ ci() {
   node packages/hygiene/src/bin.ts tree --public-only || return $?
   # README images must match the components they show; hashes only, no browser.
   node scripts/readme-media.ts --check || return $?
+  # PLAYBOOK §13.1: lint this file and every shell script the change touches under infra/.
+  local changed_shell shell_files=()
+  changed_shell=$(git diff --name-only --diff-filter=d "$base_ref...HEAD" -- ':(glob)infra/**/*.sh') || {
+    echo "marscode ship-steps: cannot diff $base_ref...HEAD" >&2
+    return 1
+  }
+  [ -z "$changed_shell" ] || mapfile -t shell_files <<<"$changed_shell"
+  echo "marscode ship-steps: shellcheck scripts/ship/ship-steps.sh ${shell_files[*]}"
+  shellcheck scripts/ship/ship-steps.sh "${shell_files[@]}" || return $?
   # Skip workspace install and check:changed when only ship-queue declaration/step files changed.
   local non_ship
   non_ship=$(git diff --name-only "$base_ref...HEAD" -- . ':!.tree-guard.conf' ':!scripts/ship/ship-steps.sh') || {
     echo "marscode ship-steps: cannot diff $base_ref...HEAD" >&2
     return 1
   }
-  if [ -z "$non_ship" ]; then
-    shellcheck scripts/ship/ship-steps.sh
-    return $?
-  fi
+  [ -n "$non_ship" ] || return 0
   ensure_vp_path || return $?
   if [ ! -d node_modules ]; then
     VP_GIT_HOOKS=0 vp install --frozen-lockfile || return $?

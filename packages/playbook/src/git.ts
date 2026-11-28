@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Read-only git plumbing over the real worktree for the headless playbook engine.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 const TREE_GUARD = ".tree-guard.conf";
@@ -60,6 +61,50 @@ export function git(root: string, args: ReadonlyArray<string>): GitResult {
   });
   if (res.error) return { code: 127, stdout: "" };
   return { code: res.status ?? 1, stdout: res.stdout ?? "" };
+}
+
+/**
+ * `git diff BASE -- REL` as it would read with TEXT in REL's place, worked out in a
+ * scratch index so the worktree is never written; null when git cannot.
+ */
+export function diffWithText(
+  root: string,
+  baseSha: string,
+  rel: string,
+  text: string,
+): string | null {
+  const scratch = NodeFS.mkdtempSync(
+    NodePath.join(NodeFS.realpathSync(NodeOS.tmpdir()), "playbook-amend-"),
+  );
+  const env = { ...gitEnv(), GIT_INDEX_FILE: NodePath.join(scratch, "index") };
+  const run = (args: ReadonlyArray<string>, input?: string) =>
+    NodeChildProcess.spawnSync("git", ["-C", root, ...HARDENED_ARGS, ...args], {
+      encoding: "utf8",
+      env,
+      input,
+      maxBuffer: MAX_GIT_BUFFER,
+    });
+  try {
+    const blob = run(["hash-object", "-w", "--stdin"], text);
+    const mode = run(["ls-tree", "--end-of-options", baseSha, "--", rel]).stdout.split(" ")[0];
+    if (blob.status !== 0 || run(["read-tree", "--end-of-options", baseSha]).status !== 0)
+      return null;
+    const info = `${mode || "100644"},${blob.stdout.trim()},${rel}`;
+    if (run(["update-index", "--add", "--cacheinfo", info]).status !== 0) return null;
+    const diff = run([
+      "diff",
+      "--cached",
+      ...NO_DIFF_DRIVERS,
+      "--binary",
+      "--end-of-options",
+      baseSha,
+      "--",
+      rel,
+    ]);
+    return diff.status === 0 ? diff.stdout : null;
+  } finally {
+    NodeFS.rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 export function repoRoot(start: string): string {

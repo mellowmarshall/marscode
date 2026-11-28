@@ -6,6 +6,12 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import {
+  assertMayReplace,
+  CliParityRefusal,
+  WRAPPER_MARKER,
+  wrapperBundlePath,
+} from "./marscode-sync-parity.ts";
+import {
   emptySyncState,
   parseSyncState,
   type SyncBinaryTarget,
@@ -210,6 +216,7 @@ export function atomicInstallNodeCli(
     readonly libDir: string;
     readonly nodeBin: string;
     readonly log: (msg: string) => void;
+    readonly probeTimeoutMs?: number | undefined;
   },
 ): void {
   const bundleSrc = NodePath.join(worktree, target.pkgRel, "dist", "bin.mjs");
@@ -243,6 +250,15 @@ export function atomicInstallNodeCli(
     runChecked(opts.nodeBin, [NodePath.join(distDir, "bin.mjs"), "--help"], { cwd: stageDir });
 
     const targetLink = NodePath.join(opts.libDir, target.binName);
+    assertMayReplace({
+      binName: target.binName,
+      binPath: NodePath.join(opts.binDir, target.binName),
+      bundlePath: wrapperBundlePath(opts.libDir, target.binName),
+      stagedBundle: NodePath.join(distDir, "bin.mjs"),
+      nodeBin: opts.nodeBin,
+      cwd: stageDir,
+      probeTimeoutMs: opts.probeTimeoutMs,
+    });
     if (NodeFS.existsSync(targetLink) && !NodeFS.lstatSync(targetLink).isSymbolicLink()) {
       NodeFS.renameSync(
         targetLink,
@@ -255,12 +271,13 @@ export function atomicInstallNodeCli(
 
     const wrapper = [
       "#!/usr/bin/env bash",
+      WRAPPER_MARKER,
       "set -euo pipefail",
       `node_bin=${shellQuote(opts.nodeBin)}`,
       'if [ ! -x "$node_bin" ]; then',
       '  node_bin="$(command -v node)"',
       "fi",
-      `exec "$node_bin" ${shellQuote(NodePath.join(targetLink, "dist", "bin.mjs"))} "$@"`,
+      `exec "$node_bin" ${shellQuote(wrapperBundlePath(opts.libDir, target.binName))} "$@"`,
       "",
     ].join("\n");
     NodeFS.writeFileSync(wrapperTmp, wrapper, { mode: 0o755 });
@@ -284,6 +301,39 @@ export function atomicInstallNodeCli(
       NodeFS.rmSync(wrapperTmp, { force: true });
     }
   }
+}
+
+/**
+ * Installs each built CLI. One that would replace a CLI marscode-sync did not
+ * install, without flag parity, is skipped with its warning line and the rest
+ * still install. Returns the skipped targets; `retry`: the probe did not run.
+ */
+export function installNodeClis(
+  worktree: string,
+  targets: ReadonlyArray<SyncBinaryTarget>,
+  opts: {
+    readonly binDir: string;
+    readonly libDir: string;
+    readonly nodeBin: string;
+    readonly log: (msg: string) => void;
+    readonly warn: (msg: string) => void;
+    readonly probeTimeoutMs?: number | undefined;
+    readonly onInstalled: (target: SyncBinaryTarget) => void;
+  },
+): Array<{ readonly target: SyncBinaryTarget; readonly retry: boolean }> {
+  const skipped: Array<{ readonly target: SyncBinaryTarget; readonly retry: boolean }> = [];
+  for (const target of targets) {
+    try {
+      atomicInstallNodeCli(worktree, target, opts);
+    } catch (err) {
+      if (!(err instanceof CliParityRefusal)) throw err;
+      opts.warn(err.message);
+      skipped.push({ target, retry: err.retry });
+      continue;
+    }
+    opts.onInstalled(target);
+  }
+  return skipped;
 }
 
 export function stageShipQueueVersion(

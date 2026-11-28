@@ -57,6 +57,14 @@ export function renderDomains(rows: ReadonlyArray<DomainRow>): string {
   return lines.join("\n");
 }
 
+/** Python's json.dumps(indent=2): two-space JSON with every non-ASCII character escaped (ensure_ascii). */
+export function pythonJsonDumps(v: unknown): string {
+  return JSON.stringify(v, null, 2).replace(
+    /[\u007f-\uffff]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
 export function renderDashboard(surface: FeatureSurface): string {
   const t = surfaceTotals(surface);
   const lines = [
@@ -73,7 +81,10 @@ export function renderDashboard(surface: FeatureSurface): string {
   const auth = authCounts(surface.routes ?? {});
   if (Object.keys(auth).length > 0) lines.push(`  Auth (methods):   ${counts(auth)}`);
   lines.push(LINE, "Top Domains:");
-  const top = [...domainRows(surface)].sort((a, b) => b.routesCount - a.routesCount).slice(0, 8);
+  // The file's order among domains with as many routes, as a stable sort by count reads them.
+  const top = domainRows(surface, { sorted: false })
+    .sort((a, b) => b.routesCount - a.routesCount)
+    .slice(0, 8);
   for (const d of top) {
     lines.push(
       `  - ${d.domain.padEnd(20)} routes: ${String(d.routesCount).padStart(3)} | ` +
@@ -88,7 +99,7 @@ export function renderDashboard(surface: FeatureSurface): string {
     "  surface api <filter>   Routes only; surface client <filter> for callers",
     "  surface --list         List all domains with breakdown",
     "  surface diff           Contract changes against the base branch",
-    "  surface check          Judge the PR body's ## Contract Intent",
+    "  surface verify-intent  Judge a PR body's ## Contract Intent",
     RULE,
     "",
   );
