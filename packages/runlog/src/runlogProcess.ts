@@ -97,17 +97,13 @@ export function runCommand(cmd: ReadonlyArray<string>, fd: number): Promise<numb
       finish(127, `runlog: cannot run ${program}: ${why}\n`);
       return;
     }
-    let child: NodeChildProcess.ChildProcess;
-    try {
-      // detached: the child leads a new process group.
-      child = NodeChildProcess.spawn(program, args, { stdio: ["inherit", fd, fd], detached: true });
-    } catch (error) {
-      finish(127, `runlog: cannot run ${program}: ${(error as Error).message}\n`);
-      return;
-    }
+    // The handlers come first: the command may run, and be seen running, before
+    // spawn returns, and a signal then must not end runlog by default. Node
+    // dispatches a signal from its event loop, so the child is known by then.
+    let child: NodeChildProcess.ChildProcess | undefined;
     for (const sig of FORWARDED) {
       const handler = () => {
-        if (child.pid === undefined) return;
+        if (child?.pid === undefined) return;
         try {
           process.kill(-child.pid, sig);
         } catch {
@@ -116,6 +112,13 @@ export function runCommand(cmd: ReadonlyArray<string>, fd: number): Promise<numb
       };
       handlers.set(sig, handler);
       process.on(sig, handler);
+    }
+    try {
+      // detached: the child leads a new process group.
+      child = NodeChildProcess.spawn(program, args, { stdio: ["inherit", fd, fd], detached: true });
+    } catch (error) {
+      finish(127, `runlog: cannot run ${program}: ${(error as Error).message}\n`);
+      return;
     }
     child.once("error", (error) => {
       finish(127, `runlog: cannot run ${program}: ${error.message}\n`);
