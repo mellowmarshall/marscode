@@ -2,6 +2,15 @@
 // Pure target catalog, diff-based sync planning, and desktop build environment helpers for marscode-sync.
 import * as NodePath from "node:path";
 
+import {
+  parseFleetState,
+  planFleetSync,
+  type FleetArtifactRecord,
+  type FleetHostConfig,
+  type FleetHostSyncRecord,
+  type FleetSyncPlan,
+} from "./marscode-sync-fleet-config.ts";
+
 export type BinaryTargetKind = "vp-pack-cli" | "guard-protocol" | "host-guards";
 
 export interface SyncBinaryTarget {
@@ -105,6 +114,10 @@ export interface SyncState {
   readonly targets: Readonly<Record<string, string>>;
   /** Target id -> the probe fingerprint of a CLI skipped for no flag parity; another fingerprint retries it. */
   readonly paritySkips?: Readonly<Record<string, string>> | undefined;
+  /** Latest cached linux-x64 server archive built on this host for fleet rollout. */
+  readonly fleetArtifact?: FleetArtifactRecord | undefined;
+  /** Per-host last synced commit and version. */
+  readonly fleetHosts?: Readonly<Record<string, FleetHostSyncRecord>> | undefined;
 }
 
 export function emptySyncState(): SyncState {
@@ -134,6 +147,7 @@ export function parseSyncState(raw: string): SyncState {
           : undefined,
       targets,
       ...(Object.keys(paritySkips).length > 0 ? { paritySkips } : {}),
+      ...parseFleetState(parsed),
     };
   } catch {
     return emptySyncState();
@@ -240,6 +254,8 @@ export interface PlanSyncInput {
   readonly jobsBehind: number;
   readonly force: boolean;
   readonly skipApp: boolean;
+  readonly skipFleet?: boolean | undefined;
+  readonly fleetHosts?: ReadonlyArray<FleetHostConfig> | undefined;
   readonly only?: ReadonlySet<string> | undefined;
   readonly desktopHost: DesktopHostStatus;
   /** Returns changed repo-relative files between `fromSha` and `headSha`, or `null` if unknown. */
@@ -254,6 +270,7 @@ export interface SyncPlan {
     readonly decision: TargetDecision;
   }>;
   readonly appImage: TargetDecision;
+  readonly fleet: FleetSyncPlan;
   readonly needsWorktreeUpdate: boolean;
   readonly needsInstall: boolean;
 }
@@ -317,11 +334,25 @@ export function planSync(input: PlanSyncInput): SyncPlan {
   });
 
   const appImage = planAppImageTarget(input, onlySet, getChanged);
+  const fleet = planFleetSync({
+    headSha: input.headSha,
+    state: input.state,
+    fleetHosts: input.fleetHosts ?? [],
+    only: onlySet,
+    skipFleet: input.skipFleet === true,
+    force: input.force,
+    jobsBehind: input.jobsBehind,
+    desktopHost: input.desktopHost,
+    getChanged,
+    matchesDesktopSource: matchesAppImageSource,
+  });
 
   const anyBinaryToBuild = binaries.some((item) => item.decision.action === "build");
-  const needsWorktreeUpdate = anyBinaryToBuild || appImage.action === "build";
+  const needsWorktreeUpdate =
+    anyBinaryToBuild || appImage.action === "build" || fleet.needsLinuxBuild;
   const needsNodeWorkspace =
     appImage.action === "build" ||
+    fleet.needsLinuxBuild ||
     binaries.some(
       (item) => item.decision.action === "build" && item.target.kind !== "guard-protocol",
     );
@@ -336,7 +367,7 @@ export function planSync(input: PlanSyncInput): SyncPlan {
     }
   }
 
-  return { binaries, appImage, needsWorktreeUpdate, needsInstall };
+  return { binaries, appImage, fleet, needsWorktreeUpdate, needsInstall };
 }
 
 function planAppImageTarget(

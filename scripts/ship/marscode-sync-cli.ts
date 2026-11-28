@@ -11,6 +11,8 @@ export interface SyncCliOptions {
   readonly skipBuild: boolean;
   readonly skipStage: boolean;
   readonly skipApp: boolean;
+  readonly skipFleet: boolean;
+  readonly fleetConfigPath: string;
   readonly only: ReadonlySet<string> | undefined;
   readonly primary: string;
   readonly dataRoot: string;
@@ -39,7 +41,9 @@ export function formatUsage(): string {
     "  --skip-build          Skip vp pack for prebuilt CLI bundles",
     "  --skip-stage          Skip ship-queue version stage/prune",
     "  --skip-app            Skip desktop AppImage target",
-    "  --only CSV            Comma-separated target IDs (e.g. ship-queue,app)",
+    "  --skip-fleet          Skip fleet rollout to configured SSH hosts",
+    "  --fleet-config FILE   Path to local fleet-deploy.json (default: <prefix>/lib/marscode/fleet-deploy.json)",
+    "  --only CSV            Comma-separated target IDs (e.g. ship-queue,app,fleet,fleet-rollout,<host>)",
     "  --primary DIR         Primary git repository path",
     "  --data-root DIR       Persistent data/worktree root for sync-worktree, state, and lock",
     "  --target-sha SHA      Git commit or ref to sync (defaults to SHIP_QUEUE_BASE_SHA or HEAD)",
@@ -127,6 +131,8 @@ export function parseCliArgs(argv: ReadonlyArray<string>, cwd = process.cwd()): 
   let skipBuild = false;
   let skipStage = false;
   let skipApp = false;
+  let skipFleet = false;
+  let fleetConfigArg: string | undefined;
   let only: Set<string> | undefined;
   let primaryArg: string | undefined;
   let dataRootArg: string | undefined;
@@ -157,6 +163,13 @@ export function parseCliArgs(argv: ReadonlyArray<string>, cwd = process.cwd()): 
         break;
       case "--skip-app":
         skipApp = true;
+        break;
+      case "--skip-fleet":
+        skipFleet = true;
+        break;
+      case "--fleet-config":
+        fleetConfigArg = NodePath.resolve(requireValue(argv, i, "--fleet-config"));
+        i += 1;
         break;
       case "--only": {
         const raw = requireValue(argv, i, "--only");
@@ -227,6 +240,8 @@ export function parseCliArgs(argv: ReadonlyArray<string>, cwd = process.cwd()): 
   const resolvedLibDir = libDir ?? NodePath.join(prefix, "lib", "marscode-tools");
   const guardLibDir = libDir ?? NodePath.join(prefix, "lib");
   const resolvedAppDir = appDir ?? NodePath.join(dataRoot, "app");
+  const resolvedFleetConfigPath =
+    fleetConfigArg ?? NodePath.join(prefix, "lib", "marscode", "fleet-deploy.json");
   const rawBehind = Number.parseInt(process.env.SHIP_QUEUE_JOBS_BEHIND ?? "0", 10);
   const jobsBehind = Number.isFinite(rawBehind) && rawBehind > 0 ? rawBehind : 0;
 
@@ -236,6 +251,8 @@ export function parseCliArgs(argv: ReadonlyArray<string>, cwd = process.cwd()): 
     skipBuild,
     skipStage,
     skipApp,
+    skipFleet,
+    fleetConfigPath: resolvedFleetConfigPath,
     only,
     primary,
     dataRoot,
