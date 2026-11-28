@@ -12,6 +12,8 @@ export interface ModelEffortGroup {
   readonly family: string;
   readonly reviews: number;
   readonly passed: number;
+  readonly challenges: number;
+  readonly overrides: number;
   readonly breaking: number;
   readonly critical: number;
   readonly high: number;
@@ -48,6 +50,8 @@ export function groupRowsByModelAndEffort(
         family: row.family ?? "",
         reviews: 0,
         passed: 0,
+        challenges: 0,
+        overrides: 0,
         breaking: 0,
         critical: 0,
         high: 0,
@@ -61,6 +65,8 @@ export function groupRowsByModelAndEffort(
     }
     grp.reviews += row.reviews;
     grp.passed += row.passed;
+    grp.challenges += row.challenges ?? 0;
+    grp.overrides += row.overrides ?? 0;
     grp.breaking += row.breaking;
     grp.critical += row.critical;
     grp.high += row.high;
@@ -93,6 +99,8 @@ function addReviewRows(base: ReviewStatsGroupRow, inc: ReviewStatsGroupRow): Rev
     bypasses: base.bypasses + inc.bypasses,
     friction: base.friction + inc.friction,
     fallbacks: base.fallbacks + inc.fallbacks,
+    challenges: (base.challenges ?? 0) + (inc.challenges ?? 0),
+    overrides: (base.overrides ?? 0) + (inc.overrides ?? 0),
     breaking: base.breaking + inc.breaking,
     critical: base.critical + inc.critical,
     high: base.high + inc.high,

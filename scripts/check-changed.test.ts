@@ -365,6 +365,12 @@ it("lists the ignored inputs that main's pathspecs list, without entering node_m
     .sort();
   assert.includeMembers(old, ["old/dist/a.d.ts", "replaced/sub/a.d.ts", "skipped/a.d.ts"]);
   assert.deepStrictEqual(await inFixture(ignoredCheckInputs(project.root)), old);
+  // Metro's outputs (written when a tool loads metro.config.js) never enter the key.
+  write("apps/mobile/.generated/device-stream/index.js", "module.exports = 1;");
+  write("apps/mobile/.generated/routes.ts", "export {};");
+  const listed = await inFixture(ignoredCheckInputs(project.root));
+  assert.notInclude(listed, "apps/mobile/.generated/device-stream/index.js");
+  assert.include(listed, "apps/mobile/.generated/routes.ts");
 });
 
 function launcherFixture() {

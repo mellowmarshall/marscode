@@ -16,6 +16,8 @@ type SeverityMetricRow = Pick<
   | "reviews"
   | "passRatePct"
   | "avgIssues"
+  | "challenges"
+  | "overrides"
   | "breaking"
   | "critical"
   | "high"
@@ -43,6 +45,9 @@ function SeverityRowCells({
       <td className={cn(NUM, pad, tone)}>{row.reviews}</td>
       <td className={cn(NUM, pad, tone)}>{`${row.passRatePct.toFixed(0)}%`}</td>
       <td className={cn(NUM, pad, tone, AVG_COL)}>{row.avgIssues.toFixed(2)}</td>
+      <td className={cn(NUM, pad, tone, AVG_COL)}>
+        {row.challenges ? `${row.overrides ?? 0}/${row.challenges}` : "·"}
+      </td>
       <td className={cn(NUM, pad, SEV_COL, "text-destructive")}>{row.breaking || "·"}</td>
       <td className={cn(NUM, pad, SEV_COL, "text-destructive")}>{row.critical || "·"}</td>
       <td className={cn(NUM, pad, SEV_COL, "text-warning")}>{row.high || "·"}</td>
@@ -107,6 +112,9 @@ export function UsageReviewsTable({
               <th scope="col" className={cn(NUM, "py-2 font-medium", AVG_COL)}>
                 {gt("Avg")}
               </th>
+              <th scope="col" className={cn(NUM, "py-2 font-medium", AVG_COL)}>
+                {gt("Ovr")}
+              </th>
               <th scope="col" className={cn(NUM, "py-2 font-medium", SEV_COL)}>
                 {gt("Brk")}
               </th>
@@ -130,7 +138,7 @@ export function UsageReviewsTable({
           {!stats || stats.groups.length === 0 ? (
             <tbody>
               <tr>
-                <td colSpan={10} className="px-3 py-6 text-center text-muted-foreground">
+                <td colSpan={11} className="px-3 py-6 text-center text-muted-foreground">
                   <T>No review records match the selected filters.</T>
                 </td>
               </tr>

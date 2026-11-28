@@ -3,15 +3,16 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { overrideRequestPath } from "./challengeGate.ts";
 import { runShipQueueCli } from "./cli.ts";
-import { jobReviewPath, readJob, readLog } from "./jobStore.ts";
+import { jobReviewPath, mark, readJob, readLog } from "./jobStore.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
 import { ciOutputPath } from "./ciSteps.ts";
 import type { RemoteCommandRunner } from "./sshExec.ts";
 import { fixtureCleanups, makeFixture, SELF, sh } from "./testing/shipStepsFixture.ts";
 import type { ProcessRunner, ShipQueueDeps } from "./types.ts";
 import { WATCH_EXIT, watchJob } from "./watcher.ts";
-import { runJob } from "./worker.ts";
+import { runDueWork, runJob } from "./worker.ts";
 
 afterEach(() => {
   for (const cleanup of fixtureCleanups.splice(0)) cleanup();
@@ -166,6 +167,38 @@ describe("challenge gate", () => {
     expect(fx.reviews).toHaveLength(1);
     // An override applies only to a job that waits on its review.
     expect(await cli(["override", id, "--reason", "again"])).toBe(1);
+  });
+
+  it("keeps a watch following a challenged job once its log shows the override", async () => {
+    const fx = makeFixture();
+    fx.setVerdict("CHALLENGED");
+    const wt = fx.worktree("feat/98-rewatch", { "r.txt": "r\n" });
+    const id = await fx.submit(wt, "feat/98-rewatch");
+    expect(await runJob(fx.deps, id)).toBe("blocked");
+    // The moment the worker takes the override: OVERRIDDEN is logged while the job record still
+    // reads "waiting on a challenge" and no request file is left.
+    mark(fx.root, id, `OVERRIDDEN job=${id} reason=raced the watch`);
+    const watched: string[] = [];
+    let ticks = 0;
+    const exit = await watchJob({
+      root: fx.root,
+      id,
+      self: SELF,
+      clock: fx.deps.clock,
+      quietMs: 60_000,
+      write: (line) => watched.push(line),
+      waitForChange: async () => {
+        ticks += 1;
+        if (ticks > 1) throw new Error("the watch should have reached DONE");
+        await runShipQueueCli(["override", id, "--reason", "the flagged helper is test-only"], {
+          deps: fx.deps,
+          io: { stdout: () => {}, stderr: () => {}, env: {}, cwd: fx.tmp },
+        });
+        await runJob(fx.deps, id);
+      },
+    });
+    expect(exit).toBe(WATCH_EXIT.done);
+    expect(watched.join("\n")).not.toContain(`watch: job ${id} is CHALLENGED`);
   });
 
   it("lets a resubmit of the branch replace the challenged job", async () => {
@@ -349,23 +382,99 @@ describe("declared merge and routing waits", () => {
 });
 
 describe("unanswered challenge", () => {
-  it("fails a CHALLENGED job with no fix or override within an hour", async () => {
+  it("honors an override made inside 30 s even when the worker reads it later", async () => {
+    const fx = makeFixture();
+    fx.setVerdict("CHALLENGED");
+    let nowMs = Date.UTC(2026, 0, 1);
+    const deps: ShipQueueDeps = { ...fx.deps, clock: { now: () => new Date(nowMs).toISOString() } };
+    const wt = fx.worktree("feat/98-timely", { "t.txt": "t\n" });
+    const id = await fx.submit(wt, "feat/98-timely", deps);
+    expect(await runJob(deps, id)).toBe("blocked");
+    nowMs += 29_000;
+    const cli = (argv: ReadonlyArray<string>) =>
+      runShipQueueCli(argv, {
+        deps,
+        io: { stdout: () => {}, stderr: () => {}, env: {}, cwd: fx.tmp },
+      });
+    expect(await cli(["override", id, "--reason", "made in time"])).toBe(0);
+    // The worker's next tick lands after the window: the timely request still counts.
+    nowMs += 3_000;
+    expect(await runJob(deps, id)).toBe("ended");
+    expect(readJob(fx.root, id)).toMatchObject({ state: "done" });
+    expect(fx.merged).toEqual([1]);
+    expect(
+      NodeFS.readFileSync(NodePath.join(fx.root, "challenge-overrides.jsonl"), "utf8"),
+    ).toContain(`"job":"${id}"`);
+  });
+
+  it("refuses an override made after 30 s, even before the worker fails the job", async () => {
+    const fx = makeFixture();
+    fx.setVerdict("CHALLENGED");
+    let nowMs = Date.UTC(2026, 0, 1);
+    const deps: ShipQueueDeps = { ...fx.deps, clock: { now: () => new Date(nowMs).toISOString() } };
+    const wt = fx.worktree("feat/98-late", { "l.txt": "l\n" });
+    const id = await fx.submit(wt, "feat/98-late", deps);
+    expect(await runJob(deps, id)).toBe("blocked");
+    nowMs += 31_000;
+    // The job still waits (no worker tick yet), but the window is over.
+    expect(readJob(fx.root, id)).toMatchObject({ state: "waiting", waiting_for: "challenge" });
+    const out: string[] = [];
+    expect(
+      await runShipQueueCli(["override", id, "--reason", "too late"], {
+        deps,
+        io: { stdout: (t) => out.push(t), stderr: (t) => out.push(t), env: {}, cwd: fx.tmp },
+      }),
+    ).toBe(1);
+    expect(out.join("")).toContain("override window is over");
+    // A request file written behind the CLI's back is not honored either.
+    NodeFS.writeFileSync(
+      overrideRequestPath(fx.root, id),
+      `${JSON.stringify({ reason: "forged late", at: new Date(nowMs).toISOString() })}\n`,
+    );
+    expect(await runJob(deps, id)).toBe("ended");
+    expect(fx.markers(id).at(-1)).toBe("FAILED reason=challenged");
+    expect(fx.merged).toEqual([]);
+  });
+
+  it("fails a CHALLENGED job with no override within 30 s, and the repo's next job starts", async () => {
     const fx = makeFixture();
     fx.setVerdict("CHALLENGED");
     let nowMs = Date.UTC(2026, 0, 1);
     const deps: ShipQueueDeps = { ...fx.deps, clock: { now: () => new Date(nowMs).toISOString() } };
     const wt = fx.worktree("feat/98-silent", { "s.txt": "s\n" });
     const id = await fx.submit(wt, "feat/98-silent", deps);
+    const nextWt = fx.worktree("feat/98-next", { "n.txt": "n\n" });
+    const next = await fx.submit(nextWt, "feat/98-next", deps);
+    const started = (job: string) => fx.markers(job).some((m) => m.startsWith("STARTED"));
 
-    expect(await runJob(deps, id)).toBe("blocked");
-    nowMs += 59 * 60_000;
-    expect(await runJob(deps, id)).toBe("blocked");
-    nowMs += 2 * 60_000;
-    expect(await runJob(deps, id)).toBe("ended");
+    // The worker loop runs each repo's head job: the challenged head holds the repo's turn.
+    await runDueWork(deps);
+    expect(readJob(fx.root, id)).toMatchObject({ state: "waiting", waiting_for: "challenge" });
+    fx.setVerdict("PASS");
+    nowMs += 29_000;
+    await runDueWork(deps);
+    expect(readJob(fx.root, id)).toMatchObject({ state: "waiting" });
+    expect(started(next)).toBe(false);
+
+    // No override within 30 s: the job fails, leaves the queue, and the next job runs.
+    nowMs += 2_000;
+    await runDueWork(deps);
     expect(readJob(fx.root, id)).toMatchObject({ state: "failed" });
-    expect(fx.markers(id).at(-1)).toBe(
-      "FAILED reason=challenge_unanswered: no fix or override within an hour",
-    );
-    expect(fx.prs.size).toBe(0);
+    expect(fx.markers(id).at(-1)).toBe("FAILED reason=challenged");
+    for (let tick = 0; tick < 5 && readJob(fx.root, next)?.state !== "done"; tick += 1) {
+      nowMs += 2_000;
+      await runDueWork(deps);
+    }
+    expect(readJob(fx.root, next)).toMatchObject({ state: "done" });
+
+    // An override after the window is refused: the job is over.
+    const out: string[] = [];
+    expect(
+      await runShipQueueCli(["override", id, "--reason", "too late"], {
+        deps,
+        io: { stdout: (t) => out.push(t), stderr: (t) => out.push(t), env: {}, cwd: fx.tmp },
+      }),
+    ).toBe(1);
+    expect(NodeFS.existsSync(overrideRequestPath(fx.root, id))).toBe(false);
   });
 });

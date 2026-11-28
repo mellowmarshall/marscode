@@ -153,6 +153,10 @@ export const gitLines = (cwd: string, args: ReadonlyArray<string>) =>
 // Ignored files that checks read: generated sources, declarations, and env files.
 const checkInput = /(^|\/)\.(generated|astro)\/|\.d\.ts$|(^|\/)\.env[^/]*$/;
 const inNodeModules = /(^|\/)node_modules\//;
+// Metro writes these whenever a tool loads apps/mobile/metro.config.js, built only from tracked
+// sources the key already covers; listing them made the key change during a run.
+const metroOutputs =
+  /^apps\/mobile\/\.generated\/(device-stream|preview-stream|third-party-licenses)\//;
 
 // Pathspecs don't stop git from walking an ignored directory, and on Windows it follows pnpm's
 // junctions in node_modules until MAX_PATH. `--directory` lists one without entering it.
@@ -187,7 +191,12 @@ export const ignoredCheckInputs = Effect.fn("checkChanged.ignoredCheckInputs")(f
   }
   // A nested repository is listed by its directory, as the old pathspecs listed it.
   return files
-    .filter((file) => !inNodeModules.test(file) && (file.endsWith("/") || checkInput.test(file)))
+    .filter(
+      (file) =>
+        !inNodeModules.test(file) &&
+        !metroOutputs.test(file) &&
+        (file.endsWith("/") || checkInput.test(file)),
+    )
     .sort();
 });
 
@@ -300,20 +309,26 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
   // Include them in the key, but skip large ignored folders that no check reads.
   // Recompute after a passing run so edits made during it are never cached as passing.
   const ci = Option.getOrElse(yield* Config.option(Config.String("CI")), () => "");
+  // Per input, its own digest too, so a key that changed during a run can name what changed.
+  const inputDigests = new Map<string, string>();
   const inputKey = Effect.gen(function* () {
     const hash = NodeCrypto.createHash("sha256");
+    inputDigests.clear();
     // CI changes test behavior (vite.config.ts rejects .only under CI).
     hash.update(`${process.version}\0${base}\0${ci}\0`);
-    hash.update(
-      yield* git(root, [
-        "diff",
-        "--binary",
-        "--no-renames",
-        "--no-ext-diff",
-        "--no-textconv",
-        base,
-        "--",
-      ]),
+    const diff = yield* git(root, [
+      "diff",
+      "--binary",
+      "--no-renames",
+      "--no-ext-diff",
+      "--no-textconv",
+      base,
+      "--",
+    ]);
+    hash.update(diff);
+    inputDigests.set(
+      "(diff against base)",
+      NodeCrypto.createHash("sha256").update(diff).digest("hex"),
     );
     const ignored = yield* ignoredCheckInputs(root);
     for (const file of [
@@ -329,7 +344,11 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
       // Untracked nested repositories are listed as directories.
       const info = yield* Effect.option(fs.stat(inRoot(file)));
       if (Option.isSome(info) && info.value.type === "File") {
-        hash.update(yield* fs.readFile(inRoot(file)));
+        const bytes = yield* fs.readFile(inRoot(file));
+        hash.update(bytes);
+        inputDigests.set(file, NodeCrypto.createHash("sha256").update(bytes).digest("hex"));
+      } else {
+        inputDigests.set(file, "absent");
       }
     }
     return hash.digest("hex");
@@ -604,8 +623,14 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
   yield* Console.log(`\n${summary.join("\n")}`);
 
   if (results.some((result) => result.outcome !== "pass")) return false;
+  const before = new Map(inputDigests);
   if ((yield* inputKey) !== key) {
-    yield* Console.log("  pass not cached: files changed during the run");
+    const changed = [...new Set([...before.keys(), ...inputDigests.keys()])]
+      .filter((file) => before.get(file) !== inputDigests.get(file))
+      .toSorted();
+    yield* Console.log(
+      `  pass not cached: files changed during the run: ${changed.slice(0, 10).join(", ") || "the diff against base"}`,
+    );
     return true;
   }
   // Write then rename, so a concurrent run never reads half a file.

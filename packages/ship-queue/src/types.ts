@@ -26,6 +26,8 @@ export interface ChallengeOverride {
   readonly patch?: string | undefined;
   /** The PR was open before the override, so the PR phase posts the reason as a comment. */
   readonly comment?: boolean | undefined;
+  /** The challenged commit: Review Stats match the override to the challenge of this tip. */
+  readonly tip?: string | undefined;
 }
 
 /** `jobs/<id>/job.json`. Field names follow the legacy queue so `ship-queue status --json` stays wire-compatible. */

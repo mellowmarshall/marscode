@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalDate:off - The playbook challenge as a merge gate: a CHALLENGED review waits for the agent to fix or override.
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off - The playbook challenge as a merge gate: a CHALLENGED review waits 30 s for an override, then fails the job.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
@@ -54,10 +54,25 @@ export function requestChallengeOverride(
   }
   const reason = markerValue(rawReason).slice(0, MAX_REASON_CHARS);
   if (!reason) return { ok: false, message: "an override needs a written --reason" };
+  if (!insideOverrideWindow(job, clock.now())) {
+    return {
+      ok: false,
+      message: `job ${id}: the 30 s override window is over; it fails as challenged. Fix the findings and resubmit`,
+    };
+  }
   NodeFS.writeFileSync(
     overrideRequestPath(root, id),
     `${JSON.stringify({ reason, at: clock.now() })}\n`,
   );
+  // The worker may have ended the job (window over) between the read above and this write.
+  const after = readJob(root, id);
+  if (!after || isEnded(after)) {
+    NodeFS.rmSync(overrideRequestPath(root, id), { force: true });
+    return {
+      ok: false,
+      message: `job ${id} ended (${after?.reason ?? "challenged"}) before the override landed; fix the findings and resubmit`,
+    };
+  }
   return {
     ok: true,
     message: `job ${id}: override recorded; it resumes on its own. Follow it: ship-queue watch ${id}`,
@@ -68,7 +83,19 @@ export function overrideBodySection(reason: string): string {
   return `## Playbook challenge overridden\n\n${reason}\n`;
 }
 
-const CHALLENGE_WAIT_MS = 60 * 60_000;
+/** How long a CHALLENGED job holds its repo's turn for `ship-queue override`; then it fails. */
+export const CHALLENGE_WAIT_MS = 30_000;
+
+/** True when AT (ISO) falls inside the job's override window (from its CHALLENGED mark). */
+function insideOverrideWindow(job: JobRecord, at: string): boolean {
+  const since = job.waiting_since ? Date.parse(job.waiting_since) : Number.NaN;
+  const when = Date.parse(at);
+  return Number.isFinite(since) && Number.isFinite(when) && when - since < CHALLENGE_WAIT_MS;
+}
+
+/** Overrides the queue accepted, one JSON line each: Review Stats read this, not every job. */
+export const challengeOverrideIndexPath = (root: string) =>
+  NodePath.join(root, "challenge-overrides.jsonl");
 
 /** `git patch-id` of the job's change on its base: what an override covers, across rebases. */
 async function changePatchId(deps: ShipQueueDeps, job: JobRecord, onto: string, tip: string) {
@@ -120,14 +147,29 @@ export function takeChallengeOverride(deps: ShipQueueDeps, job: JobRecord): bool
     return false;
   }
   const reason = typeof request.reason === "string" ? markerValue(request.reason) : "";
-  NodeFS.rmSync(file, { force: true });
-  if (!reason) return false;
+  if (!reason) {
+    NodeFS.rmSync(file, { force: true });
+    return false;
+  }
   const at = typeof request.at === "string" ? request.at : deps.clock.now();
+  // A request made in time counts even when the worker reads it after the window; a late one
+  // never does.
+  if (!insideOverrideWindow(job, at)) {
+    NodeFS.rmSync(file, { force: true });
+    appendLog(deps.root, job.id, `override requested at ${at}, after the 30 s window; ignored`);
+    return false;
+  }
   const bodyFile = jobBodyPath(deps.root, job.id);
   const body = NodeFS.readFileSync(bodyFile, "utf8").trimEnd();
   NodeFS.writeFileSync(bodyFile, `${body}\n\n${overrideBodySection(reason)}`, "utf8");
   updateJob(deps.root, job.id, {
-    challenge_override: { reason, at, patch: job.challenged_patch, comment: Boolean(job.pr) },
+    challenge_override: {
+      reason,
+      at,
+      patch: job.challenged_patch,
+      comment: Boolean(job.pr),
+      tip: job.challenged_tip,
+    },
     challenged_tip: undefined,
     challenged_patch: undefined,
     house_tip: undefined,
@@ -136,10 +178,19 @@ export function takeChallengeOverride(deps: ShipQueueDeps, job: JobRecord): bool
     waiting_since: undefined,
   });
   mark(deps.root, job.id, `OVERRIDDEN job=${job.id} reason=${reason}`);
+  // Only now: until the job is running again, the request file tells readers an override is
+  // pending.
+  NodeFS.rmSync(file, { force: true });
+  if (job.challenged_tip) {
+    NodeFS.appendFileSync(
+      challengeOverrideIndexPath(deps.root),
+      `${JSON.stringify({ repo: job.repo, tip: job.challenged_tip, job: job.id, at })}\n`,
+    );
+  }
   return true;
 }
 
-/** A challenged job the agent never answered stops holding its repo's queue. */
+/** The override window is over: the job fails (reason=challenged) and leaves the queue. */
 export function challengeUnanswered(deps: ShipQueueDeps, job: JobRecord): boolean {
   const since = job.waiting_since ? Date.parse(job.waiting_since) : Number.NaN;
   const now = Date.parse(deps.clock.now());
@@ -147,9 +198,9 @@ export function challengeUnanswered(deps: ShipQueueDeps, job: JobRecord): boolea
 }
 
 /**
- * After the review: a CHALLENGED verdict parks the job, unless the agent overrode a review of
- * this same change (a rebase keeps it; a new commit does not). Anything else, a missing review
- * included, goes on.
+ * After the review: a CHALLENGED verdict holds the job for the override window, unless the agent
+ * overrode a review of this same change (a rebase keeps it; a new commit does not). Anything
+ * else, a missing review included, goes on.
  */
 export async function challengeGate(
   deps: ShipQueueDeps,

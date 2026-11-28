@@ -13,6 +13,7 @@ import {
 } from "./statsParse.ts";
 import {
   appendReviewStatRecord,
+  readOverrideDecisions,
   collectReviewRecords,
   reviewStatsWriteGeneration,
 } from "./statsStore.ts";
@@ -102,6 +103,110 @@ describe("review stats store", () => {
       jsonlPath,
     };
     expect(collectReviewRecords(paths).map((r) => r.id)).toEqual(["ship:1"]);
+  });
+
+  it("counts playbook challenges and the ones a ship job overrode", () => {
+    const dir = makeTempDir("pb-stats-");
+    const pb = NodePath.join(dir, "pb", "sample-repo");
+    NodeFS.mkdirSync(pb, { recursive: true });
+    const challenge = (pass: number, commit: string) =>
+      NodeFS.writeFileSync(
+        NodePath.join(pb, `feat_x.${pass}.challenge.json`),
+        JSON.stringify({
+          acceptable: false,
+          summary: "s",
+          diagnosis: "d",
+          repo: "sample-repo",
+          branch: "feat/x",
+          pass,
+          commit,
+          reviewer_model: "gpt-6.2-astra",
+          reviewer_effort: "medium",
+          timestamp: `2026-11-0${pass}T00:00:00Z`,
+          defects: [{ severity: "high", file: "a.ts", summary: "bug" }],
+        }),
+      );
+    challenge(1, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    challenge(2, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    // The queue's override index sits beside its jobs directory.
+    NodeFS.mkdirSync(NodePath.join(dir, "jobs"), { recursive: true });
+    NodeFS.writeFileSync(
+      NodePath.join(dir, "challenge-overrides.jsonl"),
+      `${JSON.stringify({ repo: "owner_sample-repo", tip: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", job: "7", at: "2026-11-02T00:01:00Z" })}\n`,
+    );
+    const records = collectReviewRecords({
+      playbookStateDir: NodePath.join(dir, "pb"),
+      shipJobsDir: NodePath.join(dir, "jobs"),
+      jsonlPath: NodePath.join(dir, "x.jsonl"),
+    });
+    expect(records.filter((r) => r.overridden).map((r) => r.commit)).toEqual([
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    ]);
+    const stats = aggregateReviewStats(records, { side: "reviewer", by: "model" });
+    expect(stats.totals).toMatchObject({ challenges: 2, overrides: 1 });
+    // An owner bypass is not a challenge.
+    const bypass = { ...records[0]!, id: "bypass", verdict: "bypassed", overridden: false };
+    expect(
+      aggregateReviewStats([...records, bypass], {
+        side: "reviewer",
+        by: "model",
+        includeBypasses: true,
+      }).totals,
+    ).toMatchObject({ challenges: 2, overrides: 1 });
+    expect(stats.groups[0]).toMatchObject({ challenges: 2, overrides: 1 });
+  });
+
+  it("credits each override decision to the challenge before it, once", () => {
+    const dir = makeTempDir("pb-stats-");
+    const pb = NodePath.join(dir, "pb", "sample-repo");
+    NodeFS.mkdirSync(pb, { recursive: true });
+    const tip = "cccccccccccccccccccccccccccccccccccccccc";
+    const challenge = (pass: number, day: string) =>
+      NodeFS.writeFileSync(
+        NodePath.join(pb, `feat_y.${pass}.challenge.json`),
+        JSON.stringify({
+          acceptable: false,
+          summary: "s",
+          diagnosis: "d",
+          repo: "sample-repo",
+          branch: "feat/y",
+          pass,
+          commit: tip,
+          reviewer_model: "gpt-6.2-astra",
+          reviewer_effort: "medium",
+          timestamp: `2026-11-${day}T00:00:00Z`,
+        }),
+      );
+    // The same tip is challenged three times; the first two are overridden, the third is not.
+    challenge(1, "10");
+    challenge(2, "11");
+    challenge(3, "12");
+    const jobs = NodePath.join(dir, "jobs");
+    NodeFS.mkdirSync(jobs, { recursive: true });
+    const index = NodePath.join(dir, "challenge-overrides.jsonl");
+    const decision = (job: string, day: string) =>
+      `${JSON.stringify({ repo: "owner_sample-repo", tip, job, at: `2026-11-${day}T00:00:10Z` })}\n`;
+    NodeFS.writeFileSync(index, decision("1", "10"));
+    const paths = {
+      playbookStateDir: NodePath.join(dir, "pb"),
+      shipJobsDir: jobs,
+      jsonlPath: NodePath.join(dir, "x.jsonl"),
+    };
+    const overriddenPasses = () =>
+      collectReviewRecords(paths)
+        .filter((r) => r.overridden)
+        .map((r) => r.timestamp)
+        .toSorted();
+    expect(overriddenPasses()).toEqual(["2026-11-10T00:00:00Z"]);
+    // An appended decision is read too (only the new bytes), and credits the challenge before it.
+    NodeFS.appendFileSync(index, decision("2", "11"));
+    expect(readOverrideDecisions(jobs).map((d) => d.job)).toEqual(["1", "2"]);
+    expect(overriddenPasses()).toEqual(["2026-11-10T00:00:00Z", "2026-11-11T00:00:00Z"]);
+    const stats = aggregateReviewStats(collectReviewRecords(paths), {
+      side: "reviewer",
+      by: "model",
+    });
+    expect(stats.totals).toMatchObject({ challenges: 3, overrides: 2 });
   });
 
   it("merges a delegated review thread into the ship job that names it", () => {

@@ -123,13 +123,25 @@ export async function watchJob(options: WatchOptions): Promise<number> {
   const tail = new MarkerTail(jobLogPath(root, id));
   let lastMovedAt = clock.now();
   let lastBytes = -1;
+  // Whether the last CHALLENGED marker read so far has an OVERRIDDEN after it.
+  let challengeOverridden = false;
+  const emit = (line: string) => {
+    write(line);
+    if (line.startsWith(`CHALLENGED job=${id} `)) challengeOverridden = false;
+    else if (line.startsWith(`OVERRIDDEN job=${id} `)) challengeOverridden = true;
+  };
+  // Markers that arrived since the last read, so a just-logged OVERRIDDEN counts before exit 4.
+  const tailShowsOverride = () => {
+    for (const line of tail.poll()) emit(line);
+    return challengeOverridden;
+  };
   try {
     for (;;) {
       // Ask whether the job is over before reading, so the read that follows holds its last line.
       const before = readJob(root, id);
       const terminal = findTerminal(readLog(root, id), id);
       const lines = tail.poll();
-      for (const line of lines) write(line);
+      for (const line of lines) emit(line);
       if (terminal) {
         emitReviewIfPresent(root, id, write);
         return terminal === "done" ? WATCH_EXIT.done : WATCH_EXIT.failed;
@@ -164,15 +176,18 @@ export async function watchJob(options: WatchOptions): Promise<number> {
         }
       }
 
-      // Every watch of a challenged job hands the decision back, until an override is pending.
+      // Every watch of a challenged job hands the decision back, until an override is pending
+      // or the log shows the challenge already overridden.
       if (
         job?.state === "waiting" &&
         job.waiting_for === "challenge" &&
-        !NodeFS.existsSync(overrideRequestPath(root, id))
+        !NodeFS.existsSync(overrideRequestPath(root, id)) &&
+        !challengeOverridden &&
+        !tailShowsOverride()
       ) {
         emitReviewIfPresent(root, id, write);
         write(
-          `watch: job ${id} stopped before merge on its CHALLENGED playbook review. You decide: fix the findings, commit, and submit the branch again (the new job replaces this one; watch the new job), or ship as is with: ship-queue override ${id} --reason "<why the findings do not hold>" (the reason goes in the job log and the PR body), then: ship-queue watch ${id}`,
+          `watch: job ${id} is CHALLENGED by its playbook review. To ship as is, override within 30 s: ship-queue override ${id} --reason "<why the findings do not hold>" (the reason goes in the job log and the PR body), then: ship-queue watch ${id}. With no override in 30 s the job fails (reason=challenged) and leaves the queue: fix the findings, commit, and submit the branch again.`,
         );
         return WATCH_EXIT.challenged;
       }
