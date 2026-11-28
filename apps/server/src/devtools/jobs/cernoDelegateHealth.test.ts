@@ -278,11 +278,29 @@ describe("cerno health through the bash delegate", () => {
       const logPath = NodePath.join(workDir, "run.log");
       NodeFS.writeFileSync(logPath, "tick 1\n", "utf8");
       const second = { pidOffset: 50, tickOffset: 6_000 };
+      // The hung first run idles; the second run's worker is busy, so each load is its own.
       const table = withSecondRun(
         delegateProcessTable({ threadId: THREAD_ID, logPath }),
         second.pidOffset,
         second.tickOffset,
+      ).map((p) =>
+        p.pid === F.workerPid
+          ? { ...p, cpuPct: 0.1 }
+          : p.pid === F.workerPid + second.pidOffset
+            ? { ...p, cpuPct: 140.6, rssKb: 900_000 }
+            : p,
       );
+      const runTreeLoad = (offset: number) => {
+        const pids = [F.watchPid, F.childPid, F.workerPid, F.watchMonitorPid].map(
+          (p) => p + offset,
+        );
+        const tree = table.filter((p) => pids.includes(p.pid));
+        return {
+          cpuPct: Math.round(tree.reduce((sum, p) => sum + p.cpuPct, 0)),
+          memBytes: tree.reduce((sum, p) => sum + p.rssKb * 1024, 0),
+          processCount: 4,
+        };
+      };
       // The first run hangs; the agent starts the same command again.
       const stalled = { state: "STUCK_LOOP", confidence: 0.6, hang_loop: true };
       writeWatchSnapshot(snapDir, { cwd: workDir, logPath }, stalled);
@@ -312,6 +330,15 @@ describe("cerno health through the bash delegate", () => {
       expect(firstDetail?.pidStats?.pid).toBe(F.watchPid);
       expect(laterDetail?.pidStats?.pid).toBe(F.watchPid + second.pidOffset);
       expect(laterDetail?.cerno?.label).toBe("Healthy");
+
+      // Load: each job sums its own run's `cerno watch` tree, by that run's root PID.
+      yield* Effect.promise(() => registry.applyProcessTable(toPsRows(table)));
+      const loaded = yield* Effect.promise(() => registry.listJobs({ threadId: THREAD_ID }));
+      const loadOf = (id: string) => loaded.find((j) => j.id === id)?.load;
+      expect(runTreeLoad(0).cpuPct).toBe(1);
+      expect(runTreeLoad(second.pidOffset).cpuPct).toBe(142);
+      expect(loadOf(first.id)).toEqual(runTreeLoad(0));
+      expect(loadOf(later.id)).toEqual(runTreeLoad(second.pidOffset));
       yield* Effect.promise(() =>
         vi.waitFor(() => {
           expect(lastUpsert(chunks, first.id)?.cerno?.label).toBe("Stalled");

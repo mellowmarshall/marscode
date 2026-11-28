@@ -130,6 +130,14 @@ describe("indexCernoCandidates", () => {
       );
       if (scanned) matched += 1;
       expect(index.find(bg)?.id, JSON.stringify(bg)).toBe(scanned?.id);
+      // Pairing reads every match from the index, so it must equal a full scan too.
+      const allScanned = candidates.filter(
+        (c) => c.state === "running" && c.pidStats?.alive && cernoMatchesBackgroundJob(c, bg),
+      );
+      expect(
+        index.matches(bg).map((c) => c.id),
+        JSON.stringify(bg),
+      ).toEqual(allScanned.map((c) => c.id));
     }
     expect(matched).toBeGreaterThan(10);
   });

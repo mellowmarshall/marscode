@@ -360,14 +360,16 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
       await cernoBridge.ensureObservedTicksFresh();
       // A newer table supersedes this one while the cerno scan ran.
       if (seq !== processTableSeq) return;
-      const candidates = indexCernoCandidates(cernoBridge.listMatchCandidates());
+      const roots = visibility?.liveCernoRootsByBg(
+        indexCernoCandidates(cernoBridge.listMatchCandidates()),
+      );
       const targets = collectJobLoadTargets({
         localHostname: cernoHostname,
         cernoSummaries: readVisibleCernoSummaries(true),
         backgroundSummaries: (backgroundBridge?.listSummaries() ?? []).filter(
           (s) => !visibility?.suppressedBgIds.has(s.id),
         ),
-        rootForBackgroundJob: (id) => visibility?.liveCernoRootForBg(id, candidates),
+        rootForBackgroundJob: (id) => roots?.get(id),
       });
       const live = await keepUnreusedRoots(targets, (pid) => cernoBridge.observedStartTicks(pid));
       if (seq !== processTableSeq) return;
