@@ -77,6 +77,7 @@ MODULES=(
   cli.ts
   client.ts
   digests.ts
+  plan.ts
   protocol.ts
   redaction.ts
   signing.ts

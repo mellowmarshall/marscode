@@ -150,7 +150,7 @@ export async function watchJob(options: WatchOptions): Promise<number> {
         if (readActionSeen(root, id) !== job.action_digest) {
           NodeFS.writeFileSync(actionSeenPath(root, id), job.action_digest);
           write(
-            `watch: job ${id} waits for the owner; once approved it resumes at the next queue tick. Re-arm: ship-queue watch ${id}`,
+            `watch: job ${id} waits for the owner; once approved it resumes on its own and your thread is told. To follow it: ship-queue watch ${id}`,
           );
           return WATCH_EXIT.actionRequired;
         }

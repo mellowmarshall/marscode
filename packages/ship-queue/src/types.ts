@@ -132,10 +132,13 @@ export interface ShipGuard {
     readonly branch: string;
     readonly baseRef: string;
   }) => WireGuardBundle | undefined;
+  /** Checks the grant for `jobId`'s recorded thread; `consume` is set only for the house pass itself. */
   readonly check: (input: {
     readonly worktree: string;
     readonly branch: string;
     readonly bundle: WireGuardBundle;
+    readonly jobId: string;
+    readonly consume: boolean;
   }) => Promise<GuardCheck>;
 }
 

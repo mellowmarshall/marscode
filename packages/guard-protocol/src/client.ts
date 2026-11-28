@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 
 import type { WireGuardBundle } from "./bundleInspect.ts";
 import { argvSha256 } from "./digests.ts";
+import { GUARD_PROTOCOL_VERSION } from "./protocol.ts";
 
 const GUARD_SOCKET_ENV = "T3_GUARD_GRANT_SOCKET";
 const GUARD_TIMEOUT_ENV = "T3_GUARD_REQUEST_TIMEOUT";
@@ -330,45 +331,59 @@ function parseGrantReply(
   };
 }
 
-function buildBasePayload(input: {
-  readonly op: "peek" | "check" | "request";
+type GrantOp = "peek" | "check" | "use" | "request";
+
+export interface GuardGrantQuery {
   readonly guard: string;
   readonly command: ReadonlyArray<string>;
   readonly cwd: string;
+  readonly bundle?: WireGuardBundle | undefined;
   readonly threadId?: string | undefined;
   readonly session?: string | undefined;
-  readonly bundle?: WireGuardBundle | undefined;
+  /** A ship-queue worker names the job it checks for; the broker binds the grant to that job's record. */
+  readonly jobId?: string | undefined;
+  readonly socketPath?: string | undefined;
   readonly env?: NodeJS.ProcessEnv | undefined;
-}): Record<string, unknown> {
+  readonly allowTestOverride?: boolean | undefined;
+}
+
+function buildBasePayload(
+  input: GuardGrantQuery & { readonly op: GrantOp },
+): Record<string, unknown> {
   const env = input.env ?? process.env;
   return {
-    v: 1,
+    v: GUARD_PROTOCOL_VERSION,
     op: input.op,
     guard: input.guard,
     command: input.command,
     argv_sha256: argvSha256(input.command),
     cwd: input.cwd ? canonicalReal(input.cwd) : "",
-    thread_id: input.threadId?.trim() || env.T3CODE_THREAD_ID?.trim() || "",
+    thread_id: input.threadId?.trim() || (input.jobId ? "" : env.T3CODE_THREAD_ID?.trim() || ""),
     session: input.session ?? "",
     pid: process.pid,
+    ...(input.jobId ? { job_id: input.jobId } : {}),
     ...(input.bundle ? { bundle: input.bundle } : {}),
   };
 }
 
-export async function peekGuardGrant(input: {
-  readonly guard: string;
-  readonly command: ReadonlyArray<string>;
-  readonly cwd: string;
-  readonly bundle?: WireGuardBundle | undefined;
-  readonly threadId?: string | undefined;
-  readonly session?: string | undefined;
-  readonly socketPath?: string | undefined;
-  readonly env?: NodeJS.ProcessEnv | undefined;
-  readonly allowTestOverride?: boolean | undefined;
-}): Promise<boolean> {
-  const sock =
+function socketFor(input: GuardGrantQuery): string | null {
+  return (
     input.socketPath ??
-    resolveGuardSocketPath(input.env, { allowTestOverride: input.allowTestOverride });
+    resolveGuardSocketPath(input.env, { allowTestOverride: input.allowTestOverride })
+  );
+}
+
+async function queryGrant(op: "check" | "use", input: GuardGrantQuery): Promise<GuardGrantReply> {
+  const sock = socketFor(input);
+  if (!sock) return { ok: false, errCode: "unreachable", error: "guard socket unavailable" };
+  const res = await sendGuardRpc(sock, buildBasePayload({ ...input, op }), CHECK_TIMEOUT_MS);
+  if (!res.ok) return { ok: false, errCode: res.errCode, error: res.errCode };
+  return parseGrantReply(res.data);
+}
+
+/** Read-only: whether a grant covers the command. */
+export async function peekGuardGrant(input: GuardGrantQuery): Promise<boolean> {
+  const sock = socketFor(input);
   if (!sock) return false;
   const res = await sendGuardRpc(
     sock,
@@ -378,49 +393,30 @@ export async function peekGuardGrant(input: {
   return res.ok && res.data.ok === true;
 }
 
-export async function checkGuardGrant(input: {
-  readonly guard: string;
-  readonly command: ReadonlyArray<string>;
-  readonly cwd: string;
-  readonly bundle?: WireGuardBundle | undefined;
-  readonly threadId?: string | undefined;
-  readonly session?: string | undefined;
-  readonly socketPath?: string | undefined;
-  readonly env?: NodeJS.ProcessEnv | undefined;
-  readonly allowTestOverride?: boolean | undefined;
-}): Promise<GuardGrantReply> {
-  const sock =
-    input.socketPath ??
-    resolveGuardSocketPath(input.env, { allowTestOverride: input.allowTestOverride });
-  if (!sock) return { ok: false, errCode: "unreachable", error: "guard socket unavailable" };
-  const res = await sendGuardRpc(
-    sock,
-    buildBasePayload({ ...input, op: "check" }),
-    CHECK_TIMEOUT_MS,
-  );
-  if (!res.ok) return { ok: false, errCode: res.errCode, error: res.errCode };
-  return parseGrantReply(res.data);
+/** Read-only: the grant that covers the command, if any. Never consumes a once grant. */
+export function checkGuardGrant(input: GuardGrantQuery): Promise<GuardGrantReply> {
+  return queryGrant("check", input);
 }
 
-export async function requestGuardGrant(input: {
-  readonly guard: string;
-  readonly command: ReadonlyArray<string>;
-  readonly cwd: string;
-  readonly refusal: string;
-  readonly proposedReason?: string | undefined;
-  readonly bundle?: WireGuardBundle | undefined;
-  readonly wait?: boolean | undefined;
-  readonly consumeExisting?: boolean | undefined;
-  readonly timeoutMs?: number | undefined;
-  readonly threadId?: string | undefined;
-  readonly session?: string | undefined;
-  readonly socketPath?: string | undefined;
-  readonly env?: NodeJS.ProcessEnv | undefined;
-  readonly allowTestOverride?: boolean | undefined;
-}): Promise<GuardGrantReply> {
-  const sock =
-    input.socketPath ??
-    resolveGuardSocketPath(input.env, { allowTestOverride: input.allowTestOverride });
+/** Consumes a once grant (or records a bundle use). Only the guarded command itself calls this. */
+export function useGuardGrant(input: GuardGrantQuery): Promise<GuardGrantReply> {
+  return queryGrant("use", input);
+}
+
+export async function requestGuardGrant(
+  input: GuardGrantQuery & {
+    readonly refusal: string;
+    readonly proposedReason?: string | undefined;
+    readonly wait?: boolean | undefined;
+    readonly consumeExisting?: boolean | undefined;
+    readonly timeoutMs?: number | undefined;
+    /** Commands one approval covers, each usable once (`guard` should be `plan`). */
+    readonly plan?: ReadonlyArray<ReadonlyArray<string>> | undefined;
+    /** Store the approved once grant for the guarded command instead of handing it to this caller. */
+    readonly storeGrant?: boolean | undefined;
+  },
+): Promise<GuardGrantReply> {
+  const sock = socketFor(input);
   if (!sock) return { ok: false, errCode: "unreachable", error: "guard socket unavailable" };
   const timeoutMs = resolveRequestTimeoutMs(input.env, input.timeoutMs);
   const payload: Record<string, unknown> = {
@@ -430,6 +426,8 @@ export async function requestGuardGrant(input: {
     timeout: Math.ceil(timeoutMs / 1_000),
     ...(input.wait === false ? { wait: false } : {}),
     ...(input.consumeExisting === false ? { consume_existing: false } : {}),
+    ...(input.plan ? { plan: input.plan } : {}),
+    ...(input.storeGrant ? { store_grant: true } : {}),
   };
   const res = await sendGuardRpc(sock, payload, timeoutMs + 2_000);
   if (!res.ok) return { ok: false, errCode: res.errCode, error: res.errCode };
@@ -445,7 +443,11 @@ export async function identifyGuardThread(options?: {
     options?.socketPath ??
     resolveGuardSocketPath(options?.env, { allowTestOverride: options?.allowTestOverride });
   if (!sock) return { ok: false, error: "guard socket unavailable" };
-  const res = await sendGuardRpc(sock, { v: 1, op: "identify" }, CHECK_TIMEOUT_MS);
+  const res = await sendGuardRpc(
+    sock,
+    { v: GUARD_PROTOCOL_VERSION, op: "identify" },
+    CHECK_TIMEOUT_MS,
+  );
   if (!res.ok) return { ok: false, error: res.errCode };
   return {
     ok: res.data.ok === true,

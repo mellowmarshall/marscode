@@ -448,6 +448,30 @@ function collectRecordedQueueWorkers(
   return out;
 }
 
+/**
+ * Whether `pid` is a live ship-queue worker that recorded itself in the queue's worker locks
+ * (same start time) and passes `isTrustedShipQueueProcess`.
+ */
+export function isRecordedQueueWorker(
+  queueRoot: string,
+  pid: number,
+  procFs: ProcFsReader = defaultProcFs,
+): boolean {
+  return collectRecordedQueueWorkers(queueRoot, procFs).some(
+    (worker) => worker.pid === pid && isLiveTrustedWorker(worker, queueRoot, procFs),
+  );
+}
+
+function isLiveTrustedWorker(
+  worker: RecordedWorkerIdentity,
+  queueRoot: string,
+  procFs: ProcFsReader,
+): boolean {
+  const stat = readProcStat(worker.pid, procFs);
+  if (!stat.starttime || stat.starttime !== worker.startTicks) return false;
+  return isTrustedShipQueueProcess(worker.pid, queueRoot, procFs);
+}
+
 export function isQueueDaemonInAncestry(
   queueRoot: string,
   startPid?: number,
@@ -463,13 +487,7 @@ export function isQueueDaemonInAncestry(
 
   // MarsCode's detached systemd-scope `ship-queue work` workers record `{ pid, startTicks }`
   // in `<queueRoot>/worker.json` or `<queueRoot>/workers/<version>.json`.
-  for (const worker of collectRecordedQueueWorkers(queueRoot, procFs)) {
-    if (!ancestorPids.has(worker.pid)) continue;
-    const stat = readProcStat(worker.pid, procFs);
-    if (!stat.starttime || stat.starttime !== worker.startTicks) continue;
-    if (isTrustedShipQueueProcess(worker.pid, queueRoot, procFs)) {
-      return true;
-    }
-  }
-  return false;
+  return collectRecordedQueueWorkers(queueRoot, procFs).some(
+    (worker) => ancestorPids.has(worker.pid) && isLiveTrustedWorker(worker, queueRoot, procFs),
+  );
 }

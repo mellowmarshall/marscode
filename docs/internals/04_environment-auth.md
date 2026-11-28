@@ -50,6 +50,15 @@ model.
   linked side enforces this itself, and the operation stays a human-triggered RPC/HTTP route rather
   than an MCP tool.
 
+- **Host-guard callers are identified by the kernel, not by what they send.** The guard broker
+  ([GuardSocketProtocol](../../apps/server/src/devtools/GuardSocketProtocol.ts)) takes a caller's
+  thread from its socket peer's process tree. A detached ship-queue worker has no thread, so it names
+  a job instead; the broker accepts that only from a recorded, trusted worker process
+  ([GuardQueueWorker](../../apps/server/src/devtools/GuardQueueWorker.ts)) and only for the job's
+  own thread, worktree, branch, and protected-diff digest. Workers may check grants, never request
+  them. `check` and `peek` never consume a grant; only `use`, sent by the guarded command itself,
+  does.
+
 ### Reusable dev credential
 
 Web development servers can accept a fixed `T3CODE_DEV_AUTH_TOKEN` across worktrees and ports on one

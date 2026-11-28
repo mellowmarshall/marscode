@@ -120,6 +120,30 @@ function isTrackedHooksDir(repo: RepoInfo, value: string, config: HostGuardsConf
   return listing.split(/\s+/).some((name) => HOOK_NAMES.has(name));
 }
 
+const CONFIG_VALUE_FLAGS = new Set([
+  "-f",
+  "--file",
+  "--blob",
+  "--type",
+  "--default",
+  "--comment",
+  "--value",
+]);
+
+function configPositionals(rest: ReadonlyArray<string>): ReadonlyArray<string> {
+  const out: string[] = [];
+  for (let i = 0; i < rest.length; i += 1) {
+    const a = rest[i]!;
+    if (CONFIG_VALUE_FLAGS.has(a)) {
+      i += 1;
+      continue;
+    }
+    if (a.startsWith("-")) continue;
+    out.push(a);
+  }
+  return out;
+}
+
 export function checkGitConfigWrite(
   repo: RepoInfo,
   sub: ReadonlyArray<string>,
@@ -154,6 +178,10 @@ export function checkGitConfigWrite(
   const hasRead = rest.some((r) => reads.has(r));
   const hasWrite = rest.some((r) => writes.has(r));
   if (hasRead && !hasWrite) return ALLOW_VERDICT;
+  // `git config <key>` with no value is a read; a value after the key makes it a write.
+  if (!hasWrite && configPositionals(rest).length === 1) {
+    return ALLOW_VERDICT;
+  }
 
   const firstKey = keys[0]!;
   if (firstKey.toLowerCase() !== "core.hookspath") {

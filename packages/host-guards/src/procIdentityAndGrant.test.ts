@@ -365,7 +365,7 @@ describe("procIdentity and MarsCode AppImage server verification", () => {
     let mode: "approve" | "deny" | "enqueue" | "preapproved" = "approve";
 
     const broker = await startMockBroker(sockPath, (req) => {
-      if (req.op === "check") {
+      if (req.op === "use") {
         if (mode === "preapproved") {
           return {
             ok: true,

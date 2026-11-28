@@ -218,6 +218,35 @@ describe("mergeGuard and ghApiGuard", () => {
       "allow",
     );
 
+    // Repo settings, renames, creation, deletion: owner-only with their own reason, not the merge one
+    const repoAdmin = [
+      ["api", "-X", "PATCH", "repos/example-org/demo-app", "-f", "name=demo-app-next"],
+      ["api", "-X", "DELETE", "repos/example-org/demo-app"],
+      ["api", "-X", "POST", "repos/example-org/demo-app/transfer", "-f", "new_owner=x"],
+      ["api", "-X", "POST", "orgs/example-org/repos", "-f", "name=fresh"],
+      ["repo", "rename", "demo-app-next", "-R", "example-org/demo-app"],
+      ["repo", "rename", "demo-app-next"],
+      ["repo", "edit", "example-org/demo-app", "--description", "new words"],
+      ["repo", "edit", "--enable-wiki=false"],
+      ["repo", "delete", "example-org/demo-app", "--yes"],
+      ["repo", "create", "example-org/fresh", "--private"],
+      ["repo", "create", "fresh"],
+    ];
+    for (const args of repoAdmin) {
+      const verdict = decideGh(args, repoDir, config);
+      expect(verdict.verdict, args.join(" ")).toBe("deny");
+      expect(verdict.verdict === "deny" ? verdict.reason : "").toContain(
+        "repo settings change: owner approval required",
+      );
+    }
+    expect(
+      decideGh(["repo", "edit", "other-org/other-repo", "-d", "x"], repoDir, config).verdict,
+    ).toBe("allow");
+    expect(decideGh(["repo", "view", "example-org/demo-app"], repoDir, config).verdict).toBe(
+      "allow",
+    );
+    expect(decideGh(["api", "repos/example-org/demo-app"], repoDir, config).verdict).toBe("allow");
+
     // GraphQL mutations refused (raw, unicode-escaped JSON --input, unreadable -F @- / @/dev/stdin), read query allowed
     expect(
       decideGh(

@@ -458,6 +458,45 @@ describe("ship-queue engine", () => {
     expect(sh(fx.remoteDir, ["show", "main:.github/workflows/ci.yml"])).toBe("on: push");
   });
 
+  it("resumes a job parked on an owner action by itself once the grant lands, with no watch re-armed", async () => {
+    let granted = false;
+    const fx = makeFixture();
+    const checks: Array<{ jobId: string; consume: boolean }> = [];
+    const deps: ShipQueueDeps = {
+      ...fx.deps,
+      guard: {
+        inspect: fx.deps.guard.inspect,
+        check: async ({ jobId, consume }) => {
+          checks.push({ jobId, consume });
+          return { ok: granted };
+        },
+      },
+    };
+    const wt = fx.worktree("feat/11-resume", { ".github/workflows/ci.yml": "on: pull_request\n" });
+    const id = await fx.submitOk(wt, "feat/11-resume");
+    const unregister = registerWatcher(fx.root, id, SELF);
+
+    expect((await runDueWork(deps)).blocked).toEqual([id]);
+    expect(readJob(fx.root, id)).toMatchObject({ state: "waiting", waiting_for: "action" });
+    expect(readJob(fx.root, id)?.action_digest).toMatch(/^[0-9a-f]{64}$/);
+    // The watch exits on ACTION_REQUIRED; nothing re-arms it.
+    unregister();
+
+    fx.clock.advance(15);
+    expect((await runDueWork(deps)).blocked).toEqual([id]);
+    expect(readJob(fx.root, id)).toMatchObject({ state: "waiting", waiting_for: "action" });
+    expect(readLog(fx.root, id)).not.toContain("WAITING_WATCHER");
+
+    granted = true;
+    fx.clock.advance(15);
+    expect((await runDueWork(deps)).ended).toEqual([id]);
+    expect(readJob(fx.root, id)?.state).toBe("done");
+    expect(readLog(fx.root, id)).toContain("owner approval landed");
+    expect(checks.every((c) => c.jobId === id)).toBe(true);
+    // Only the house pass consumes; the parked re-checks are read-only.
+    expect(checks.map((c) => c.consume)).toEqual([true, false, false, true]);
+  });
+
   it("fails the house stage on a secret-scan finding before anything is pushed", async () => {
     const fx = makeFixture();
     const deps: ShipQueueDeps = {
@@ -665,6 +704,7 @@ describe("ship-queue CLI", () => {
     const cli = (argv: ReadonlyArray<string>) =>
       runShipQueueCli(argv, {
         deps: fx.deps,
+        identifyThread: async () => "",
         io: { stdout: (t) => out.push(t), stderr: (t) => err.push(t), env: {}, cwd: fx.tmp },
         startWorker: () => {
           started += 1;
@@ -727,6 +767,7 @@ describe("ship-queue CLI", () => {
     const cli = (argv: ReadonlyArray<string>) =>
       runShipQueueCli(argv, {
         deps: fx.deps,
+        identifyThread: async () => "",
         io: { stdout: (t) => out.push(t), stderr: (t) => err.push(t), env: {}, cwd: fx.tmp },
       });
     expect(await cli(["submit", wt, "feat/17-cancel", "t", "bad.md", "--no-start"])).toBe(1);

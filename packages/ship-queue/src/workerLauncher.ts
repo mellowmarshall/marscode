@@ -170,12 +170,25 @@ export function launchDetachedWorker(input: LaunchInput): LaunchResult {
     SHIP_QUEUE_WORKER_ENTRY: target.entryPath,
   };
   const systemdRun = systemdScopeRunner(input.platform, input.env);
-  const [command, args] = systemdRun
+  const workerArgv = systemdRun
     ? [
         systemdRun,
-        ["--user", "--scope", "--quiet", "--collect", "--", node, target.entryPath, "work"],
+        "--user",
+        "--scope",
+        "--quiet",
+        "--collect",
+        "--",
+        node,
+        target.entryPath,
+        "work",
       ]
-    : [node, [target.entryPath, "work"]];
+    : [node, target.entryPath, "work"];
+  // `setsid --fork` returns at once, so the worker never stays a child of the caller (a `watch`
+  // inside an agent shell). Host guards trust the queue worker only outside agent ancestry.
+  const setsid = input.platform === "linux" ? onPath("setsid", input.env) : null;
+  const [command, args] = setsid
+    ? [setsid, ["--fork", ...workerArgv]]
+    : [workerArgv[0]!, workerArgv.slice(1)];
   const child = NodeChildProcess.spawn(command, args, {
     detached: true,
     stdio: "ignore",

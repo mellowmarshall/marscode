@@ -109,6 +109,34 @@ describe("threadApprovals unified approval subroutine", () => {
     expect(entry.approval.detail).toBe("git push --force");
   });
 
+  it("shows every command of a batch plan and one approve action for the whole list", () => {
+    const plan = [
+      ["gh", "repo", "rename", "next", "-R", "example-org/example-repo"],
+      ["gh", "repo", "edit", "example-org/next", "--description", "new words"],
+    ];
+    const [entry] = deriveThreadDevtoolsApprovals({
+      threadId: "thread-A",
+      pendingGuards: [
+        makeGuard({
+          requestId: "req-plan",
+          threadId: "thread-A",
+          guard: "plan",
+          command: plan[0]!,
+          plan,
+        }),
+      ],
+      shipJobs: [],
+      depsRepos: [],
+      nowMs,
+    });
+    expect(entry?.approval.options?.map((o) => o.label)).toEqual(["Deny", "Approve all listed"]);
+    expect(entry?.approval.detail).toContain("gh repo rename next -R example-org/example-repo");
+    expect(entry?.approval.detail).toContain(
+      "gh repo edit example-org/next --description 'new words'",
+    );
+    expect(entry?.approval.detail).toContain("each usable once for 30 minutes");
+  });
+
   it("enforces strict thread_id attribution (no branch/worktree heuristic leak for outside CLI runs, M5) and exact server active attempt states (H2)", () => {
     const liveShipOnA: ShipQueueJob = {
       id: "10984",

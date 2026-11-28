@@ -1,16 +1,16 @@
 // @effect-diagnostics nodeBuiltinImport:off - Host-guard override engine with terminal fast-path and @t3tools/guard-protocol broker integration.
 import { inspectWorktreeBundle } from "@t3tools/guard-protocol/bundle-inspect";
 import {
-  checkGuardGrant,
   peekGuardGrant,
   requestGuardGrant,
   resolveGuardSocketPath,
-  type GuardGrantReply,
+  useGuardGrant,
 } from "@t3tools/guard-protocol/client";
 
 import { redactGuardCommand } from "./commandRedact.ts";
 import type { HostGuardsConfig } from "./hostConfig.ts";
-import { writeOverrideRecord, writeRefusalRecord } from "./overrideLog.ts";
+import { recordBrokerGrant, writeOverrideRecord, writeRefusalRecord } from "./overrideLog.ts";
+import { overridePlanFile, requestPlanGrant } from "./overridePlan.ts";
 import { defaultProcFs, type ProcFsReader } from "./procFs.ts";
 import {
   hasControllingTty,
@@ -101,38 +101,6 @@ export function recordRefusal(
   );
 }
 
-function recordBrokerGrant(
-  reply: GuardGrantReply,
-  input: {
-    readonly guard: string;
-    readonly command: ReadonlyArray<string>;
-    readonly cwd: string;
-    readonly refusal: string;
-    readonly proposedReason: string;
-    readonly session: string;
-    readonly threadId: string;
-    readonly extra?: Readonly<Record<string, unknown>> | undefined;
-  },
-  runtime: OverrideRuntime,
-): boolean {
-  return writeOverrideRecord(
-    {
-      guard: input.guard,
-      command: input.command,
-      cwd: input.cwd,
-      refusal: input.refusal,
-      why: reply.reason || input.proposedReason || "Approved via MarsCode",
-      session: input.session,
-      via: "t3-input-request",
-      threadId: reply.threadId || input.threadId,
-      grantId: reply.grantId,
-      approvedVia: reply.approvedVia,
-      extra: input.extra,
-    },
-    runtime,
-  );
-}
-
 export async function peekPreapprovedGrant(
   input: {
     readonly guard: string;
@@ -191,6 +159,7 @@ export async function requestOverrideGrant(
   const procFs = runtime.procFs ?? defaultProcFs;
   const writeErr = runtime.writeErr ?? ((s: string) => process.stderr.write(`${s}\n`));
   const why = parseOverrideReason(env);
+  const planFile = overridePlanFile(env);
   let sock = resolveSocketForRuntime(runtime);
 
   if (why === null && sock === null) return false;
@@ -231,7 +200,8 @@ export async function requestOverrideGrant(
       cwd: input.cwd,
       summary: why ?? undefined,
     });
-    const existing = await checkGuardGrant({
+    // The guarded command itself is running: this is the one place a once grant is consumed.
+    const existing = await useGuardGrant({
       guard: input.guard,
       command: safeCommand,
       cwd: input.cwd,
@@ -260,6 +230,36 @@ export async function requestOverrideGrant(
     }
     if (existing.errCode === "unreachable" || existing.errCode === "timeout") {
       sock = null;
+    } else if (planFile !== null && threadId) {
+      const used = await requestPlanGrant({
+        planFile,
+        guard: input.guard,
+        command: input.command,
+        cwd: input.cwd,
+        refusal: input.refusal,
+        allowBlocking: input.allowBlocking !== false,
+        threadId,
+        session: identity.sessionId,
+        socketPath: sock,
+        env,
+        allowTestOverride: runtime.allowTestOverride,
+        writeErr,
+      });
+      if (!used) return false;
+      return recordBrokerGrant(
+        used,
+        {
+          guard: input.guard,
+          command: safeCommand,
+          cwd: input.cwd,
+          refusal: input.refusal,
+          proposedReason: used.reason ?? "",
+          session: identity.sessionId,
+          threadId,
+          extra: input.extra,
+        },
+        runtime,
+      );
     } else if (why !== null && threadId) {
       const allowBlocking = input.allowBlocking !== false;
       const reply = await requestGuardGrant({
@@ -366,7 +366,7 @@ export async function ownerAllowed(
       options?.command && options.command.length > 0 ? options.command : [action],
     );
     const refusal = `human-only action: ${action}`;
-    const existing = await checkGuardGrant({
+    const existing = await useGuardGrant({
       guard: "owner-check",
       command: cmd,
       cwd,
@@ -460,7 +460,8 @@ export function overrideHint(
     if (threadId && sock !== null) {
       return (
         `Host guard refusal. Request owner approval via MarsCode input request by running ` +
-        `${OVERRIDE_ENV}="<why, in words>" <command> directly (do not hand the owner a terminal block).${extra}`
+        `${OVERRIDE_ENV}="<why, in words>" <command> directly (do not hand the owner a terminal block). ` +
+        `For several owner-only commands, list them once: HOST_GUARD_OVERRIDE_PLAN=<plan.json> <first command>.${extra}`
       );
     }
     return `Host guard refusal. Contact repository owner to run via terminal if an override is required.${extra}`;

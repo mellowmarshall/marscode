@@ -4,6 +4,7 @@ import * as NodePath from "node:path";
 
 import { resolveEnvGhRepoSlug } from "./ghArgParse.ts";
 import { decideGhGraphqlCall, GH_UNREADABLE_INPUT } from "./ghGraphqlGuard.ts";
+import { isRepoAdminApiCall, repoAdminRefusal } from "./ghRepoAdmin.ts";
 import type { HostGuardsConfig } from "./hostConfig.ts";
 import { ALLOW_VERDICT, type GuardVerdict } from "./pushGuard.ts";
 import { FALLBACK_BASES, formatMergeRefusal, inspectRepo, isSlugInScope } from "./repoScope.ts";
@@ -137,6 +138,14 @@ export function decideGhApiCall(
     return decideGhGraphqlCall({ endpoint, fields, raw, hasInputFlag }, here, config, queued);
   }
 
+  const orgCreate = /^orgs\/([^/]+)\/repos$/.exec(path);
+  if (
+    orgCreate?.[1] &&
+    method === "POST" &&
+    isSlugInScope(orgCreate[1], config, fields.name || "new")
+  ) {
+    return repoAdminRefusal(`gh api ${method} ${path}`);
+  }
   const repoMatch = /^repos\/([^/]+)\/([^/]+)(?:\/(.*))?$/.exec(path);
   if (!repoMatch || method === "GET") return ALLOW_VERDICT;
 
@@ -168,6 +177,8 @@ export function decideGhApiCall(
   }
 
   if (!isSlugInScope(owner, config, name)) return ALLOW_VERDICT;
+  // Repo settings and renames stay owner-only even for the queue; the queue never changes them.
+  if (isRepoAdminApiCall(method, rest)) return repoAdminRefusal(`gh api ${method} ${path}`);
   if (queued) return ALLOW_VERDICT;
 
   const target = hereSlug && hereSlug[0] === owner && hereSlug[1] === name ? here : null;
@@ -188,7 +199,6 @@ export function decideGhApiCall(
     /^pulls\/\d+\/merge$/.test(rest) ||
     rest === "merges" ||
     rest === "merge-upstream" ||
-    rest === "" ||
     /^rulesets(?:\/.*)?$/.test(rest)
   ) {
     return {

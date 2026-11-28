@@ -139,6 +139,8 @@ describe("detached worker", () => {
       ...process.env,
       PATH: `${bin}${NodePath.delimiter}${process.env.PATH ?? ""}`,
       SHIP_QUEUE_ROOT: root,
+      // Never reach the live guard broker from a test.
+      T3_GUARD_GRANT_SOCKET: "",
       FAKE_GH_STATE: NodePath.join(tmp, "gh-state"),
       FAKE_GH_REMOTE: remote,
     };

@@ -62,6 +62,10 @@
       "types": "./src/dopplerBroker.ts",
       "import": "./src/dopplerBroker.ts"
     },
+    "./houseGate": {
+      "types": "./src/houseGate.ts",
+      "import": "./src/houseGate.ts"
+    },
     "./hostProbe": {
       "types": "./src/hostProbe.ts",
       "import": "./src/hostProbe.ts"

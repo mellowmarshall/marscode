@@ -216,6 +216,27 @@ describe("gitGuard and pushGuard against real git repos", () => {
     expect(
       decideGit(["config", "include.path", "/tmp/evil.cfg"], {}, worktreeDir, config).verdict,
     ).toBe("deny");
+    // Reading a guarded key is a read, whatever the flags; a value after the key is a write
+    for (const read of [
+      ["config", "core.hooksPath"],
+      ["config", "--get", "core.hooksPath"],
+      ["config", "--local", "core.hooksPath"],
+      ["config", "--file", ".gitmodules", "core.hooksPath"],
+      ["config", "--type", "path", "core.hooksPath"],
+      ["config", "get", "core.hooksPath"],
+    ]) {
+      expect(decideGit(read, {}, worktreeDir, config).verdict, read.join(" ")).toBe("allow");
+    }
+    expect(
+      decideGit(["config", "core.hooksPath", "core.hooksPath"], {}, worktreeDir, config).verdict,
+    ).toBe("deny");
+    expect(
+      decideGit(["config", "--local", "core.hooksPath", "/dev/null"], {}, worktreeDir, config)
+        .verdict,
+    ).toBe("deny");
+    expect(
+      decideGit(["config", "set", "core.hooksPath", "/dev/null"], {}, worktreeDir, config).verdict,
+    ).toBe("deny");
     // Setting core.hooksPath to tracked directory containing pre-commit is allowed
     expect(
       decideGit(["config", "core.hooksPath", ".githooks"], {}, worktreeDir, config).verdict,

@@ -22,6 +22,10 @@
       "types": "./src/digests.ts",
       "import": "./src/digests.ts"
     },
+    "./plan": {
+      "types": "./src/plan.ts",
+      "import": "./src/plan.ts"
+    },
     "./protocol": {
       "types": "./src/protocol.ts",
       "import": "./src/protocol.ts"

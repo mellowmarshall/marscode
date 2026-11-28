@@ -10,7 +10,9 @@ import {
   identifyGuardThread,
   peekGuardGrant,
   requestGuardGrant,
+  useGuardGrant,
 } from "./client.ts";
+import { PLAN_GUARD, readPlanFile } from "./plan.ts";
 import { verifyBundleGrant, type SignedBundleGrantPayload } from "./signing.ts";
 
 function isTempInstalledCli(): boolean {
@@ -60,6 +62,7 @@ function parseFlagMap(flags: ReadonlyArray<string>): {
     "--pubkey",
     "--payload",
     "--sig",
+    "--plan",
   ]);
   for (let i = 0; i < flags.length; i += 1) {
     const arg = flags[i] ?? "";
@@ -87,18 +90,63 @@ function parseTimeoutMs(values: ReadonlyMap<string, string>): number | null | un
   return sec * 1_000;
 }
 
+async function runPlanOverride(
+  parsed: ReturnType<typeof parseFlagMap>,
+  allowTestOverride: boolean,
+  timeoutMs: number | undefined,
+): Promise<number> {
+  const cwd = parsed.values.get("--cwd") || process.cwd();
+  const plan = readPlanFile(parsed.values.get("--plan") ?? "", cwd);
+  if (!plan.ok) {
+    process.stderr.write(`marscode-guard: ${plan.error}\n`);
+    return 64;
+  }
+  const requested = await requestGuardGrant({
+    guard: PLAN_GUARD,
+    command: plan.commands[0]!,
+    plan: plan.commands,
+    cwd,
+    refusal: `Batch approval requested for ${plan.commands.length} owner-only commands`,
+    proposedReason: plan.reason,
+    timeoutMs,
+    threadId: parsed.values.get("--thread-id"),
+    session: parsed.values.get("--session"),
+    allowTestOverride,
+  });
+  if (parsed.booleans.has("--json")) process.stdout.write(`${JSON.stringify(requested)}\n`);
+  if (requested.ok) {
+    process.stderr.write(
+      `marscode-guard: plan approved; run each listed command once from ${cwd} within 30 minutes.\n`,
+    );
+    return 0;
+  }
+  process.stderr.write(
+    `marscode-guard (plan): ${requested.error || "owner approval was not granted"}\n`,
+  );
+  return 1;
+}
+
 async function runOverride(
   rest: ReadonlyArray<string>,
   allowTestOverride: boolean,
 ): Promise<number> {
   const { flags, command } = splitDashDash(rest);
   const parsed = parseFlagMap(flags);
+  if (parsed.values.has("--plan")) {
+    const planTimeout = parseTimeoutMs(parsed.values);
+    if (planTimeout === null) {
+      process.stderr.write("marscode-guard: --timeout must be a positive number of seconds\n");
+      return 64;
+    }
+    return runPlanOverride(parsed, allowTestOverride, planTimeout);
+  }
   const guard = parsed.positional[0] ?? "";
   const refusal = parsed.values.get("--refusal") ?? parsed.positional[1] ?? "";
   const cmd = command.length > 0 ? command : parsed.positional.slice(2);
   if (!guard || cmd.length === 0) {
     process.stderr.write(
-      "usage: marscode-guard override <guard> <refusal> [--worktree WT] [--branch BR] -- <cmd...>\n",
+      "usage: marscode-guard override <guard> <refusal> [--worktree WT] [--branch BR] -- <cmd...>\n" +
+        "       marscode-guard override --plan <plan.json> [--cwd DIR]\n",
     );
     return 64;
   }
@@ -149,6 +197,7 @@ async function runOverride(
     refusal: refusal || `Host-guard override requested for ${guard}`,
     proposedReason: reason,
     bundle,
+    storeGrant: true,
     timeoutMs,
     threadId: parsed.values.get("--thread-id"),
     session: parsed.values.get("--session"),
@@ -186,7 +235,8 @@ async function runOwnerCheck(
 
   const effectiveCmd = cmd.length > 0 ? cmd : [action];
   const refusal = `human-only action: ${action}`;
-  const existing = await checkGuardGrant({
+  // owner-check is the gate of the action it names, so it consumes the grant.
+  const existing = await useGuardGrant({
     guard: "owner-check",
     command: effectiveCmd,
     cwd,
