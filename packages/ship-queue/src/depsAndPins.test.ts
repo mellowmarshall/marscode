@@ -299,8 +299,10 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
     // The update lookup stands in for the registry: it reports vitest's newest release, so a
     // report turns pending only when upstream publishes one, never because a manifest changed.
     let latestVitest = "4.0.0";
-    const lookup = async (input: { files: ReadonlyMap<string, Uint8Array> }) => {
-      const manifest = JSON.parse(new TextDecoder().decode(input.files.get("package.json"))) as {
+    const lookup = async (input: { tree: string }) => {
+      const manifest = JSON.parse(
+        NodeFS.readFileSync(NodePath.join(input.tree, "package.json"), "utf8"),
+      ) as {
         dependencies: Record<string, string>;
       };
       const current = manifest.dependencies.vitest ?? "";
@@ -656,8 +658,9 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
     });
 
     let seenPaths: ReadonlyArray<string> = [];
-    const lookup = async (input: { files: ReadonlyMap<string, Uint8Array> }) => {
-      seenPaths = [...input.files.keys()];
+    const lookup = async (input: { tree: string; paths: ReadonlyArray<string> }) => {
+      // Every listed path is a file in the tree.
+      seenPaths = input.paths.filter((p) => NodeFS.existsSync(NodePath.join(input.tree, p)));
       return { updates: [], incomplete: [] };
     };
     const claims: Array<{ started: boolean; reason?: string }> = [];
@@ -734,8 +737,10 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
       remoteUrl: "https://example.invalid/demo.git",
     });
     let seenLock: Uint8Array | undefined;
-    const lookup = async (input: { files: ReadonlyMap<string, Uint8Array> }) => {
-      seenLock = input.files.get("pnpm-lock.yaml");
+    let seenTree = "";
+    const lookup = async (input: { tree: string }) => {
+      seenTree = input.tree;
+      seenLock = NodeFS.readFileSync(NodePath.join(input.tree, "pnpm-lock.yaml"));
       return {
         updates: [
           {
@@ -754,6 +759,8 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
     );
     expect(scan.report?.status).toBe("pending");
     expect(Buffer.from(seenLock!).equals(Buffer.from(lock))).toBe(true);
+    // The extracted tree is removed once the lookup is done.
+    expect(NodeFS.existsSync(seenTree)).toBe(false);
     expect(Object.keys(scan.report!.files)).toContain("pnpm-lock.yaml");
     const rejected = await decideShipQueueDeps(
       {

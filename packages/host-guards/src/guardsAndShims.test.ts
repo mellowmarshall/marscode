@@ -922,6 +922,64 @@ exit ${REFUSED_EXIT_CODE}
     );
   });
 
+  it("keeps a tool alias working when it links one shim destination to another (fly -> flyctl)", () => {
+    const tmpRoot = NodeFS.existsSync("/tmp") ? "/tmp" : NodeOS.tmpdir();
+    const root = NodeFS.mkdtempSync(NodePath.join(tmpRoot, "hg-alias-"));
+    tempDirs.push(root);
+    const fakeHome = NodePath.join(root, "home");
+    const prefix = NodePath.join(fakeHome, ".local");
+    const guards = NodePath.join(prefix, "guards");
+    NodeFS.mkdirSync(guards, { recursive: true });
+    // flyctl's own install: a real flyctl and fly as a relative link to it, both in guards/.
+    NodeFS.writeFileSync(
+      NodePath.join(guards, "flyctl"),
+      '#!/bin/sh\necho "flyctl ran as ${0##*/} $*"\n',
+      {
+        mode: 0o755,
+      },
+    );
+    NodeFS.symlinkSync("flyctl", NodePath.join(guards, "fly"));
+    const env = {
+      ...process.env,
+      HOME: fakeHome,
+      PATH: `${guards}:${prefix}/bin:/usr/local/bin:/usr/bin:/bin`,
+      HOST_GUARDS_BUNDLE: buildGuardBundle(),
+    };
+    const install = () =>
+      NodeChildProcess.spawnSync(
+        "bash",
+        [
+          NodePath.join(PKG_ROOT, "scripts", "install.sh"),
+          "--prefix",
+          prefix,
+          "--org",
+          "example-org",
+          "--real-node",
+          process.execPath,
+        ],
+        { env, encoding: "utf8" },
+      );
+    const runBoth = () =>
+      ["fly", "flyctl"].map((name) =>
+        NodeChildProcess.spawnSync(NodePath.join(guards, name), ["version"], {
+          env,
+          encoding: "utf8",
+        }),
+      );
+    for (const pass of [1, 2]) {
+      const res = install();
+      expect(res.status, `install ${pass}: ${res.stderr}`).toBe(0);
+      const [fly, flyctl] = runBoth();
+      expect(fly!.status, `fly after install ${pass}: ${fly!.stderr}`).toBe(0);
+      expect(fly!.stdout).toContain("flyctl ran as fly version");
+      expect(flyctl!.status, `flyctl after install ${pass}: ${flyctl!.stderr}`).toBe(0);
+      expect(flyctl!.stdout).toContain("flyctl ran as flyctl version");
+    }
+    // fly's kept binary is flyctl's bytes, not a link back into guards/ (where a shim now is).
+    const keptFly = NodePath.join(prefix, "lib", "marscode", "host-guards", "real", "fly");
+    expect(NodeFS.lstatSync(keptFly).isSymbolicLink()).toBe(false);
+  });
+
   it("refuses an install whose existing guard config names other roots than the host's", () => {
     const tmpRoot = NodeFS.existsSync("/tmp") ? "/tmp" : NodeOS.tmpdir();
     const root = NodeFS.mkdtempSync(NodePath.join(tmpRoot, "hg-roots-"));

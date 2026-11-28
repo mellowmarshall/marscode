@@ -266,18 +266,20 @@ export function reconcileDeclaredPins(
 
 /**
  * Runs the pinned Renovate CLI in lookup mode over a commit's dependency files (npm manifests and
- * the repo's `sq_pins.json` tool pins, as regex managers). The exact digested bytes are
- * extracted to a temporary directory, so the checkout's working tree never matters.
+ * the repo's `sq_pins.json` tool pins, as regex managers). It reads `tree`, the directory the
+ * reader extracted the exact digested bytes into, so the checkout's working tree never matters.
  */
 export async function renovateLookup(input: {
-  /** Dependency files by repo path, with the exact bytes the report digest hashed. */
-  readonly files: ReadonlyMap<string, Uint8Array>;
+  /** A directory holding each dependency file's exact digested bytes, by repo path. */
+  readonly tree: string;
+  /** The dependency files in `tree`. */
+  readonly paths: ReadonlyArray<string>;
   readonly pinsText?: string | undefined;
   readonly renovateBin?: string | undefined;
   readonly run?: ProcessRunner | undefined;
 }): Promise<RenovateLookupResult> {
   // No dependency files: nothing to look up.
-  if (input.files.size === 0) return { updates: [], incomplete: [] };
+  if (input.paths.length === 0) return { updates: [], incomplete: [] };
   const run = input.run ?? nodeProcessRunner;
   const renovateBin = input.renovateBin ?? defaultRenovateBin();
   if (!NodeFS.existsSync(renovateBin)) {
@@ -287,15 +289,7 @@ export async function renovateLookup(input: {
   }
   const work = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "sq-renovate-"));
   try {
-    const tree = NodePath.join(work, "tree");
-    NodeFS.mkdirSync(tree);
-    for (const [relPath, bytes] of input.files) {
-      const target = NodePath.join(tree, relPath);
-      // Paths come from git's own listing; refuse anything that would leave the tree.
-      if (!target.startsWith(`${tree}${NodePath.sep}`)) throw new Error(`unsafe path ${relPath}`);
-      NodeFS.mkdirSync(NodePath.dirname(target), { recursive: true });
-      NodeFS.writeFileSync(target, bytes);
-    }
+    const tree = input.tree;
 
     const pins = input.pinsText
       ? validatePinsSpec(JSON.parse(input.pinsText), PINS_PATH)
@@ -354,7 +348,13 @@ export async function renovateLookup(input: {
       throw new Error(`Renovate exited ${res.exitCode}${tail ? `: ${tail}` : ""}`);
     }
     const { result, assessed } = parseLookupLog(logText);
-    const unassessed = pins ? reconcileDeclaredPins(pins, input.files, assessed) : [];
+    // The pins' source files are a few small fixed files; read only those.
+    const pinFiles = new Map<string, Uint8Array>();
+    for (const file of new Set(pins?.pins.map((pin) => pin.file) ?? [])) {
+      if (input.paths.includes(file))
+        pinFiles.set(file, NodeFS.readFileSync(NodePath.join(tree, file)));
+    }
+    const unassessed = pins ? reconcileDeclaredPins(pins, pinFiles, assessed) : [];
     return applyPinLimits(
       unassessed.length > 0
         ? { updates: result.updates, incomplete: [...result.incomplete, ...unassessed] }

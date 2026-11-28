@@ -54,88 +54,46 @@ const DEP_PATHSPECS: ReadonlyArray<string> = [
   ":(exclude,glob)**/vendor/**",
 ];
 
-/** Splits `git cat-file --batch` output (`<oid> blob <size>\n<bytes>\n` per request) by path. */
-function parseCatFileBatch(out: Buffer, paths: ReadonlyArray<string>): ReadonlyMap<string, Buffer> {
-  const blobs = new Map<string, Buffer>();
-  let at = 0;
-  for (const relPath of paths) {
-    const eol = out.indexOf(0x0a, at);
-    if (eol < 0) throw new Error(`git cat-file --batch output ended before ${relPath}`);
-    const header = out.subarray(at, eol).toString("utf8");
-    const match = /^[0-9a-f]+ blob (\d+)$/.exec(header);
-    if (!match) throw new Error(`git cat-file --batch could not read ${relPath}: ${header}`);
-    const size = Number(match[1]);
-    const start = eol + 1;
-    if (start + size > out.length)
-      throw new Error(`git cat-file --batch output truncated at ${relPath}`);
-    blobs.set(relPath, out.subarray(start, start + size));
-    at = start + size + 1;
-  }
-  return blobs;
-}
+/** Paths per extraction process: a bounded argument list, a few processes per scan. */
+const EXTRACT_BATCH_PATHS = 200;
 
-/** Target bytes of blob content per `git cat-file --batch` call (a larger blob reads alone). */
-const CAT_FILE_BATCH_BYTES = 3 * 1024 * 1024;
-
-async function readBlobsBatched(
+/**
+ * Writes each path's blob at COMMIT into DIR (one file per path, written by git itself), so no
+ * blob passes through this process's memory or the runner's output.
+ */
+async function extractBlobs(
   run: ProcessRunner,
   repoDir: string,
   commit: string,
   paths: ReadonlyArray<string>,
-): Promise<ReadonlyMap<string, Buffer>> {
-  const requests = paths.map((relPath) => `${commit}:${relPath}`).join("\n") + "\n";
-  const check = await run({
-    command: "git",
-    args: ["-C", repoDir, "cat-file", "--batch-check"],
-    cwd: repoDir,
-    stdin: requests,
-  });
-  if (check.exitCode !== 0)
-    throw new Error(check.stderr.trim() || "git cat-file --batch-check failed");
-  const sizes = check.stdout.split("\n").filter(Boolean);
-  const chunks: string[][] = [];
-  let current: string[] = [];
-  let currentBytes = 0;
-  paths.forEach((relPath, index) => {
-    const match = /^[0-9a-f]+ blob (\d+)$/.exec(sizes[index] ?? "");
-    if (!match) throw new Error(`git cat-file --batch-check could not read ${relPath}`);
-    const size = Number(match[1]);
-    // The target bounds a batch, not a file: a larger blob (a big lockfile) gets a batch of its
-    // own. Its bytes go to a file, so the runner's output cap never applies to it.
-    if (current.length > 0 && currentBytes + size > CAT_FILE_BATCH_BYTES) {
-      chunks.push(current);
-      current = [];
-      currentBytes = 0;
+  dir: string,
+): Promise<void> {
+  for (let at = 0; at < paths.length; at += EXTRACT_BATCH_PATHS) {
+    const batch = paths.slice(at, at + EXTRACT_BATCH_PATHS);
+    const res = await run({
+      command: "bash",
+      args: [
+        "-c",
+        'set -euo pipefail; r=$1; c=$2; d=$3; shift 3; for p in "$@"; do mkdir -p "$d/$(dirname "$p")"; git -C "$r" cat-file blob "$c:$p" > "$d/$p"; done',
+        "--",
+        repoDir,
+        commit,
+        dir,
+        ...batch,
+      ],
+      cwd: repoDir,
+    });
+    if (res.exitCode !== 0) {
+      throw new Error(res.stderr.trim() || `git cat-file blob failed at ${commit}`);
     }
-    current.push(relPath);
-    currentBytes += size;
-  });
-  if (current.length > 0) chunks.push(current);
-
-  // Blob bytes go to a file, never through the runner's UTF-8 decoded stdout, so any file
-  // content (not only valid UTF-8) is read exactly.
-  const blobs = new Map<string, Buffer>();
-  const work = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "sq-deps-blobs-"));
-  try {
-    const outFile = NodePath.join(work, "batch.out");
-    for (const chunk of chunks) {
-      const batch = await run({
-        command: "bash",
-        args: ["-c", 'git -C "$1" cat-file --batch > "$2"', "--", repoDir, outFile],
-        cwd: repoDir,
-        stdin: chunk.map((relPath) => `${commit}:${relPath}`).join("\n") + "\n",
-      });
-      if (batch.exitCode !== 0) {
-        throw new Error(batch.stderr.trim() || "git cat-file --batch failed");
-      }
-      for (const [relPath, content] of parseCatFileBatch(NodeFS.readFileSync(outFile), chunk)) {
-        blobs.set(relPath, content);
-      }
-    }
-  } finally {
-    NodeFS.rmSync(work, { recursive: true, force: true });
   }
-  return blobs;
+}
+
+/** SHA-256 of a file, read as a stream (memory stays bounded for any file size). */
+async function sha256File(file: string): Promise<string> {
+  const hash = NodeCrypto.createHash("sha256");
+  for await (const chunk of NodeFS.createReadStream(file)) hash.update(chunk as Buffer);
+  return hash.digest("hex");
 }
 
 const SAFE_GIT_REF_RE = /^[A-Za-z0-9._/@^{}-]+$/;
@@ -220,12 +178,17 @@ export async function readRepoDependencyFilesAtRef(input: {
   readonly repoDir: string;
   readonly ref: string;
   readonly run?: ProcessRunner | undefined;
+  /**
+   * Keep the extracted files: the result's `tree` holds the exact bytes digested, by repo path,
+   * and the caller removes it. Without it, the files are removed before this returns.
+   */
+  readonly keepTree?: boolean | undefined;
 }): Promise<{
   readonly commit: string;
   readonly files: Readonly<Record<string, string>>;
   readonly paths: ReadonlyArray<string>;
-  /** The exact bytes digested above, by path: what the lookup is given, never re-extracted. */
-  readonly blobs: ReadonlyMap<string, Uint8Array>;
+  /** With `keepTree`: a directory holding each path's exact digested bytes. */
+  readonly tree?: string | undefined;
   readonly pinsText?: string | undefined;
 }> {
   const run = input.run ?? nodeProcessRunner;
@@ -279,17 +242,25 @@ export async function readRepoDependencyFilesAtRef(input: {
 
   const files: Record<string, string> = {};
   const pinSourceTexts: Record<string, string> = {};
-  if (trackedPaths.length === 0) return { commit, files, paths: trackedPaths, blobs: new Map() };
+  if (trackedPaths.length === 0) return { commit, files, paths: trackedPaths };
 
-  // Batched object reads (a few processes, not one per file), each under the runner's output cap.
-  const blobs = await readBlobsBatched(run, input.repoDir, commit, trackedPaths);
-  for (const relPath of trackedPaths) {
-    const content = blobs.get(relPath)!;
-    files[relPath] = NodeCrypto.createHash("sha256").update(content).digest("hex");
-    if (DEP_EXACT_PATHS.has(relPath)) {
-      pinSourceTexts[relPath] = content.toString("utf8");
+  // Blobs go straight to files and are hashed as streams, so a scan's memory stays bounded
+  // however large or many the dependency files are.
+  const tree = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "sq-deps-tree-"));
+  try {
+    await extractBlobs(run, input.repoDir, commit, trackedPaths, tree);
+    for (const relPath of trackedPaths) {
+      files[relPath] = await sha256File(NodePath.join(tree, relPath));
+      // The pin sources are three small fixed files.
+      if (DEP_EXACT_PATHS.has(relPath)) {
+        pinSourceTexts[relPath] = NodeFS.readFileSync(NodePath.join(tree, relPath), "utf8");
+      }
     }
+  } catch (error) {
+    NodeFS.rmSync(tree, { recursive: true, force: true });
+    throw error;
   }
+  if (!input.keepTree) NodeFS.rmSync(tree, { recursive: true, force: true });
 
   const pinsRaw = pinSourceTexts["infra/ci-host/sq_pins.json"];
   if (pinsRaw) {
@@ -301,7 +272,7 @@ export async function readRepoDependencyFilesAtRef(input: {
     commit,
     files,
     paths: trackedPaths,
-    blobs,
+    ...(input.keepTree ? { tree } : {}),
     ...(pinsRaw ? { pinsText: pinsRaw } : {}),
   };
 }
@@ -355,13 +326,19 @@ export async function defaultScanRepo(input: {
     ref = checkOrigin.exitCode === 0 ? "origin/main" : "HEAD";
   }
 
-  const { commit, files, blobs, pinsText } = await readRepoDependencyFilesAtRef({
+  const { commit, files, paths, tree, pinsText } = await readRepoDependencyFilesAtRef({
     repoDir: targetDir,
     ref,
     run,
+    keepTree: true,
   });
   // Available updates come from the pinned Renovate CLI, never from comparing local digests.
-  const lookup = await (input.lookup ?? renovateLookup)({ files: blobs, pinsText, run });
+  let lookup: Awaited<ReturnType<typeof renovateLookup>>;
+  try {
+    lookup = await (input.lookup ?? renovateLookup)({ tree: tree ?? "", paths, pinsText, run });
+  } finally {
+    if (tree) NodeFS.rmSync(tree, { recursive: true, force: true });
+  }
   const updates = lookup.updates;
 
   const idSeed = stableJsonValue({ repo: input.repo, commit, files, at: input.nowEpochSec });

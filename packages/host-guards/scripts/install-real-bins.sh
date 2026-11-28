@@ -148,10 +148,27 @@ keep_real() {
   fi
   mkdir -p "$INSTALL_DIR/real"
   if [ -L "$real" ]; then
-    # Keep a link as a link (absolute), under the same name: a multiplexer dispatches on it.
-    target="$(readlink "$real")"
-    case "$target" in /*) ;; *) target="$(phys_dir "$real")/$target" ;; esac
-    ln -s "$target" "$kept.new.$$"
+    # Keep a link as a link (absolute), under the same name: a multiplexer dispatches on it. A link
+    # to another shim destination (fly -> flyctl) is followed past it, because a shim replaces
+    # that file too: a link there would run the other shim, which would run this one again.
+    target="$real"
+    local hops=0 next=""
+    while [ -L "$target" ] && is_shim_dest "$target" && [ "$hops" -lt 16 ]; do
+      next="$(readlink "$target")"
+      case "$next" in /*) ;; *) next="$(phys_dir "$target")/$next" ;; esac
+      target="$next"
+      hops=$((hops + 1))
+    done
+    if is_shim_dest "$target"; then
+      # The chain ends at a file where a shim goes: keep that file's bytes, never a link to it.
+      if [ ! -f "$target" ] || is_guard_shim "$target"; then
+        printf 'install.sh: fatal: %s leads to %s, which is not a real binary\n' "$real" "$target" >&2
+        exit 1
+      fi
+      cp -p "$target" "$kept.new.$$" || { rm -f "$kept.new.$$"; exit 1; }
+    else
+      ln -s "$target" "$kept.new.$$"
+    fi
     replace_kept "$kept.new.$$" "$kept"
   else
     # Copy, never move: the original stays in place until its shim replaces it, so an install
