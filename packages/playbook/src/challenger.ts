@@ -207,14 +207,11 @@ export async function runChallenge(options: ChallengeOptions): Promise<Challenge
     const reply: PlaybookChallengeReply = {
       acceptable: true,
       summary: `Bypassed by owner (${ownerWhy})`,
-      diagnosis: "The declaration challenge is bypassed for this repository.",
       bypass_detected: false,
       playbook_friction: false,
       rejected_rises: [],
       rises_accepted: true,
       defects: [],
-      analysis: "",
-      recommendation: "Accept.",
     };
     const verdict = judgeChallengeReply(reply, NO_RISES);
     const owner = { model: "owner-bypass", provider: "bypass", effort: "" };

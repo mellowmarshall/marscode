@@ -128,6 +128,7 @@ import "~/index.css";
 import { render } from "../../test/render";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { ShipQueueJobDetails } from "./ShipQueueJobDetails";
+import { ShipQueueMiniCard } from "./ShipQueueMiniCard";
 import { ShipQueuePanel } from "./ShipQueuePanel";
 
 async function renderPanel(options: { width?: number; theme?: "light" | "dark" } = {}) {
@@ -235,7 +236,7 @@ describe("ShipQueuePanel at the default window size", () => {
     expect(cells).toContainEqual(["ship_ci", "ci-host-builder-01", "38.9s", "0"]);
     expect(cells).toContainEqual(["ship_body_check", "local", "420ms", "0"]);
 
-    expect(details.textContent).toContain("Challenged; overridden at");
+    expect(details.textContent).toContain("Resumed after review at");
     expect(details.textContent).toContain("The finding covers a fixed trust path");
     expect(details.textContent).toContain("onto 92ff054");
     expect(details.textContent).toContain("pushed b58f67e");
@@ -342,10 +343,45 @@ describe("ShipQueuePanel at the default window size", () => {
     );
     await expect
       .element(
-        page.getByText("a fix or an override of the challenged review · no CI host has room", {
+        page.getByText("on hold pending agent review · no CI host has room", {
           exact: true,
         }),
       )
       .toBeVisible();
+  });
+
+  it("renders ShipQueueMiniCard in yellow On hold state and shows the CI host from steps or ci_lease", async () => {
+    const heldJob: ShipQueueJob = {
+      id: "1004",
+      state: "waiting",
+      waiting_for: "challenge",
+      challenged_tip: "abcdef1234567890",
+      steps_tip: "abcdef1234567890",
+      submitted_at: "2026-01-02T10:00:00.000Z",
+      steps: [
+        { name: "ship_body_check", host: "local", exit: 0, ms: 200 },
+        { name: "ship_ci", host: "ci-host-builder-02", exit: 0, ms: 18_000 },
+      ],
+    };
+    await using _screen = await render(
+      <TooltipProvider delay={0}>
+        <div style={{ width: 220 }}>
+          <ShipQueueMiniCard
+            job={heldJob}
+            nowMs={Date.parse("2026-01-02T10:01:00.000Z")}
+            cancelling={false}
+            actionError={null}
+            onCancel={() => {}}
+            onDismiss={() => {}}
+          />
+        </div>
+      </TooltipProvider>,
+    );
+    const label = page.getByText("On hold", { exact: true });
+    await expect.element(label).toBeVisible();
+    expect(label.element().parentElement?.className).toContain("text-warning-foreground");
+    await expect
+      .element(page.getByTestId("ship-queue-host"))
+      .toHaveTextContent("ci-host-builder-02");
   });
 });

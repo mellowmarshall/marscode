@@ -7,6 +7,7 @@ import { ExternalLinkIcon, ServerIcon, XCircleIcon, XIcon } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import type { ShipQueueJob } from "./devtoolsClient";
+import { shipJobCiHost } from "./shipQueueJobFacts";
 import {
   buildSafePrUrl,
   deriveShipJobSteps,
@@ -71,15 +72,16 @@ export function ShipQueueMiniCard({
             ? "text-success-foreground"
             : "text-muted-foreground";
   const live = isShipQueueJobLive(job);
-  const routeHost =
-    typeof job.route?.host === "string" && job.route.host.trim().length > 0
-      ? job.route.host.trim()
-      : null;
+  const isOnHold = live && (job.waiting_for ?? "").trim().toLowerCase() === "challenge";
+  const statusLabel = isOnHold
+    ? gt("On hold")
+    : (current?.label ?? resolveShipJobDisplayState(job));
+  const ciHost = shipJobCiHost(job);
 
   const tooltipDetail =
-    routeHost && current?.id === "ci"
-      ? `${current.detail ?? current.label} · ${routeHost}`
-      : (current?.detail ?? current?.label ?? resolveShipJobDisplayState(job));
+    ciHost && current?.id === "ci"
+      ? `${current.detail ?? current.label} · ${ciHost}`
+      : (current?.detail ?? statusLabel);
 
   return (
     <div className="space-y-1.5 rounded-md border border-border/70 bg-card/60 px-2 py-1.5">
@@ -89,9 +91,7 @@ export function ShipQueueMiniCard({
             render={
               <span className={`inline-flex min-w-0 items-center gap-1.5 font-medium ${txtCls}`}>
                 <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${dotCls}`} />
-                <span className="truncate">
-                  {current?.label ?? resolveShipJobDisplayState(job)}
-                </span>
+                <span className="truncate">{statusLabel}</span>
               </span>
             }
           />
@@ -140,11 +140,11 @@ export function ShipQueueMiniCard({
         </div>
       </div>
 
-      {routeHost ? (
+      {ciHost ? (
         <div className="flex items-center gap-1 text-3xs text-muted-foreground">
           <ServerIcon className="size-2.5 shrink-0" />
           <span data-testid="ship-queue-host" className="truncate font-mono">
-            {routeHost}
+            {ciHost}
           </span>
         </div>
       ) : null}

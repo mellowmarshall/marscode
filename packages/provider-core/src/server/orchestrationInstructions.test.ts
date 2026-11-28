@@ -122,6 +122,12 @@ describe("T3 modal guidance", () => {
       assert.isAtMost(new TextEncoder().encode(section).byteLength, 4_000);
     }
   });
+
+  it("documents the 30 min pre-merge hold and ship-queue resume flow", () => {
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, 'ship-queue resume <job> --reason "<why>"');
+    assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "held 30 min");
+    assert.notInclude(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "ship-queue override");
+  });
 });
 
 describe("T3 instructions edited in settings", () => {

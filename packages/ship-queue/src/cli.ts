@@ -7,7 +7,7 @@ import * as NodeURL from "node:url";
 
 import { bindGuardJob, identifyGuardThread } from "@t3tools/guard-protocol/client";
 
-import { requestChallengeOverride } from "./challengeGate.ts";
+import { isParkedOnChallenge, requestChallengeOverride } from "./challengeGate.ts";
 import { manifestCiPlacer } from "./ciPlacement.ts";
 import { ghForge } from "./ghForge.ts";
 import {
@@ -18,7 +18,7 @@ import {
 } from "./cliSubcommands.ts";
 import { gitleaksScanner, guardProtocolGuard, playbookDeclarationChallenger } from "./houseGate.ts";
 import { scannerHygieneGate } from "./hygieneGate.ts";
-import { isJobId, jobLogPath, listJobIds, readJob, readLog } from "./jobStore.ts";
+import { isEnded, isJobId, jobLogPath, listJobIds, readJob, readLog } from "./jobStore.ts";
 import { lastMarker, SHIP_QUEUE_STAGE_AFTER, SHIP_QUEUE_STAGE_MARKERS } from "./markers.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
 import { currentProcessIdentity, isProcessAlive } from "./processIdentity.ts";
@@ -120,9 +120,82 @@ function watcherBlock(id: string): string {
     "It exits 2 on QUIET job= (the job keeps running; look, then re-arm or cancel), 3 on",
     "ACTION_REQUIRED job= (the owner approves the protected diff; the job then resumes on its own;",
     "if MarsCode restarts first, it cannot resume: cancel it and resubmit), and 4 on CHALLENGED job=",
-    `(the playbook review challenged it: override within 30 s with ship-queue override ${id} --reason "<why>", then watch again; otherwise the job fails with reason=challenged and leaves the queue, so fix and submit again).`,
+    `(the playbook review placed it on a 30 min hold without blocking the queue: cancel with ship-queue cancel ${id}, fix, and resubmit, or resume and watch until completion with ship-queue resume ${id} --reason "<why>").`,
     "Outcome lines: REBASED, STEP name=, PUSH_EXIT=, PR=, MERGE_EXIT=, CLEANED, then DONE or FAILED reason=.",
   ].join("\n");
+}
+
+function parseResumeArgs(args: ReadonlyArray<string>): {
+  readonly id: string;
+  readonly reason: string;
+} {
+  let id = "";
+  let reason = "";
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === "--reason") {
+      reason = args[i + 1] ?? "";
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--reason=")) {
+      reason = arg.slice("--reason=".length);
+      continue;
+    }
+    if (!id && !arg.startsWith("-")) id = arg;
+  }
+  return { id, reason };
+}
+
+function heldChallengeJobIds(root: string): string[] {
+  return listJobIds(root, { open: true }).filter((jobId) => {
+    const job = readJob(root, jobId);
+    return job !== null && !isEnded(job) && isParkedOnChallenge(job);
+  });
+}
+
+function watchJobWithWorker(
+  deps: ShipQueueDeps,
+  io: CliIo,
+  id: string,
+  options: CliOptions,
+  startWorker: (root: string, jobId?: string) => string,
+  initialLaunchedAt: string | null = null,
+): Promise<number> {
+  const { root } = deps;
+  let launchedAt = initialLaunchedAt;
+  const cliEntry = NodeURL.fileURLToPath(import.meta.url);
+  const ensureWorker = () => {
+    if (
+      hasLiveWorkerForJob({
+        root,
+        jobId: id,
+        isAlive: deps.isProcessAlive,
+        fallbackCliPath: cliEntry,
+      })
+    ) {
+      return;
+    }
+    const now = deps.clock.now();
+    if (launchedAt !== null && Date.parse(now) - Date.parse(launchedAt) < WORKER_RELAUNCH_MS) {
+      return;
+    }
+    launchedAt = now;
+    io.stderr(`ship-queue: job ${id} has no live worker; ${startWorker(root, id)}\n`);
+  };
+  return watchJob({
+    root,
+    id,
+    self: deps.self,
+    ensureWorker,
+    clock: deps.clock,
+    quietMs: options.quietMs ?? QUIET_MS,
+    write: (line) => io.stdout(`${line}\n`),
+    waitForChange: (options.waitForChange ?? ((r, j) => fileChangeWaiter(r, j, WATCH_POLL_MS)))(
+      root,
+      id,
+    ),
+  });
 }
 
 /** One worker per pinned version (zero global drain lock across versions), recorded with its start time. */
@@ -207,7 +280,7 @@ export async function runShipQueueCli(
   const startWorker =
     options.startWorker ?? ((r: string, jobId?: string) => startDetachedWorker(r, io.env, jobId));
   const usage =
-    "ship-queue <submit WORKTREE BRANCH TITLE BODY.md [--no-start] | watch JOB | status [--json] [JOB...] | cancel JOB | override JOB --reason WHY | work [--once] | hosts ... | deps ... | pins ... | version ...>\n";
+    "ship-queue <submit WORKTREE BRANCH TITLE BODY.md [--no-start] | watch JOB | status [--json] [JOB...] | cancel JOB | resume JOB --reason WHY | work [--once] | hosts ... | deps ... | pins ... | version ...>\n";
 
   if (!sub || sub === "--help" || sub === "-h") {
     io.stdout(usage);
@@ -268,51 +341,26 @@ export async function runShipQueueCli(
       (res.ok ? io.stdout : io.stderr)(`${res.message}\n`);
       return res.ok ? 0 : 1;
     }
-    let launchedAt: string | null = null;
-    const cliEntry = NodeURL.fileURLToPath(import.meta.url);
-    const ensureWorker = () => {
-      if (
-        hasLiveWorkerForJob({
-          root,
-          jobId: id,
-          isAlive: deps.isProcessAlive,
-          fallbackCliPath: cliEntry,
-        })
-      ) {
-        return;
-      }
-      const now = deps.clock.now();
-      if (launchedAt !== null && Date.parse(now) - Date.parse(launchedAt) < WORKER_RELAUNCH_MS) {
-        return;
-      }
-      launchedAt = now;
-      io.stderr(`ship-queue: job ${id} has no live worker; ${startWorker(root, id)}\n`);
-    };
-    return watchJob({
-      root,
-      id,
-      self: deps.self,
-      ensureWorker,
-      clock: deps.clock,
-      quietMs: options.quietMs ?? QUIET_MS,
-      write: (line) => io.stdout(`${line}\n`),
-      waitForChange: (options.waitForChange ?? ((r, j) => fileChangeWaiter(r, j, WATCH_POLL_MS)))(
-        root,
-        id,
-      ),
-    });
+    return watchJobWithWorker(deps, io, id, options, startWorker);
   }
-  if (sub === "override") {
-    const id = rest[0] ?? "";
-    const flag = rest.indexOf("--reason");
-    const reason = flag === -1 ? "" : (rest[flag + 1] ?? "");
+  if (sub === "resume" || sub === "override") {
+    const { id, reason } = parseResumeArgs(rest);
     if (!isJobId(id) || !reason.trim()) {
-      io.stderr(`usage: ship-queue override JOB --reason "<why the challenge does not hold>"\n`);
+      io.stderr(`usage: ship-queue ${sub} JOB --reason "<why>"\n`);
+      if (!id) {
+        const held = heldChallengeJobIds(root);
+        if (held.length > 0) io.stderr(`jobs currently on hold: ${held.join(", ")}\n`);
+      }
       return 64;
     }
     const res = requestChallengeOverride(root, id, reason, deps.clock);
-    (res.ok ? io.stdout : io.stderr)(`${res.message}\n`);
-    return res.ok ? 0 : 1;
+    if (!res.ok) {
+      io.stderr(`${res.message}\n`);
+      return 1;
+    }
+    io.stdout(`${res.message}\n`);
+    startWorker(root, id);
+    return watchJobWithWorker(deps, io, id, options, startWorker, deps.clock.now());
   }
   if (sub === "status") return runStatus(deps, io, rest);
   if (sub === "work") return runWork(deps, io, rest.includes("--once"));

@@ -34,14 +34,11 @@ afterEach(cleanupTempDirs);
 const PASSING: PlaybookChallengeReply = {
   acceptable: true,
   summary: "Meets the standards",
-  diagnosis: "Judged §3.1 and §5.1.",
   bypass_detected: false,
   playbook_friction: false,
   rejected_rises: [],
   rises_accepted: false,
   defects: [{ severity: "medium", file: "src/a.ts", what: "ignored medium nit" }],
-  analysis: "",
-  recommendation: "Accept.",
 };
 
 function recordingModel(reply: PlaybookChallengeReply) {
@@ -104,7 +101,14 @@ describe("declaration challenge on the real worktree", () => {
     expect(prompt).not.toContain("scratch/notes.md");
     expect(prompt).toContain("Commit ");
     expect(NodeFS.lstatSync(NodePath.join(repo.root, "dangling-link")).isSymbolicLink()).toBe(true);
+    expect(outcome.report).toContain("PLAYBOOK REVIEW: PASS");
+    expect(outcome.report).toContain("Summary: Meets the standards");
     expect(outcome.report).not.toContain("Defects:");
+    expect(outcome.report).not.toContain("Repo:");
+    expect(outcome.report).not.toContain("Reviewer:");
+    expect(outcome.report).not.toContain("Diagnosis:");
+    expect(outcome.report).not.toContain("Analysis:");
+    expect(outcome.report).not.toContain("Recommendation:");
     expect(outcome.verdict?.defects).toEqual([]);
   });
 

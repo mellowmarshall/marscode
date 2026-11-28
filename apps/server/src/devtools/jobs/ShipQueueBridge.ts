@@ -41,6 +41,11 @@ function mapShipPhaseLabel(
   state: TrackedJobState,
   stage: string,
 ): string {
+  const waitingFor =
+    typeof raw.waiting_for === "string" ? raw.waiting_for.trim().toLowerCase() : "";
+  if (state === "waiting" && waitingFor === "challenge") {
+    return "On hold";
+  }
   const marker = String(raw.last_marker ?? "").trim();
   const syncExit = raw.sync_exit;
   const hasSync =

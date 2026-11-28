@@ -138,6 +138,7 @@ export interface ShipQueueJob {
   readonly sync_reason?: string;
   readonly post_merge?: boolean;
   readonly watchers?: number;
+  readonly steps_tip?: string;
   readonly steps?: ReadonlyArray<ShipQueueStepTiming>;
   readonly rebased_onto?: string;
   readonly pushed_sha?: string;

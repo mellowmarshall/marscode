@@ -860,48 +860,56 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                     icon: "deploying" as const,
                     className: "text-info-foreground",
                   }
-                : jobStatus?.phase === "shipping"
+                : jobStatus?.phase === "hold"
                   ? {
-                      label: gt("Shipping", { $context: "thread status: shipping via ship-queue" }),
+                      label: gt("On hold", { $context: "thread status: ship job on hold" }),
                       icon: "shipping" as const,
-                      className: "text-info-foreground",
+                      className: "text-warning-foreground",
                     }
-                  : jobStatus?.phase === "job"
+                  : jobStatus?.phase === "shipping"
                     ? {
-                        label: jobStatus.label,
-                        icon: "job" as const,
+                        label: gt("Shipping", {
+                          $context: "thread status: shipping via ship-queue",
+                        }),
+                        icon: "shipping" as const,
                         className: "text-info-foreground",
                       }
-                    : status === "preparing" || status === "working"
+                    : jobStatus?.phase === "job"
                       ? {
-                          label:
-                            status === "preparing"
-                              ? gt("Setting up")
-                              : thread.goal?.status === "active"
-                                ? gt("Goal", { $context: "thread status: working on a goal" })
-                                : gt("Working", { $context: "thread status" }),
-                          icon: "working" as const,
+                          label: jobStatus.label,
+                          icon: "job" as const,
                           className: "text-info-foreground",
                         }
-                      : status === "waiting"
+                      : status === "preparing" || status === "working"
                         ? {
-                            label: gt("Waiting", { $context: "thread status" }),
-                            icon: "waiting" as const,
-                            className: "text-muted-foreground",
+                            label:
+                              status === "preparing"
+                                ? gt("Setting up")
+                                : thread.goal?.status === "active"
+                                  ? gt("Goal", { $context: "thread status: working on a goal" })
+                                  : gt("Working", { $context: "thread status" }),
+                            icon: "working" as const,
+                            className: "text-info-foreground",
                           }
-                        : isWoke
+                        : status === "waiting"
                           ? {
-                              label: gt("Woke", { $context: "thread status: woke from snooze" }),
-                              icon: "woke" as const,
-                              className: "text-warning-foreground",
+                              label: gt("Waiting", { $context: "thread status" }),
+                              icon: "waiting" as const,
+                              className: "text-muted-foreground",
                             }
-                          : isUnread
+                          : isWoke
                             ? {
-                                label: gt("Done", { $context: "thread status" }),
-                                icon: "done" as const,
-                                className: "text-success-foreground",
+                                label: gt("Woke", { $context: "thread status: woke from snooze" }),
+                                icon: "woke" as const,
+                                className: "text-warning-foreground",
                               }
-                            : null;
+                            : isUnread
+                              ? {
+                                  label: gt("Done", { $context: "thread status" }),
+                                  icon: "done" as const,
+                                  className: "text-success-foreground",
+                                }
+                              : null;
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({

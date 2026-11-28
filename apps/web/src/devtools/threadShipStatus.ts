@@ -9,7 +9,7 @@ import { isShipQueueJobLive } from "./ShipQueueSteps";
 const DEFAULT_BRANCHES = new Set(["main", "master", "develop", "HEAD"]);
 const DEFAULT_JOB_DONE_LINGER_MS = 5 * 60 * 1000;
 
-export type ThreadShipPhase = "shipping" | "deploying";
+export type ThreadShipPhase = "shipping" | "deploying" | "hold";
 
 export interface ThreadShipStatus {
   readonly phase: ThreadShipPhase;
@@ -80,6 +80,7 @@ function resolveJobStartedAt(job: ShipQueueJob): string | null {
  */
 export function resolveShipJobPhase(job: ShipQueueJob): ThreadShipPhase | null {
   if (!isShipQueueJobLive(job)) return null;
+  if ((job.waiting_for ?? "").trim().toLowerCase() === "challenge") return "hold";
   const rawState = (job.state ?? "").trim().toLowerCase();
   const rawDisplay = (job.display_state ?? "").trim().toLowerCase();
   const rawStage = (job.stage ?? "").trim().toLowerCase();
@@ -114,15 +115,21 @@ export function resolveThreadShipStatus(input: {
     normPath(input.worktreePath),
     normPath(input.gitCwd),
   );
+  let holdJob: ShipQueueJob | null = null;
   let shippingJob: ShipQueueJob | null = null;
   for (const job of matched) {
     const phase = resolveShipJobPhase(job);
     if (phase === "deploying") {
       return { phase: "deploying", startedAt: resolveJobStartedAt(job) };
     }
-    if (phase === "shipping" && shippingJob === null) {
+    if (phase === "hold" && holdJob === null) {
+      holdJob = job;
+    } else if (phase === "shipping" && shippingJob === null) {
       shippingJob = job;
     }
+  }
+  if (holdJob !== null) {
+    return { phase: "hold", startedAt: resolveJobStartedAt(holdJob) };
   }
   if (shippingJob !== null) {
     return { phase: "shipping", startedAt: resolveJobStartedAt(shippingJob) };

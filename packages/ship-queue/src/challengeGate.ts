@@ -1,9 +1,10 @@
-// @effect-diagnostics nodeBuiltinImport:off globalDate:off - The playbook challenge as a merge gate: a CHALLENGED review waits 30 s for an override, then fails the job.
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off - The playbook challenge as a pre-merge review hold: a CHALLENGED review parks for up to 30 min without blocking the repo queue, until resumed or expired.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import {
   appendLog,
+  cancelRequested,
   failJob,
   isEnded,
   jobBodyPath,
@@ -36,9 +37,22 @@ export function isParkedOnChallenge(job: JobRecord): boolean {
   return job.state === "waiting" && job.waiting_for === "challenge";
 }
 
+export function hasPendingChallengeResume(root: string, id: string): boolean {
+  return NodeFS.existsSync(overrideRequestPath(root, id));
+}
+
+/** True while a held job needs no worker action right now (no cancel, no pending resume, unexpired). */
+export function isChallengeHoldIdle(deps: ShipQueueDeps, job: JobRecord): boolean {
+  if (!isParkedOnChallenge(job)) return false;
+  if (cancelRequested(deps.root, job.id)) return false;
+  if (hasPendingChallengeResume(deps.root, job.id)) return false;
+  if (challengeUnanswered(deps, job)) return false;
+  return true;
+}
+
 /**
- * `ship-queue override JOB --reason WHY`: the agent ships past its CHALLENGED review. The
- * request is a file beside the job, like a cancel, and the worker takes it on its next tick.
+ * `ship-queue resume JOB --reason WHY` (and legacy alias `override`): the agent resumes a job held
+ * on its CHALLENGED review. Safe to retry when a resume is already pending or already active.
  */
 export function requestChallengeOverride(
   root: string,
@@ -50,14 +64,20 @@ export function requestChallengeOverride(
   if (!job) return { ok: false, message: `no such job: ${id}` };
   if (isEnded(job)) return { ok: false, message: `job ${id} already ended (${job.state})` };
   if (!isParkedOnChallenge(job)) {
-    return { ok: false, message: `job ${id} is not waiting on a CHALLENGED playbook review` };
+    if (job.challenge_override) {
+      return { ok: true, message: `job ${id}: already resumed; watching` };
+    }
+    return { ok: false, message: `job ${id} is not on hold for a CHALLENGED playbook review` };
+  }
+  if (hasPendingChallengeResume(root, id)) {
+    return { ok: true, message: `job ${id}: resume already pending; watching` };
   }
   const reason = markerValue(rawReason).slice(0, MAX_REASON_CHARS);
-  if (!reason) return { ok: false, message: "an override needs a written --reason" };
+  if (!reason) return { ok: false, message: "resume needs a written --reason" };
   if (!insideOverrideWindow(job, clock.now())) {
     return {
       ok: false,
-      message: `job ${id}: the 30 s override window is over; it fails as challenged. Fix the findings and resubmit`,
+      message: `job ${id}: the 30 min review hold is over; it fails as challenged. Fix the findings and resubmit`,
     };
   }
   NodeFS.writeFileSync(
@@ -70,12 +90,12 @@ export function requestChallengeOverride(
     NodeFS.rmSync(overrideRequestPath(root, id), { force: true });
     return {
       ok: false,
-      message: `job ${id} ended (${after?.reason ?? "challenged"}) before the override landed; fix the findings and resubmit`,
+      message: `job ${id} ended (${after?.reason ?? "challenged"}) before the resume landed; fix the findings and resubmit`,
     };
   }
   return {
     ok: true,
-    message: `job ${id}: override recorded; it resumes on its own. Follow it: ship-queue watch ${id}`,
+    message: `job ${id}: resume recorded; watching until completion`,
   };
 }
 
@@ -83,8 +103,8 @@ export function overrideBodySection(reason: string): string {
   return `## Playbook challenge overridden\n\n${reason}\n`;
 }
 
-/** How long a CHALLENGED job holds its repo's turn for `ship-queue override`; then it fails. */
-export const CHALLENGE_WAIT_MS = 30_000;
+/** How long a CHALLENGED job stays on hold for `ship-queue resume` before expiring as challenged. */
+export const CHALLENGE_WAIT_MS = 30 * 60_000;
 
 /** True when AT (ISO) falls inside the job's override window (from its CHALLENGED mark). */
 function insideOverrideWindow(job: JobRecord, at: string): boolean {
@@ -97,7 +117,7 @@ function insideOverrideWindow(job: JobRecord, at: string): boolean {
 export const challengeOverrideIndexPath = (root: string) =>
   NodePath.join(root, "challenge-overrides.jsonl");
 
-/** `git patch-id` of the job's change on its base: what an override covers, across rebases. */
+/** `git patch-id` of the job's change on its base: what a resume covers, across rebases. */
 async function changePatchId(deps: ShipQueueDeps, job: JobRecord, onto: string, tip: string) {
   const res = await deps.run({
     command: "bash",
@@ -105,6 +125,18 @@ async function changePatchId(deps: ShipQueueDeps, job: JobRecord, onto: string, 
     cwd: job.worktree,
   });
   return res.exitCode === 0 ? (res.stdout.trim().split(/\s+/)[0] ?? "") : "";
+}
+
+/** True when the rebased commit still matches the patch-id already resumed by the agent. */
+export async function overrideMatchesPatch(
+  deps: ShipQueueDeps,
+  job: JobRecord,
+  rebase: { readonly onto: string; readonly head: string },
+): Promise<boolean> {
+  const override = job.challenge_override;
+  if (!override?.patch) return false;
+  const patch = await changePatchId(deps, job, rebase.onto, rebase.head);
+  return Boolean(patch && override.patch === patch);
 }
 
 /** A PR opened before the override never got the body section, so it gets the reason as a comment. */
@@ -156,7 +188,7 @@ export function takeChallengeOverride(deps: ShipQueueDeps, job: JobRecord): bool
   // never does.
   if (!insideOverrideWindow(job, at)) {
     NodeFS.rmSync(file, { force: true });
-    appendLog(deps.root, job.id, `override requested at ${at}, after the 30 s window; ignored`);
+    appendLog(deps.root, job.id, `resume requested at ${at}, after the 30 min hold; ignored`);
     return false;
   }
   const bodyFile = jobBodyPath(deps.root, job.id);

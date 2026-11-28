@@ -19,14 +19,11 @@ import { generateCommand, runGenerate } from "./generate.ts";
 const PASS_REPLY = {
   acceptable: true,
   summary: "Branch respects all declared contracts.",
-  diagnosis: "clean",
   bypass_detected: false,
   playbook_friction: false,
   rejected_rises: [],
   rises_accepted: false,
   defects: [],
-  analysis: "Reviewed all changed files.",
-  recommendation: "Accept.",
 };
 
 const CHALLENGED_REPLY = {

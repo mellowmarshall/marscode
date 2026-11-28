@@ -101,7 +101,7 @@ function JobFacts({ job }: { readonly job: ShipQueueJob }) {
       waitingFor === "action"
         ? gt("the owner's approval")
         : waitingFor === "challenge"
-          ? gt("a fix or an override of the challenged review")
+          ? gt("on hold pending agent review")
           : waitingFor === "watcher"
             ? gt("a watcher")
             : waitingFor || null,
@@ -138,10 +138,10 @@ function JobFacts({ job }: { readonly job: ShipQueueJob }) {
             <div className="min-w-0 space-y-0.5">
               <div className="font-medium text-warning">
                 {challenge.at
-                  ? gt("Challenged; overridden at {time}", {
+                  ? gt("Resumed after review at {time}", {
                       time: formatClock(challenge.at) ?? challenge.at,
                     })
-                  : gt("Challenged; overridden")}
+                  : gt("Resumed after review")}
               </div>
               <TruncatedText
                 text={challenge.reason}
@@ -151,7 +151,7 @@ function JobFacts({ job }: { readonly job: ShipQueueJob }) {
           ) : (
             <span className="font-medium text-warning">
               {live
-                ? gt("Challenged at {sha}; waiting for a fix or an override", {
+                ? gt("On hold at {sha}; pending agent review", {
                     sha: challenge.tip.slice(0, 7),
                   })
                 : gt("Challenged at {sha}", { sha: challenge.tip.slice(0, 7) })}

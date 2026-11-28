@@ -3336,15 +3336,11 @@
   "001dec08c2317790": "Time",
   "cfe852e6915a8053": "Exit",
   "49d335fa940504e7": "the owner's approval",
-  "9090b7cfdb576834": "a fix or an override of the challenged review",
   "18c96440b53c5c81": "a watcher",
   "3d7ce8fbcbc9b345": "push {code}",
   "c496c2b846720fc9": "merge {code}",
   "0e1949c855866b04": "Reason",
   "4cd3a0ae6907eec5": "Review",
-  "441bcfb06715c36e": "Challenged; overridden at {time}",
-  "c9ee0fafd39fa40c": "Challenged; overridden",
-  "9e27f7f5147a9894": "Challenged at {sha}; waiting for a fix or an override",
   "d74cd134cfb5d17e": "Challenged at {sha}",
   "7a2b97d4ab6e8f29": "Post-merge sync",
   "74d7c4bc908110f1": "exit 0",
@@ -13573,5 +13569,11 @@
   "faa3bb26abb39c93": "Échec du guide de revue",
   "b7df38b7d8792d78": "Ouvrir le guide",
   "9e91e9a77b664e4e": "Impossible de démarrer un guide de revue",
-  "1b65526f861f4853": "Redimensionner les détails du fil"
+  "1b65526f861f4853": "Redimensionner les détails du fil",
+  "9837d16c709b6933": "en attente de revue par l’agent",
+  "cdff7f7150ba9422": "Repris après revue à {time}",
+  "d86f2c3ca75c6a8a": "Repris après revue",
+  "46bccd0a3f49ea83": "En attente sur {sha} ; revue par l’agent requise",
+  "de570747e1e7cdfa": "En attente",
+  "df91b8434eafba23": "En attente"
 }

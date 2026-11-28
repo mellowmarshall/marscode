@@ -274,6 +274,34 @@ describe("jobsStore O(1) isolation, 404 fallback, and recovery", () => {
     }
     expect(spyThreadB).toHaveBeenCalledTimes(0);
     expect(spyLeafA).toHaveBeenCalledTimes(6);
+
+    // A ship-queue job waiting on challenge hold resolves to phase "hold" with label "On hold"
+    store.applyJobsStreamEvent(envId, "upsert", {
+      id: "ship:404",
+      revision: 1,
+      source: "ship-queue",
+      kind: "ship",
+      title: "feat: review hold",
+      phaseLabel: "On hold",
+      state: "waiting",
+      binding: { threadId: "thread-B", host: "host-a" },
+      timing: { startedAt: "2026-11-21T10:05:00Z" },
+      cancellable: true,
+      shipJob: { id: "404", state: "waiting", waiting_for: "challenge" },
+    });
+    const statusB = store.useThreadJobStatus({
+      environmentId: envId,
+      threadId: "thread-B",
+      branch: "feat/b",
+      worktreePath: "/wt/b",
+      gitCwd: "/repo",
+    });
+    expect(statusB).toMatchObject({
+      jobId: "ship:404",
+      source: "ship-queue",
+      phase: "hold",
+      label: "On hold",
+    });
   });
 
   it("falls back to /ship-queue/events when a linked peer returns 404 on /jobs and recovers after disconnect", async () => {

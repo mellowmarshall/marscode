@@ -858,6 +858,6 @@ describe("ship-queue CLI", () => {
     expect(exitCode).toBe(WATCH_EXIT.done);
     expect(watched.join("\n")).toContain(`REVIEW job=${submitted.id}`);
     expect(watched.join("\n")).toContain("PLAYBOOK REVIEW: PASS");
-    expect(watched.join("\n")).toContain("AGENT: quote this review");
+    expect(watched.join("\n")).not.toContain("AGENT: quote this review");
   });
 });
