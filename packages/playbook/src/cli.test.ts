@@ -180,6 +180,74 @@ printf '{"type":"turn.completed"}\\n'
     );
   });
 
+  it("challenge reviews a ship-queue job that has no ci-output.txt", async () => {
+    const { repo, base, state } = branchRepo();
+    const jobDir = NodePath.join(state, "jobs", "1042");
+    NodeFS.mkdirSync(jobDir, { recursive: true });
+    const bodyFile = NodePath.join(jobDir, "body.md");
+    NodeFS.writeFileSync(bodyFile, "fix(cli): a job body\n");
+    const promptFile = NodePath.join(state, "prompt.txt");
+    const binDir = NodePath.join(state, "bin");
+    NodeFS.mkdirSync(binDir, { recursive: true });
+    const reply = {
+      acceptable: true,
+      summary: "Meets the standards",
+      diagnosis: "ok",
+      bypass_detected: false,
+      playbook_friction: false,
+      rejected_rises: [],
+      rises_accepted: false,
+      defects: [],
+      analysis: "",
+      recommendation: "Accept.",
+    };
+    NodeFS.writeFileSync(
+      NodePath.join(binDir, "codex"),
+      `#!/usr/bin/env bash
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then out="$2"; shift 2; continue; fi
+  shift
+done
+cat > '${promptFile}'
+printf '%s\\n' '${JSON.stringify(reply)}' > "$out"
+printf '{"type":"turn.completed"}\\n'
+`,
+      { mode: 0o755 },
+    );
+    const cfg = NodePath.join(state, "host-config.json");
+    NodeFS.writeFileSync(
+      cfg,
+      JSON.stringify({
+        challenge_timeout_s: 60,
+        playbook_challenge: {
+          default: { provider: "codex", model: "gpt-6.2-astra", effort: "medium" },
+          fallbacks: [],
+        },
+      }),
+    );
+    const out = NodePath.join(jobDir, "declaration-challenge.txt");
+    const env = {
+      XDG_STATE_HOME: state,
+      HOME: state,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      PLAYBOOK_HOST_CONFIG: cfg,
+      SHIP_QUEUE_JOB: "1042",
+      SHIP_QUEUE_BODYFILE: bodyFile,
+    };
+    const res = await cli(repo.root, ["challenge", "--base", base, "--out", out], env);
+    expect(res.err).not.toMatch(/ENOENT/);
+    expect(res.code).toBe(0);
+    expect(NodeFS.readFileSync(out, "utf8")).toContain("PLAYBOOK REVIEW: PASS");
+    expect(NodeFS.readFileSync(promptFile, "utf8")).toContain(
+      "no CI output: this ship-queue job ran no CI before the review",
+    );
+
+    NodeFS.writeFileSync(NodePath.join(jobDir, "ci-output.txt"), "ci: 42 tests passed\n");
+    expect((await cli(repo.root, ["challenge", "--base", base, "--out", out], env)).code).toBe(0);
+    expect(NodeFS.readFileSync(promptFile, "utf8")).toContain("ci: 42 tests passed");
+  });
+
   it("amend validates PLAYBOOK.md and emits the owner's override descriptor", async () => {
     const { repo, base } = branchRepo();
     repo.write("playbook/PLAYBOOK.md", `${fixturePlaybookMd()}\nAn amended rule.\n`);
