@@ -116,16 +116,6 @@ function emitReviewIfPresent(root: string, id: string, write: (line: string) => 
  * waiting on an owner action it has not reported yet, and 4 whenever the job waits on a CHALLENGED
  * playbook review (`CHALLENGED job=`) with no override pending.
  */
-/** True when the job's last CHALLENGED marker has an OVERRIDDEN marker after it. */
-export function challengeOverriddenInLog(logText: string, id: string): boolean {
-  let overridden = false;
-  for (const line of logText.split("\n")) {
-    if (line.startsWith(`CHALLENGED job=${id} `)) overridden = false;
-    else if (line.startsWith(`OVERRIDDEN job=${id} `)) overridden = true;
-  }
-  return overridden;
-}
-
 export async function watchJob(options: WatchOptions): Promise<number> {
   const { root, id, clock, write } = options;
   if (!readJob(root, id)) throw new Error(`no such job: ${id} in ${root}`);
@@ -133,13 +123,25 @@ export async function watchJob(options: WatchOptions): Promise<number> {
   const tail = new MarkerTail(jobLogPath(root, id));
   let lastMovedAt = clock.now();
   let lastBytes = -1;
+  // Whether the last CHALLENGED marker read so far has an OVERRIDDEN after it.
+  let challengeOverridden = false;
+  const emit = (line: string) => {
+    write(line);
+    if (line.startsWith(`CHALLENGED job=${id} `)) challengeOverridden = false;
+    else if (line.startsWith(`OVERRIDDEN job=${id} `)) challengeOverridden = true;
+  };
+  // Markers that arrived since the last read, so a just-logged OVERRIDDEN counts before exit 4.
+  const tailShowsOverride = () => {
+    for (const line of tail.poll()) emit(line);
+    return challengeOverridden;
+  };
   try {
     for (;;) {
       // Ask whether the job is over before reading, so the read that follows holds its last line.
       const before = readJob(root, id);
       const terminal = findTerminal(readLog(root, id), id);
       const lines = tail.poll();
-      for (const line of lines) write(line);
+      for (const line of lines) emit(line);
       if (terminal) {
         emitReviewIfPresent(root, id, write);
         return terminal === "done" ? WATCH_EXIT.done : WATCH_EXIT.failed;
@@ -180,7 +182,8 @@ export async function watchJob(options: WatchOptions): Promise<number> {
         job?.state === "waiting" &&
         job.waiting_for === "challenge" &&
         !NodeFS.existsSync(overrideRequestPath(root, id)) &&
-        !challengeOverriddenInLog(readLog(root, id), id)
+        !challengeOverridden &&
+        !tailShowsOverride()
       ) {
         emitReviewIfPresent(root, id, write);
         write(

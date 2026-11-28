@@ -244,16 +244,18 @@ export function collectReviewRecords(
   const shipJobsDir = paths.shipJobsDir ?? defaultShipJobsDir();
   // Each override decision credits one challenge: the newest of that repo and challenged tip
   // made before the decision. A later challenge of the same tip gets no credit.
-  const challenges = [...byId.values()].filter(
-    (rec) =>
-      rec.source === "playbook_challenge" &&
-      rec.commit.length >= 7 &&
-      (rec.verdict === "challenged" || rec.verdict === "rejected_budget"),
-  );
+  const challengesByTip = new Map<string, ReviewStatRecord[]>();
+  for (const rec of byId.values()) {
+    if (rec.source !== "playbook_challenge" || rec.commit.length < 7) continue;
+    if (rec.verdict !== "challenged" && rec.verdict !== "rejected_budget") continue;
+    const tip = rec.commit.toLowerCase();
+    const group = challengesByTip.get(tip);
+    if (group) group.push(rec);
+    else challengesByTip.set(tip, [rec]);
+  }
   for (const decision of readOverrideDecisions(shipJobsDir)) {
     let best: ReviewStatRecord | undefined;
-    for (const rec of challenges) {
-      if (rec.commit.toLowerCase() !== decision.tip) continue;
+    for (const rec of challengesByTip.get(decision.tip) ?? []) {
       if (!sameRepo(decision.repo, rec.repo) || rec.timestamp > decision.at) continue;
       if (!best || rec.timestamp > best.timestamp) best = rec;
     }
