@@ -217,12 +217,18 @@ const readmeMediaProject = {
       instances: [{ browser: "chromium", viewport: { width: 1200, height: 1600 } }],
       commands: {
         ...browserTestProject.test.browser.commands,
-        captureMedia: async (context, name: string, selector: string) => {
+        // `animations: "allow"` keeps a paused CSS animation at the phase a GIF frame set.
+        captureMedia: async (
+          context,
+          name: string,
+          selector: string,
+          animations: "disabled" | "allow" = "disabled",
+        ) => {
           if (!readmeMediaDir) throw new Error("T3CODE_README_MEDIA_DIR is not set");
           const file = `${readmeMediaDir}/${name}.png`;
           await NodeFSP.mkdir(file.slice(0, file.lastIndexOf("/")), { recursive: true });
           const frame = await context.frame();
-          await frame.locator(selector).screenshot({ path: file, animations: "disabled" });
+          await frame.locator(selector).screenshot({ path: file, animations });
         },
       },
     },

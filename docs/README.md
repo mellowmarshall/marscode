@@ -63,6 +63,7 @@ anything.
 - [15 · Testing](./internals/15_testing.md)
 - [16 · Performance regression checks](./internals/16_performance-regressions.md)
 - [17 · Scripts](./internals/17_scripts.md)
+- [README media](./internals/readme-media.md)
 
 ### Runbooks
 

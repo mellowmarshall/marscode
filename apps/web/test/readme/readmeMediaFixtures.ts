@@ -1,7 +1,11 @@
 // Neutral README fixtures. Public repo: no real host, user, path, repo, or usage figure here.
-import type { ShipQueueJob, UnifiedActiveGrant } from "../../src/devtools/devtoolsClient";
+import type {
+  PendingGuardRequest,
+  ShipQueueJob,
+  UnifiedActiveGrant,
+} from "../../src/devtools/devtoolsClient";
 import { mergeFleetHosts } from "../../src/devtools/devdeckTypes";
-import type { JobSummary } from "../../src/devtools/jobs/jobTypes";
+import type { JobCernoVerdict, JobSummary } from "../../src/devtools/jobs/jobTypes";
 
 const GiB = 1024 ** 3;
 const MiB = 1024 ** 2;
@@ -217,4 +221,206 @@ export function securityGrants(nowMs: number): ReadonlyArray<UnifiedActiveGrant>
       expiresAt: new Date(nowMs + 23 * 60 * 60_000).toISOString(),
     },
   ];
+}
+
+// Sidebar and thread rail: three threads, each showing MarsCode states.
+export const sidebarThreads = {
+  approval: { id: "thread-approval", title: "Rename the default branch" },
+  shipping: { id: "thread-shipping", title: "Add search filters" },
+  job: { id: "thread-job", title: "Tune the ranking model" },
+} as const;
+
+/** A batch override plan: one owner approval covers every listed command once. */
+export function planGuardRequest(nowMs: number): PendingGuardRequest {
+  const repo = "example-org/example-repo";
+  const entry = (guard: string, command: ReadonlyArray<string>) => ({
+    guard,
+    command,
+    argvSha256: "5".repeat(64),
+  });
+  const plan = [
+    entry("gh", ["gh", "repo", "edit", repo, "--default-branch", "main"]),
+    entry("gh", ["gh", "api", "-X", "DELETE", `repos/${repo}/branches/master/protection`]),
+    entry("gh", [
+      "gh",
+      "api",
+      "-X",
+      "PUT",
+      `repos/${repo}/branches/main/protection`,
+      "--input",
+      "protection.json",
+    ]),
+    entry("git", ["git", "push", "origin", "--delete", "master"]),
+  ];
+  return {
+    requestId: "req-plan-1",
+    guard: "gh",
+    command: plan[0]!.command,
+    argvSha256: "2".repeat(64),
+    cwd: "~/work/example-repo",
+    refusal: "repository administration needs the owner's approval",
+    proposedReason: "Move the default branch to main and keep its protection rules",
+    threadId: sidebarThreads.approval.id,
+    session: "session-1",
+    pid: 4100,
+    createdAt: new Date(nowMs - 40_000).toISOString(),
+    expiresAt: new Date(nowMs + 10 * 60_000).toISOString(),
+    plan,
+  };
+}
+
+/** Grants the key badge lists on the shipping thread. */
+export function threadKeyGrants(nowMs: number): ReadonlyArray<UnifiedActiveGrant> {
+  return [
+    {
+      kind: "secret_access",
+      grantId: "grant-search-1",
+      threadId: sidebarThreads.shipping.id,
+      projectId: "project-a",
+      delivery: "file",
+      summary: "Package registry token",
+      createdAt: new Date(nowMs - 30 * 60_000).toISOString(),
+      expiresAt: new Date(nowMs + (3 * 60 + 25) * 60_000).toISOString(),
+    },
+    {
+      kind: "guard_bundle",
+      grantId: "grant-search-2",
+      threadId: sidebarThreads.shipping.id,
+      repo: "example-org/example-repo",
+      branch: "feat/42-search-filters",
+      prOrIssue: "#42",
+      guard: "protected-paths",
+      gateIds: ["ci-config"],
+      protectedPaths: [".github/workflows/ci.yml"],
+      protectedDiffSha256: "3".repeat(64),
+      bodySha256: "4".repeat(64),
+      summary: "CI workflow change for #42",
+      reason: "The new search tests need their own CI job",
+      approvedVia: "modal",
+      createdAt: new Date(nowMs - 25 * 60_000).toISOString(),
+      expiresAt: null,
+      useCount: 1,
+      lastUsedAt: new Date(nowMs - 10 * 60_000).toISOString(),
+    },
+  ];
+}
+
+// Verdicts as the server builds them (`buildCernoVerdict`): bars follow confidence, colour the label.
+const healthy: JobCernoVerdict = {
+  checkedAt: "2026-01-01T00:00:00.000Z",
+  state: "RUNNING",
+  confidence: 0.94,
+  tone: "info",
+  pips: 4,
+  label: "Healthy",
+  outcome: "unknown",
+  summary: "RUNNING (94%) · CPU active",
+};
+
+/** The cerno verdict on a watched training run as it stalls and recovers (one GIF frame each). */
+export const cernoHealthStages: ReadonlyArray<{
+  readonly cerno: JobCernoVerdict;
+  readonly fraction: number;
+}> = [
+  { cerno: healthy, fraction: 0.42 },
+  {
+    cerno: {
+      ...healthy,
+      confidence: 0.78,
+      tone: "warning",
+      pips: 3,
+      label: "Possibly stalled",
+      summary: "RUNNING (78%) · stall:suspicion",
+    },
+    fraction: 0.44,
+  },
+  {
+    cerno: {
+      ...healthy,
+      confidence: 0.93,
+      tone: "destructive",
+      pips: 4,
+      label: "Stalled",
+      summary: "RUNNING (93%) · stall:confirmed",
+    },
+    fraction: 0.44,
+  },
+  {
+    cerno: { ...healthy, confidence: 0.8, pips: 3, summary: "RUNNING (80%) · CPU active" },
+    fraction: 0.47,
+  },
+  { cerno: healthy, fraction: 0.52 },
+];
+
+/** Live jobs bound to the sidebar threads: one ship job, two watched background commands. */
+export function sidebarJobs(
+  nowMs: number,
+  stage = cernoHealthStages[0]!,
+): ReadonlyArray<JobSummary> {
+  const startedAt = (minutesAgo: number) => new Date(nowMs - minutesAgo * 60_000).toISOString();
+  const ship = shipJobStages(nowMs)[2]!;
+  return [
+    {
+      ...jobFromShip({ ...ship, thread_id: sidebarThreads.shipping.id }),
+      binding: { host: "host-b", threadId: sidebarThreads.shipping.id },
+    },
+    {
+      id: "bg:train-ranker",
+      revision: 1,
+      source: "background",
+      kind: "train",
+      title: "Ranker training",
+      phaseLabel: "Epoch 3/6",
+      state: "running",
+      binding: { host: "host-a", threadId: sidebarThreads.job.id },
+      timing: { startedAt: startedAt(52) },
+      progress: { current: 3, total: 6, fraction: stage.fraction, stageLabel: "Epoch 3/6" },
+      cerno: stage.cerno,
+      cancellable: true,
+    },
+    {
+      id: "bg:eval-ranker",
+      revision: 1,
+      source: "background",
+      kind: "eval",
+      title: "Offline eval suite",
+      phaseLabel: "Running",
+      state: "running",
+      binding: { host: "host-a", threadId: sidebarThreads.job.id },
+      timing: { startedAt: startedAt(9) },
+      progress: { current: 140, total: 400, fraction: 0.35 },
+      cerno: { ...healthy, confidence: 0.88 },
+      cancellable: true,
+    },
+  ];
+}
+
+/** A merged ship job with its declared steps timed, and a challenge the agent overrode. */
+export function shipJobWithSteps(nowMs: number): ShipQueueJob {
+  return {
+    id: "1043",
+    repo: "example-repo",
+    branch: "feat/44-saved-searches",
+    title: "feat(web): save searches",
+    submitted_at: new Date(nowMs - 14 * 60_000).toISOString(),
+    pr_repo: shipRepo,
+    state: "done",
+    ci_done: 1,
+    push_exit: 0,
+    pr: 88,
+    merge_exit: 0,
+    sync_exit: 0,
+    rebased_onto: "a1b2c3d4e5f6",
+    pushed_sha: "0f9e8d7c6b5a",
+    steps: [
+      { name: "ship_body_check", host: "local", exit: 0, ms: 420 },
+      { name: "ship_install", host: "host-b", exit: 0, ms: 21_800 },
+      { name: "ship_ci", host: "host-b", exit: 0, ms: 154_000 },
+      { name: "ship_merge", host: "local", exit: 0, ms: 3_900 },
+    ],
+    challenge_override: {
+      reason: "The flagged file is generated; its size limit does not apply",
+      at: new Date(nowMs - 4 * 60_000).toISOString(),
+    },
+  };
 }

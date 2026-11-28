@@ -20,9 +20,14 @@ interface MediaEntry {
 }
 type Manifest = Record<string, MediaEntry>;
 
-// Seconds each GIF frame shows; the last frame holds longer so the loop reads as an end state.
-const GIF_FRAME_SECONDS = { "cite.gif": 1.2, "ship-queue.gif": 0.8 } as const;
-const GIF_WIDTH = { "cite.gif": 640, "ship-queue.gif": 900 } as const;
+// Seconds each frame shows, output width, and whether the last frame holds twice as long so the
+// loop reads as an end state (a seamless cycle such as a pulse does not hold).
+const GIFS = {
+  "cite.gif": { seconds: 1.2, width: 640, holdLast: true },
+  "ship-queue.gif": { seconds: 0.8, width: 900, holdLast: true },
+  "approval-glow.gif": { seconds: 0.2, width: 320, holdLast: false },
+  "job-health.gif": { seconds: 0.9, width: 300, holdLast: true },
+} as const;
 
 function readManifest(): Manifest {
   return JSON.parse(NodeFS.readFileSync(MANIFEST, "utf8")) as Manifest;
@@ -89,7 +94,7 @@ function ffmpeg(args: ReadonlyArray<string>) {
   }
 }
 
-function buildGif(name: keyof typeof GIF_FRAME_SECONDS, framesDir: string, out: string) {
+function buildGif(name: keyof typeof GIFS, framesDir: string, out: string) {
   const frames = NodeFS.readdirSync(framesDir)
     .filter((f) => f.endsWith(".png"))
     .toSorted();
@@ -101,16 +106,16 @@ function buildGif(name: keyof typeof GIF_FRAME_SECONDS, framesDir: string, out: 
   );
   if (sizes.size !== 1)
     throw new Error(`${name}: frames differ in size; pin the MediaFrame height`);
-  const seconds = GIF_FRAME_SECONDS[name];
+  const { seconds, width, holdLast } = GIFS[name];
   const list = frames.flatMap((f, i) => [
     `file '${NodePath.join(framesDir, f)}'`,
-    `duration ${i === frames.length - 1 ? seconds * 2 : seconds}`,
+    `duration ${holdLast && i === frames.length - 1 ? seconds * 2 : seconds}`,
   ]);
   // The concat demuxer ignores the last duration unless the last file repeats.
   list.push(`file '${NodePath.join(framesDir, frames.at(-1)!)}'`);
   const listFile = NodePath.join(framesDir, "frames.txt");
   NodeFS.writeFileSync(listFile, `${list.join("\n")}\n`);
-  const scale = `scale=${GIF_WIDTH[name]}:-1:flags=lanczos`;
+  const scale = `scale=${width}:-1:flags=lanczos`;
   ffmpeg([
     "-f",
     "concat",
@@ -143,7 +148,7 @@ function generate(): number {
     const out = NodePath.join(MEDIA_DIR, name);
     const base = name.replace(/\.(webp|gif)$/, "");
     if (name.endsWith(".gif")) {
-      buildGif(name as keyof typeof GIF_FRAME_SECONDS, NodePath.join(outDir, "frames", base), out);
+      buildGif(name as keyof typeof GIFS, NodePath.join(outDir, "frames", base), out);
     } else {
       ffmpeg([
         "-i",

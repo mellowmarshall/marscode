@@ -12,7 +12,7 @@
       "apps/web/src/index.css",
       "apps/web/src/components/ui/*.tsx"
     ],
-    "hash": "4579816d25243ed8"
+    "hash": "4909e5960760cafa"
   },
   "ship-queue.webp": {
     "sources": [
@@ -22,7 +22,7 @@
       "apps/web/src/index.css",
       "apps/web/src/components/ui/*.tsx"
     ],
-    "hash": "6e73ea3be3597679"
+    "hash": "c30eadd8ba5bee26"
   },
   "ship-queue.gif": {
     "sources": [
@@ -32,7 +32,7 @@
       "apps/web/src/index.css",
       "apps/web/src/components/ui/*.tsx"
     ],
-    "hash": "6e73ea3be3597679"
+    "hash": "c30eadd8ba5bee26"
   },
   "reaper.webp": {
     "sources": [
@@ -43,7 +43,7 @@
       "apps/web/src/index.css",
       "apps/web/src/components/ui/*.tsx"
     ],
-    "hash": "1e36fbc645c91ac4"
+    "hash": "3683c715b672b90f"
   },
   "reviews.webp": {
     "sources": [
@@ -53,7 +53,7 @@
       "apps/web/src/components/ui/*.tsx",
       "apps/web/src/devtools/UsageReviews*.tsx"
     ],
-    "hash": "8489445e37973bac"
+    "hash": "2293ee3ac0d9a786"
   },
   "security.webp": {
     "sources": [
@@ -63,7 +63,7 @@
       "apps/web/src/index.css",
       "apps/web/src/components/ui/*.tsx"
     ],
-    "hash": "93eee461db8761e6"
+    "hash": "90db74adbc3b36a3"
   },
   "cite.gif": {
     "sources": [
@@ -73,5 +73,112 @@
       "apps/web/src/components/ui/*.tsx"
     ],
     "hash": "851ee72083985b1b"
+  },
+  "sidebar-threads.webp": {
+    "sources": [
+      "apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+      "apps/web/src/devtools/ThreadGrantKeyBadge.tsx",
+      "apps/web/src/devtools/jobs/jobsStore.ts",
+      "apps/web/src/devtools/useThreadDevtoolsApprovals.ts",
+      "apps/web/src/devtools/threadApprovals.ts",
+      "apps/web/test/readme/sidebar.media.tsx",
+      "apps/web/test/readme/readmeMediaFixtures.ts",
+      "apps/web/src/index.css",
+      "apps/web/src/components/ui/*.tsx",
+      "apps/web/test/readme/readmeMediaCapture.tsx"
+    ],
+    "hash": "f06c7a65ce2b028f"
+  },
+  "approval-glow.gif": {
+    "sources": [
+      "apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+      "apps/web/src/devtools/ThreadGrantKeyBadge.tsx",
+      "apps/web/src/devtools/jobs/jobsStore.ts",
+      "apps/web/src/devtools/useThreadDevtoolsApprovals.ts",
+      "apps/web/src/devtools/threadApprovals.ts",
+      "apps/web/test/readme/sidebar.media.tsx",
+      "apps/web/test/readme/readmeMediaFixtures.ts",
+      "apps/web/src/index.css",
+      "apps/web/src/components/ui/*.tsx",
+      "apps/web/test/readme/readmeMediaCapture.tsx"
+    ],
+    "hash": "f06c7a65ce2b028f"
+  },
+  "permission-key.webp": {
+    "sources": [
+      "apps/web/src/components/sidebar/SidebarThreadRow.tsx",
+      "apps/web/src/devtools/ThreadGrantKeyBadge.tsx",
+      "apps/web/src/devtools/jobs/jobsStore.ts",
+      "apps/web/src/devtools/useThreadDevtoolsApprovals.ts",
+      "apps/web/src/devtools/threadApprovals.ts",
+      "apps/web/test/readme/sidebar.media.tsx",
+      "apps/web/test/readme/readmeMediaFixtures.ts",
+      "apps/web/src/index.css",
+      "apps/web/src/components/ui/*.tsx",
+      "apps/web/test/readme/readmeMediaCapture.tsx"
+    ],
+    "hash": "f06c7a65ce2b028f"
+  },
+  "fleet-icon.webp": {
+    "sources": [
+      "apps/web/src/devtools/FleetIcon.tsx",
+      "apps/web/src/devtools/DevtoolsEntry.tsx",
+      "apps/web/test/readme/sidebar.media.tsx",
+      "apps/web/src/index.css",
+      "apps/web/src/components/ui/*.tsx",
+      "apps/web/test/readme/readmeMediaCapture.tsx"
+    ],
+    "hash": "f8937047ef8c855e"
+  },
+  "thread-jobs.webp": {
+    "sources": [
+      "apps/web/src/devtools/ThreadDevtoolsPanel.tsx",
+      "apps/web/src/devtools/jobs/ThreadManagedJobCard.tsx",
+      "apps/web/src/devtools/ShipQueueMiniCard.tsx",
+      "apps/web/test/readme/sidebar.media.tsx",
+      "apps/web/test/readme/readmeMediaFixtures.ts",
+      "apps/web/src/index.css",
+      "apps/web/src/components/ui/*.tsx",
+      "apps/web/test/readme/readmeMediaCapture.tsx"
+    ],
+    "hash": "7ed571f3dbd1f3ef"
+  },
+  "job-health.gif": {
+    "sources": [
+      "apps/web/src/devtools/ThreadDevtoolsPanel.tsx",
+      "apps/web/src/devtools/jobs/ThreadManagedJobCard.tsx",
+      "apps/web/src/devtools/ShipQueueMiniCard.tsx",
+      "apps/web/test/readme/sidebar.media.tsx",
+      "apps/web/test/readme/readmeMediaFixtures.ts",
+      "apps/web/src/index.css",
+      "apps/web/src/components/ui/*.tsx",
+      "apps/web/test/readme/readmeMediaCapture.tsx"
+    ],
+    "hash": "7ed571f3dbd1f3ef"
+  },
+  "approval-plan.webp": {
+    "sources": [
+      "apps/web/src/components/chat/TimelinePendingApprovalRow.tsx",
+      "apps/web/src/components/chat/ComposerPendingApprovalActions.tsx",
+      "apps/web/src/devtools/threadApprovals.ts",
+      "apps/web/test/readme/sidebar.media.tsx",
+      "apps/web/test/readme/readmeMediaFixtures.ts",
+      "apps/web/src/index.css",
+      "apps/web/src/components/ui/*.tsx",
+      "apps/web/test/readme/readmeMediaCapture.tsx"
+    ],
+    "hash": "46c78854debfbadc"
+  },
+  "ship-steps.webp": {
+    "sources": [
+      "apps/web/src/devtools/ShipQueueJobDetails.tsx",
+      "apps/web/src/devtools/shipQueueJobFacts.ts",
+      "apps/web/test/readme/devtools.media.tsx",
+      "apps/web/test/readme/readmeMediaFixtures.ts",
+      "apps/web/src/index.css",
+      "apps/web/src/components/ui/*.tsx",
+      "apps/web/test/readme/readmeMediaCapture.tsx"
+    ],
+    "hash": "7b0fbc8099b76806"
   }
 }
