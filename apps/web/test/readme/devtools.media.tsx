@@ -39,6 +39,7 @@ import { TooltipProvider } from "../../src/components/ui/tooltip";
 import { FleetMachinesView } from "../../src/devtools/FleetMachinesView";
 import { FleetReaperTab } from "../../src/devtools/FleetReaperTab";
 import { SecuritySettingsPanel } from "../../src/devtools/SecuritySettingsPanel";
+import { ShipQueueJobDetails } from "../../src/devtools/ShipQueueJobDetails";
 import { ShipQueuePanel } from "../../src/devtools/ShipQueuePanel";
 import { UsageReviewsPanel } from "../../src/devtools/UsageReviewsPanel";
 import { render } from "../render";
@@ -49,6 +50,7 @@ import {
   jobFromShip,
   securityGrants,
   shipJobStages,
+  shipJobWithSteps,
   shipQueueHistory,
 } from "./readmeMediaFixtures";
 
@@ -177,6 +179,20 @@ function mockFetch(path: string) {
           },
         ],
       });
+    case "/jobs/ship%3A1043":
+      return ok({
+        id: "ship:1043",
+        revision: 1,
+        series: [],
+        logTail: [
+          "CHALLENGED job=1043 report=review.md",
+          "OVERRIDDEN job=1043 reason=The flagged file is generated",
+          "PUSH_EXIT=0",
+          "PR=88",
+          "MERGE_EXIT=0",
+          "SYNC_EXIT=0",
+        ],
+      });
     case "/guards/exceptions":
       return ok({ path: null, entries: null, waivers: [] });
     default:
@@ -226,6 +242,19 @@ describe("README media: DevTools", () => {
     }
     await screen.rerender(view(3));
     await captureMedia("ship-queue");
+  });
+
+  it("ship job steps with per-step timing", async () => {
+    await using _screen = await render(
+      <TooltipProvider delay={0}>
+        <MediaFrame name="ship-steps" width={900}>
+          <ShipQueueJobDetails job={shipJobWithSteps(NOW)} environmentId={ENV} revision={1} />
+        </MediaFrame>
+      </TooltipProvider>,
+    );
+    await expect.element(page.getByText("ship_ci", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("SYNC_EXIT=0")).toBeVisible();
+    await captureMedia("ship-steps");
   });
 
   it("reaper", async () => {

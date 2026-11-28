@@ -4,7 +4,11 @@ import { commands } from "vite-plus/test/browser";
 declare module "vite-plus/test/browser" {
   interface BrowserCommands {
     /** Defined in vite.config.ts. Saves `<name>.png` of the element under T3CODE_README_MEDIA_DIR. */
-    captureMedia: (name: string, selector: string) => Promise<void>;
+    captureMedia: (
+      name: string,
+      selector: string,
+      animations?: "disabled" | "allow",
+    ) => Promise<void>;
   }
 }
 
@@ -33,10 +37,25 @@ export function MediaFrame({
   );
 }
 
-export async function captureMedia(name: string, frame = name): Promise<void> {
+export async function captureMedia(
+  name: string,
+  frame = name,
+  animations: "disabled" | "allow" = "disabled",
+): Promise<void> {
   document.documentElement.classList.add("dark");
   // Let layout, fonts, and the first paint after a state change settle.
   await document.fonts.ready;
   await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  await commands.captureMedia(name, `[data-media="${frame}"]`);
+  await commands.captureMedia(name, `[data-media="${frame}"]`, animations);
+}
+
+/**
+ * Holds every CSS animation under `root` at `seconds` into its cycle, so a GIF frame shows one
+ * exact phase of a real animation (captured with `animations: "allow"`).
+ */
+export function holdAnimationsAt(root: Element, seconds: number): void {
+  for (const animation of root.getAnimations({ subtree: true })) {
+    animation.pause();
+    animation.currentTime = seconds * 1000;
+  }
 }
