@@ -2,7 +2,7 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
-import type { ReaperPolicyRule } from "../ReaperPolicy.ts";
+import { sweepTimeRuleRefusal, type ReaperPolicyRule } from "../ReaperPolicy.ts";
 import type { StorageManifestEntry } from "../StorageManifest.ts";
 import { overlapsAny, safeReapRoot } from "./ReaperPathGuard.ts";
 import type { SweepContext } from "./ReaperTempSweep.ts";
@@ -126,6 +126,12 @@ export async function sweepApprovedPolicy(
     if (!rule.enabled) continue;
     const safe = await safeReapRoot(rule.path, ctx.homeDir);
     if (safe === null || overlapsAny(safe, ctx.historyRoots)) continue;
+    // A parent may have become a repo since the rule was saved, or the rule predates a check.
+    const refusal = sweepTimeRuleRefusal(safe, ctx.homeDir);
+    if (refusal !== null) {
+      ctx.log(`Skipped approved rule ${rule.path}: ${refusal}`);
+      continue;
+    }
     const cutoff = ctx.nowMs - Math.max(1, rule.maxAgeDays) * 24 * HOUR_MS;
     const newestFirst = (await ownedChildren(safe, ctx.uid)).toSorted(
       (a, b) => b.mtimeMs - a.mtimeMs,

@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 
 import {
   ReaperRuleProposal,
+  type ReaperRulePreview,
   type ReaperRuleProposalView,
   type ReaperProposalDecision,
   type ReaperProposeRulesInput,
@@ -31,6 +32,7 @@ import { previewRule } from "./ReaperRulePreview.ts";
 
 const MAX_PENDING = 50;
 const MAX_PENDING_PER_THREAD = 20;
+const PREVIEW_TTL_MS = 60_000;
 
 export class ReaperProposalNotFoundError extends Schema.TaggedError<ReaperProposalNotFoundError>()(
   "ReaperProposalNotFoundError",
@@ -152,21 +154,37 @@ const make = Effect.fn("ReaperProposals.make")(function* (options: {
       ),
     );
 
+  // Each preview walks the rule's directory, so it is reused for a minute or until a decision.
+  const previews = new Map<
+    string,
+    { readonly atMs: number; readonly preview: ReaperRulePreview | null }
+  >();
+
   const withPreviews = Effect.fn("ReaperProposals.preview")(function* (
     proposals: ReadonlyArray<ReaperRuleProposal>,
   ) {
-    if (proposals.length === 0) return [];
-    const m = yield* manifest;
-    const historyRoots = yield* Effect.promise(() => manifestHistoryRoots(m));
     const nowMs = yield* Clock.currentTimeMillis;
-    const scan = yield* Effect.promise(() => scanProcessPaths({ uid, platform }));
-    return yield* Effect.forEach(proposals, (proposal) =>
-      Effect.promise(() =>
-        previewRule(proposal, { scan, historyRoots, uid, nowMs, homeDir: options.homeDir }).catch(
-          () => null,
-        ),
-      ).pipe(Effect.map((preview) => ({ ...proposal, preview }))),
-    );
+    for (const [id, cached] of previews) {
+      if (nowMs - cached.atMs >= PREVIEW_TTL_MS) previews.delete(id);
+    }
+    const stale = proposals.filter((p) => !previews.has(p.id));
+    if (stale.length > 0) {
+      const m = yield* manifest;
+      const historyRoots = yield* Effect.promise(() => manifestHistoryRoots(m));
+      const scan = yield* Effect.promise(() => scanProcessPaths({ uid, platform }));
+      for (const proposal of stale) {
+        const preview = yield* Effect.promise(() =>
+          previewRule(proposal, { scan, historyRoots, uid, nowMs, homeDir: options.homeDir }).catch(
+            () => null,
+          ),
+        );
+        previews.set(proposal.id, { atMs: nowMs, preview });
+      }
+    }
+    return proposals.map((proposal) => ({
+      ...proposal,
+      preview: previews.get(proposal.id)?.preview ?? null,
+    }));
   });
 
   const list = permit.withPermits(1)(readStore).pipe(Effect.flatMap(withPreviews));
@@ -256,6 +274,7 @@ const make = Effect.fn("ReaperProposals.make")(function* (options: {
             return yield* new ReaperProposalRefusedError({ id: input.id, reason: written.error });
           }
         }
+        previews.delete(input.id);
         const remaining = pending.filter((p) => p.id !== input.id);
         yield* writeStore(remaining);
         return remaining;

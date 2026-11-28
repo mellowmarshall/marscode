@@ -274,6 +274,14 @@ function checkAllowedReaperPath(canonicalPath: string, canonicalHome: string): s
   return `Refusing cleanup rule outside allowed roots (/tmp/*, /var/tmp/*, ~/.cache/*, /data/*/*, ~/Dev/*/*): ${canonicalPath}`;
 }
 
+/** The allow-list and git checks again, at sweep time, for a rule saved earlier. */
+export function sweepTimeRuleRefusal(
+  canonicalPath: string,
+  homeDir: string = NodeOS.homedir(),
+): string | null {
+  return checkAllowedReaperPath(canonicalPath, resolveCanonicalPath(homeDir, homeDir));
+}
+
 export function validateReaperPolicyRules(
   rules: ReadonlyArray<ReaperPolicyRule>,
   protectedHistoryRoots: ReadonlyArray<string>,
