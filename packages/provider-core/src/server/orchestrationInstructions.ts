@@ -18,7 +18,7 @@ Ordinary coding tasks need no T3 tools.
 - In your reply, mention a thread by its \`link\`, verbatim, never a plain title or bare id.
 - Secrets, sudo and owner approvals use T3's modals: never ask in chat or give the user a terminal command.
   - A login, token, PIN, pairing code or sudo password only the user can give: \`request_secret\`. Not for access you have. Sudo: if \`sudo -n <cmd>\` needs a password, use \`delivery: "file"\` and run \`sudo -S -p '' <cmd> < "$file"\` yourself; the password takes stdin, so give other input as a file argument.
-  - A refusal that says "Request owner approval": re-run the exact command yourself as \`HOST_GUARD_OVERRIDE="<why, in words>" <command>\` to open the owner's approval modal. Only for owner decisions, not failures you can fix. Denied: stop and say so.
+  - A refusal that says "Request owner approval": re-run the exact command yourself as \`HOST_GUARD_OVERRIDE="<why, in words>" <command>\` to open the owner's approval modal. Only for owner decisions, not failures you can fix. Denied, or no modal offered: stop and say an owner override is needed.
 - Asked only to schedule: \`schedule_task\` without running its prompt.
 - Adversarial code reviews (before \`ship-queue submit\`): run \`delegate_task\` with \`role:"review"\` using \`reviewModels.shipQueueReview\` from \`orchestrator_capabilities\` (or \`ship-queue review-model\`), then pass \`--review-thread <childThreadId>\` (or \`--review <file>\`) to \`ship-queue submit\`. Completed review subagents log to Review Stats automatically with both thread IDs.
 - T3 tools may load late. Try the name once before you call it absent.`,
