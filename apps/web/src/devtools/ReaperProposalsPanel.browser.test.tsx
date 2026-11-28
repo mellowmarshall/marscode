@@ -1,4 +1,4 @@
-import { EnvironmentId, ThreadId, type ReaperRuleProposal } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, type ReaperRuleProposalView } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
@@ -13,7 +13,7 @@ import "~/index.css";
 import { render } from "../../test/render";
 import { FleetReaperTab } from "./FleetReaperTab";
 
-const CACHE_RULE: ReaperRuleProposal = {
+const CACHE_RULE: ReaperRuleProposalView = {
   id: "reaper-proposal:1",
   host: "host-a",
   threadId: ThreadId.make("thread:review"),
@@ -23,9 +23,16 @@ const CACHE_RULE: ReaperRuleProposal = {
   keepLatest: 2,
   deletes: "Build cache entries the acme tool has not used in two weeks.",
   safeBecause: "Only the acme tool writes here, and it rebuilds the cache on the next build.",
-  estimatedBytes: 3_221_225_472,
+  preview: {
+    entries: 41,
+    bytes: 3_221_225_472,
+    oldestAgeDays: 63.5,
+    newestAgeDays: 14.2,
+    gitAncestor: false,
+    liveProcessCheck: true,
+  },
 };
-const SCRATCH_RULE: ReaperRuleProposal = {
+const SCRATCH_RULE: ReaperRuleProposalView = {
   id: "reaper-proposal:2",
   host: "host-a",
   proposedAt: "2026-11-20T10:00:00.000Z",
@@ -34,6 +41,14 @@ const SCRATCH_RULE: ReaperRuleProposal = {
   keepLatest: 0,
   deletes: "Scratch output from test runs older than three days.",
   safeBecause: "Test runs recreate it, and nothing reads old runs.",
+  preview: {
+    entries: 0,
+    bytes: 0,
+    oldestAgeDays: null,
+    newestAgeDays: null,
+    gitAncestor: true,
+    liveProcessCheck: true,
+  },
 };
 
 function mockReaperHost() {
@@ -72,7 +87,7 @@ function mockReaperHost() {
             path: chosen.path,
             maxAgeDays: chosen.maxAgeDays,
             keepLatest: 2,
-            enabled: true,
+            enabled: false,
           });
         }
         pending = pending.filter((p) => p.id !== id);
@@ -105,7 +120,13 @@ it("shows proposed rules in plain words and moves an accepted one into the appro
   await expect.element(panel.getByText("Proposed cleanup rules (2)")).toBeVisible();
   await expect.element(panel.getByText(CACHE_RULE.deletes)).toBeVisible();
   await expect.element(panel.getByText(CACHE_RULE.safeBecause)).toBeVisible();
-  await expect.element(panel.getByText(/about 3(\.0)? GiB/)).toBeVisible();
+  await expect
+    .element(
+      panel.getByText(/Would remove now: 41 entries, 3(\.0)? GiB, from 63\.5 to 14\.2 days old/),
+    )
+    .toBeVisible();
+  await expect.element(panel.getByText("Would remove nothing right now.")).toBeVisible();
+  await expect.element(panel.getByText("Inside a git checkout")).toBeVisible();
 
   await page.getByRole("button", { name: `Accept rule for ${CACHE_RULE.path}` }).click();
   expect(fetchSpy).toHaveBeenCalledWith(
@@ -116,6 +137,9 @@ it("shows proposed rules in plain words and moves an accepted one into the appro
   await expect.element(panel.getByText("Proposed cleanup rules (1)")).toBeVisible();
   const paths = page.getByLabelText("Cleanup directory path");
   await expect.element(paths.nth(1)).toHaveValue(CACHE_RULE.path);
+  await expect
+    .element(page.getByRole("switch", { name: `Enable rule for ${CACHE_RULE.path}` }))
+    .not.toBeChecked();
 
   await page.getByRole("button", { name: `Reject rule for ${SCRATCH_RULE.path}` }).click();
   await expect.element(panel).not.toBeInTheDocument();

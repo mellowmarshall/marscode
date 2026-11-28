@@ -9,6 +9,7 @@ import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts"
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../../../config.ts";
 import * as ReaperPolicy from "../../../devtools/ReaperPolicy.ts";
@@ -64,6 +65,22 @@ it.effect("queues the agent's proposed rules and writes accepted ones into the p
     yield* Effect.gen(function* () {
       const toolkit = yield* ReaperToolkit;
       const proposals = yield* ReaperProposals.ReaperProposals;
+      const config = yield* ServerConfig.ServerConfig;
+      // A fixed epoch: the dry-run compares file times with the Clock.
+      const nowMs = 1_767_225_600_000;
+      yield* TestClock.setTime(nowMs);
+      const daysAgo = (days: number) => (nowMs - days * 86_400_000) / 1000;
+      for (const [name, days] of [
+        ["a", 1],
+        ["b", 20],
+        ["c", 30],
+        ["d", 40],
+      ] as const) {
+        const file = NodePath.join(cacheDir, name);
+        NodeFS.writeFileSync(file, "x".repeat(5000));
+        NodeFS.utimesSync(file, daysAgo(days), daysAgo(days));
+      }
+
       const result = yield* toolkit
         .handle("t3_reaper_propose_rules", {
           rules: [
@@ -105,13 +122,30 @@ it.effect("queues the agent's proposed rules and writes accepted ones into the p
         [cacheDir, threadId],
         [tmpDir, threadId],
       ]);
-      // Proposing alone never touches the policy.
+      // The dry-run measures what the sweep would remove now: past keepLatest and maxAgeDays.
+      expect(pending[0]?.preview).toMatchObject({
+        entries: 2,
+        oldestAgeDays: 40,
+        newestAgeDays: 30,
+        gitAncestor: false,
+      });
+      expect(pending[0]?.preview?.bytes).toBeGreaterThan(0);
+      expect(pending[1]?.preview).toMatchObject({ entries: 0, oldestAgeDays: null });
+      // Proposing alone never touches the policy, and a dry-run deletes nothing.
       expect(NodeFS.existsSync(policyPath)).toBe(false);
+      expect(NodeFS.readdirSync(cacheDir)).toHaveLength(4);
 
+      // A second proposal for a pending path is refused, not swapped in.
+      const repeat = yield* proposals.propose({
+        rules: [{ path: tmpDir, maxAgeDays: 9, keepLatest: 0, deletes: "x", safeBecause: "y" }],
+      });
+      expect(repeat.refused[0]?.reason).toContain("already waits");
+
+      // Accepting writes the rule turned off; the user turns it on.
       const afterAccept = yield* proposals.decide({ id: pending[0]!.id, decision: "accept" });
       expect(afterAccept.map((p) => p.path)).toEqual([tmpDir]);
       expect(ReaperPolicy.readReaperPolicySync([], policyPath).rules).toEqual([
-        { path: cacheDir, maxAgeDays: 14, keepLatest: 2, enabled: true },
+        { path: cacheDir, maxAgeDays: 14, keepLatest: 2, enabled: false },
       ]);
 
       expect(yield* proposals.decide({ id: pending[1]!.id, decision: "reject" })).toEqual([]);
@@ -128,6 +162,12 @@ it.effect("queues the agent's proposed rules and writes accepted ones into the p
       });
       expect(duplicate.queued).toEqual([]);
       expect(duplicate.refused[0]?.reason).toContain("already exists");
+
+      // A corrupt store is kept as a copy and reads as empty.
+      const storePath = NodePath.join(config.stateDir, "reaper", "proposals.json");
+      NodeFS.writeFileSync(storePath, "{not json");
+      expect(yield* proposals.list).toEqual([]);
+      expect(NodeFS.readFileSync(`${storePath}.corrupt`, "utf8")).toBe("{not json");
     }).pipe(
       Effect.provide(
         McpToolAccess.HandlersLayer.layer(ReaperHandlers.layer).pipe(
@@ -135,5 +175,5 @@ it.effect("queues the agent's proposed rules and writes accepted ones into the p
         ),
       ),
     );
-  }),
+  }).pipe(Effect.scoped),
 );

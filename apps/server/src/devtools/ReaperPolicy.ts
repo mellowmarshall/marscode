@@ -5,6 +5,8 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import { dataProposalRefusal, gitRuleRefusal } from "./ReaperRulePathChecks.ts";
+
 export interface ReaperPolicyRule {
   readonly path: string;
   readonly maxAgeDays: number;
@@ -222,19 +224,10 @@ function isRelativeSubpath(root: string, candidate: string, minDepth: number): b
   return rel.split(NodePath.sep).filter(Boolean).length >= minDepth;
 }
 
-function hasDirectGitEntry(canonicalPath: string): boolean {
-  try {
-    return NodeFS.existsSync(NodePath.join(canonicalPath, ".git"));
-  } catch {
-    return false;
-  }
-}
-
 /** Allow-list safe cleanup roots matching `agent_reap_storage.py:_is_safe_reap_root` + user caches. */
 function checkAllowedReaperPath(canonicalPath: string, canonicalHome: string): string | null {
-  if (hasDirectGitEntry(canonicalPath)) {
-    return `Refusing active git checkout/worktree root: ${canonicalPath}`;
-  }
+  const gitRefusal = gitRuleRefusal(canonicalPath);
+  if (gitRefusal) return gitRefusal;
   // Evaluate $HOME rules first so an ephemeral/test $HOME under /tmp still enforces $HOME allow-listing.
   if (canonicalPath === canonicalHome || isRelativeSubpath(canonicalHome, canonicalPath, 1)) {
     const cacheExactOrSub = [
@@ -285,6 +278,7 @@ export function validateReaperPolicyRules(
   rules: ReadonlyArray<ReaperPolicyRule>,
   protectedHistoryRoots: ReadonlyArray<string>,
   homeDir: string = NodeOS.homedir(),
+  options: { readonly agentProposal?: boolean } = {},
 ):
   | { readonly ok: true; readonly rules: ReadonlyArray<ReaperPolicyRule> }
   | { readonly ok: false; readonly error: string } {
@@ -313,7 +307,9 @@ export function validateReaperPolicyRules(
       // Path may not exist yet; canonical ancestor check still runs below.
     }
     const canonical = resolveCanonicalPath(trimmed, homeDir);
-    const disallowedReason = checkAllowedReaperPath(canonical, canonicalHome);
+    const disallowedReason =
+      checkAllowedReaperPath(canonical, canonicalHome) ??
+      (options.agentProposal ? dataProposalRefusal(canonical) : null);
     if (disallowedReason) {
       return { ok: false, error: disallowedReason };
     }

@@ -33,6 +33,9 @@ export interface EphemeralSweepContext extends SweepContext {
 export interface EphemeralSweepTotals {
   removed: number;
   bytes: number;
+  /** Modification times of the oldest and newest item removed, for dry-run previews. */
+  oldestMtimeMs?: number;
+  newestMtimeMs?: number;
 }
 
 export function ephemeralRootsFromEntries(
@@ -83,6 +86,8 @@ async function removeIfStale(
   if (!ctx.dryRun && !(await forceRemove(candidate.path))) return;
   totals.removed += 1;
   totals.bytes += bytes;
+  totals.oldestMtimeMs = Math.min(totals.oldestMtimeMs ?? Infinity, candidate.mtimeMs);
+  totals.newestMtimeMs = Math.max(totals.newestMtimeMs ?? -Infinity, candidate.mtimeMs);
   ctx.log(`  ${ctx.dryRun ? "Would remove" : "Removed"} stale ${label} ${candidate.path}`);
 }
 

@@ -124,12 +124,16 @@ export const handleStorageAndToolRoute = Effect.fn("DevtoolsStorageRoutes.handle
           enabled: r.enabled === true,
         });
       }
-      const written = yield* Effect.tryPromise({
-        try: () => ReaperPolicy.writeReaperPolicy(rules, protectedHistoryRoots),
-        catch: (err) => ({ ok: false as const, error: String(err) }),
-      }).pipe(Effect.catch((e) => Effect.succeed(e)));
-      if (!written.ok) return jsonResponse({ error: written.error }, 400);
-      return jsonResponse(written.document, 200);
+      // The same lock that accepting a proposal takes, so neither save loses the other's rule.
+      const proposals = yield* Effect.serviceOption(ReaperProposals.ReaperProposals);
+      if (Option.isNone(proposals)) return jsonResponse({ error: "Reaper unavailable" }, 503);
+      return yield* proposals.value.savePolicy(rules).pipe(
+        Effect.map((document) => jsonResponse(document, 200)),
+        Effect.catchTags({
+          ReaperProposalRefusedError: (e) =>
+            Effect.succeed(jsonResponse({ error: e.message }, 400)),
+        }),
+      );
     }
 
     if (

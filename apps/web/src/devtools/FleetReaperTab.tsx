@@ -1,6 +1,6 @@
 /** Dedicated `Reaper & Sweep` tab inside Fleet Console (storage scan, reaper actions, cleanup rules). */
 import { useEffect, useRef, useState } from "react";
-import type { EnvironmentId, ReaperProposalList, ReaperRuleProposal } from "@t3tools/contracts";
+import type { EnvironmentId, ReaperProposalList, ReaperRuleProposalView } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { T, Var, useGT } from "gt-react";
 import { BotIcon, FileSearchIcon, HardDriveIcon, PlayIcon } from "lucide-react";
@@ -83,7 +83,7 @@ export function FleetReaperTab({
   const [cargoDry, setCargoDry] = useState<ReaperCargoResult | null>(null);
   const [policyDoc, setPolicyDoc] = useState<ReaperPolicyDocument | null>(null);
   const [rulesDraft, setRulesDraft] = useState<RuleDraftItem[]>([]);
-  const [proposals, setProposals] = useState<ReadonlyArray<ReaperRuleProposal>>([]);
+  const [proposals, setProposals] = useState<ReadonlyArray<ReaperRuleProposalView>>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
@@ -195,7 +195,7 @@ export function FleetReaperTab({
   };
 
   const handleDecideProposal = async (
-    proposal: ReaperRuleProposal,
+    proposal: ReaperRuleProposalView,
     decision: "accept" | "reject",
   ) => {
     setBusy("decide-proposal");
@@ -221,13 +221,15 @@ export function FleetReaperTab({
       if (policyRes.ok && policyRes.data) {
         const saved = policyRes.data;
         setPolicyDoc(saved);
-        // Keep unsaved edits and add the accepted rule to them, so a later save keeps it.
+        // Keep unsaved edits and add only the accepted rule to them, so a later save keeps it.
         setRulesDraft((prev) =>
           rulesDirtyRef.current
             ? [
                 ...prev,
                 ...toRuleDrafts(
-                  saved.rules.filter((r) => !prev.some((d) => d.path.trim() === r.path)),
+                  saved.rules.filter(
+                    (r) => r.path === proposal.path && !prev.some((d) => d.path.trim() === r.path),
+                  ),
                 ),
               ]
             : toRuleDrafts(saved.rules),

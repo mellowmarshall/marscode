@@ -19,7 +19,6 @@ export const ReaperRuleProposalInput = Schema.Struct({
   safeBecause: PlainWords.annotate({
     description: "For the user, in plain words: why that is safe (who owns it, how it comes back).",
   }),
-  estimatedBytes: Schema.optionalKey(NonNegativeInt),
 });
 export type ReaperRuleProposalInput = typeof ReaperRuleProposalInput.Type;
 
@@ -49,7 +48,26 @@ export const ReaperProposalDecision = Schema.Struct({
 });
 export type ReaperProposalDecision = typeof ReaperProposalDecision.Type;
 
+/** Measured on the server: what the sweep would remove for this rule right now. */
+export const ReaperRulePreview = Schema.Struct({
+  entries: NonNegativeInt,
+  bytes: NonNegativeInt,
+  oldestAgeDays: Schema.NullOr(Schema.Finite),
+  newestAgeDays: Schema.NullOr(Schema.Finite),
+  /** The path sits inside a git checkout (only its build output is allowed). */
+  gitAncestor: Schema.Boolean,
+  /** False when the live-process scan failed, so a real pass would remove nothing. */
+  liveProcessCheck: Schema.Boolean,
+});
+export type ReaperRulePreview = typeof ReaperRulePreview.Type;
+
+export const ReaperRuleProposalView = Schema.Struct({
+  ...ReaperRuleProposal.fields,
+  preview: Schema.NullOr(ReaperRulePreview),
+});
+export type ReaperRuleProposalView = typeof ReaperRuleProposalView.Type;
+
 export const ReaperProposalList = Schema.Struct({
-  proposals: Schema.Array(ReaperRuleProposal),
+  proposals: Schema.Array(ReaperRuleProposalView),
 });
 export type ReaperProposalList = typeof ReaperProposalList.Type;

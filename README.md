@@ -20,7 +20,7 @@ Agents do not merge pull requests themselves. They submit a clean worktree to th
 
 ### Reaper and session-archive tiering
 
-The Reaper cleans stale temp files, Cargo build output, and merged worktrees, and it applies the cleanup rules you approve per host. An Agent cleanup review finds safe cleanup targets and proposes them as rules, each with what it deletes and why that is safe; you accept or reject each one in the Reaper tab. Paths that hold history are protected. Session archives move to a slower storage tier only after the copy is byte-compared and synced to disk.
+The Reaper cleans stale temp files, Cargo build output, and merged worktrees, and it applies the cleanup rules you approve per host. An Agent cleanup review finds safe cleanup targets and proposes them as rules, each with what it deletes and why that is safe; you see a measured preview of what each would remove, and an accepted rule stays off until you turn it on. Paths that hold history are protected. Session archives move to a slower storage tier only after the copy is byte-compared and synced to disk.
 
 ![Reaper tab with host mounts, sweep counts, and one approved cleanup rule](./docs/readme/reaper.webp)
 

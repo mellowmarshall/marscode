@@ -1,10 +1,27 @@
 /** Cleanup rules an Agent cleanup review proposed; each waits for the user to accept or reject it. */
-import type { ReaperRuleProposal } from "@t3tools/contracts";
+import type { ReaperRulePreview, ReaperRuleProposalView } from "@t3tools/contracts";
 import { T, Var, useGT } from "gt-react";
-import { BotIcon, CheckIcon, XIcon } from "lucide-react";
+import { BotIcon, CheckIcon, GitBranchIcon, XIcon } from "lucide-react";
 
+import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { formatJobBytes } from "./jobs/jobTypes";
+
+function PreviewLine({ preview }: { readonly preview: ReaperRulePreview | null }) {
+  if (preview === null) {
+    return <T>Could not measure what this rule would remove.</T>;
+  }
+  if (preview.entries === 0) {
+    return <T>Would remove nothing right now.</T>;
+  }
+  return (
+    <T>
+      Would remove now: <Var>{preview.entries}</Var> entries,{" "}
+      <Var>{formatJobBytes(preview.bytes)}</Var>, from <Var>{preview.oldestAgeDays}</Var> to{" "}
+      <Var>{preview.newestAgeDays}</Var> days old
+    </T>
+  );
+}
 
 export function ReaperProposalsPanel({
   proposals,
@@ -12,10 +29,10 @@ export function ReaperProposalsPanel({
   busy,
   onDecide,
 }: {
-  readonly proposals: ReadonlyArray<ReaperRuleProposal>;
+  readonly proposals: ReadonlyArray<ReaperRuleProposalView>;
   readonly readOnly: boolean;
   readonly busy: boolean;
-  readonly onDecide: (proposal: ReaperRuleProposal, decision: "accept" | "reject") => void;
+  readonly onDecide: (proposal: ReaperRuleProposalView, decision: "accept" | "reject") => void;
 }) {
   const gt = useGT();
   if (proposals.length === 0) return null;
@@ -34,9 +51,9 @@ export function ReaperProposalsPanel({
         </div>
         <p className="text-2xs text-muted-foreground">
           <T>
-            An agent cleanup review found these. Nothing has been deleted. Accepting a rule adds it
-            to the approved rules below, and the Reaper applies it on its next pass. History paths
-            stay protected.
+            An agent cleanup review found these. Nothing has been deleted. The preview is measured
+            on this machine now. Accepting a rule adds it to the approved rules below, turned off;
+            turn it on to let the Reaper apply it. History paths stay protected.
           </T>
         </p>
       </div>
@@ -80,18 +97,26 @@ export function ReaperProposalsPanel({
               <dd className="text-foreground">{proposal.safeBecause}</dd>
             </dl>
             <div className="text-3xs text-muted-foreground">
-              {proposal.estimatedBytes !== undefined ? (
-                <T>
-                  Entries older than <Var>{proposal.maxAgeDays}</Var> days, keeping the newest{" "}
-                  <Var>{proposal.keepLatest}</Var> · about{" "}
-                  <Var>{formatJobBytes(proposal.estimatedBytes)}</Var>
-                </T>
-              ) : (
-                <T>
-                  Entries older than <Var>{proposal.maxAgeDays}</Var> days, keeping the newest{" "}
-                  <Var>{proposal.keepLatest}</Var>
-                </T>
-              )}
+              <T>
+                Entries older than <Var>{proposal.maxAgeDays}</Var> days, keeping the newest{" "}
+                <Var>{proposal.keepLatest}</Var>
+              </T>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5 text-2xs text-foreground">
+              <span>
+                <PreviewLine preview={proposal.preview} />
+              </span>
+              {proposal.preview?.gitAncestor ? (
+                <Badge size="sm" variant="warning">
+                  <GitBranchIcon className="mr-1 size-3" />
+                  <T>Inside a git checkout</T>
+                </Badge>
+              ) : null}
+              {proposal.preview && !proposal.preview.liveProcessCheck ? (
+                <Badge size="sm" variant="warning">
+                  <T>Live-process check unavailable; the Reaper will skip this pass</T>
+                </Badge>
+              ) : null}
             </div>
           </li>
         ))}

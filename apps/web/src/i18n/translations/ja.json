@@ -3206,7 +3206,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "(このページを開いたコンピューター上)"]
+      "c": [
+        " ",
+        "(このページを開いたコンピューター上)"
+      ]
     }
   ],
   "b2d53b4d1d48fbef": [
@@ -3218,7 +3221,10 @@
     {
       "t": "span",
       "i": 2,
-      "c": [" ", "· 実行した人にこのアクセス権が付与されます"]
+      "c": [
+        " ",
+        "· 実行した人にこのアクセス権が付与されます"
+      ]
     }
   ],
   "c54cc9c75db9dc58": "自分で開始したばかりのサインインだけを承認してください。",
@@ -12730,5 +12736,72 @@
   "67d1444f1ebafc5d": "エージェントへの指示をデフォルトに戻す",
   "6c33fafcd03b38e0": "組み込みの指示を読み込んでいます…",
   "a9f26af6134146f9": "このサーバーは組み込みの指示を送信しませんでした。ここで編集するにはサーバーを更新してください。",
-  "5cc60007585c8f44": "デフォルト"
+  "5cc60007585c8f44": "デフォルト",
+  "d874851672b3f0bb": "Failed to update the proposed rule",
+  "f5f3e93985d45de2": "Added cleanup rule for {path}",
+  "18f911d7ddfdfc08": "Rejected proposed rule for {path}",
+  "37ef85c0a1d805dd": "Proposed cleanup rules",
+  "3bd541087f4ca2c7": "Reject rule for {path}",
+  "e299e4147d99e46e": "Accept rule for {path}",
+  "9443db27541df66a": "Could not measure what this rule would remove.",
+  "f5305ef074d2f824": "Would remove nothing right now.",
+  "53e454de0aab6d9e": [
+    "Would remove now: ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " entries,",
+    " ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    ", from ",
+    {
+      "i": 3,
+      "k": "_gt_value_3",
+      "v": "v"
+    },
+    " to",
+    " ",
+    {
+      "i": 4,
+      "k": "_gt_value_4",
+      "v": "v"
+    },
+    " days old"
+  ],
+  "02a6d983e6c1fcb0": [
+    "Proposed cleanup rules (",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    ")"
+  ],
+  "2a2e601079687625": "An agent cleanup review found these. Nothing has been deleted. The preview is measured on this machine now. Accepting a rule adds it to the approved rules below, turned off; turn it on to let the Reaper apply it. History paths stay protected.",
+  "b8cdfff5c128f754": "Reject",
+  "80ea4529aca8dcbb": "Deletes",
+  "1f1a2459dfbd2550": "Why it is safe",
+  "dddac88a120dca56": [
+    "Entries older than ",
+    {
+      "i": 1,
+      "k": "_gt_value_1",
+      "v": "v"
+    },
+    " days, keeping the newest",
+    " ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    }
+  ],
+  "5bb013eceafcc13a": "Inside a git checkout",
+  "e243fdaa9db50ab8": "Live-process check unavailable; the Reaper will skip this pass"
 }

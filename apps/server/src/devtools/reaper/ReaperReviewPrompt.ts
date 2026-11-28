@@ -23,7 +23,7 @@ export function buildStorageCleanupReviewPrompt(input: {
 
   const output = input.isLocalHost
     ? [
-        `5. Finish by calling the \`${REAPER_PROPOSE_TOOL}\` tool with one rule per recurring \`garbage\` or \`safe\` directory. For each rule give \`path\`, \`maxAgeDays\`, \`keepLatest\`, and, in plain words for the user, \`deletes\` (what it deletes) and \`safeBecause\` (why that is safe: who owns it, how it comes back). The user accepts or rejects each rule in the Reaper tab; nothing is deleted before that.`,
+        `5. Finish by calling the \`${REAPER_PROPOSE_TOOL}\` tool with one rule per recurring \`garbage\` or \`safe\` directory. For each rule give \`path\`, \`maxAgeDays\`, \`keepLatest\`, and, in plain words for the user, \`deletes\` (what it deletes) and \`safeBecause\` (why that is safe: who owns it, how it comes back). The user sees a measured preview, accepts or rejects each rule in the Reaper tab, and turns accepted rules on; nothing is deleted before that.`,
         "6. If the tool refuses a rule, read the reason and either fix the path (target a subdirectory) or drop the rule. Then tell the user, in a short summary, which rules wait for them in the Reaper tab.",
       ]
     : [
@@ -43,6 +43,7 @@ export function buildStorageCleanupReviewPrompt(input: {
     "   - **Age**: when entries were last written (`find <dir> -maxdepth 1 -mtime +N`). Recent writes mean something still uses it.",
     "   - **Regenerability**: build caches, package caches, temp files, and leftovers of merged worktrees come back by themselves. Data, models you trained, and anything without a source do not.",
     "   - **Protection**: never propose a repo or worktree root (a directory with `.git`), version-control history, T3 Code or agent history, a live database, credentials, backups, or the user's own documents and data.",
+    "   - **Inside a checkout or under `/data`**: propose only build output (`target`, `node_modules`, `dist`, `build`, `.next`, `.turbo`, `.cache`, `out`, `coverage`, `__pycache__`, `.venv`) or tmp and cache directories. The tool refuses anything else there.",
     "3. Classify every notable consumer into exactly one bucket:",
     "   - **`garbage`**: dead caches, stale temp or build output, leftovers of merged worktrees.",
     "   - **`safe`**: reproducible artifacts that rebuild with small cost.",
