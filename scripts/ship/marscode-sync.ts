@@ -34,7 +34,11 @@ import {
   recordParitySkips,
   type DesktopHostStatus,
 } from "./marscode-sync-plan.ts";
-import { readFleetConfig, runFleetSync } from "./marscode-sync-fleet.ts";
+import {
+  formatFleetDryRunLines,
+  loadFleetHostsForSync,
+  runFleetSync,
+} from "./marscode-sync-fleet.ts";
 import type { FleetHostSyncRecord } from "./marscode-sync-fleet-config.ts";
 
 const DEFAULT_APP_IMAGE_NAME = "MarsCode-main.AppImage";
@@ -216,7 +220,12 @@ export function runSync(options: SyncCliOptions): void {
       }
     }
 
-    const fleetHosts = readFleetConfig(options.fleetConfigPath);
+    const fleetHosts = loadFleetHostsForSync({
+      configPath: options.fleetConfigPath,
+      skipFleet: options.skipFleet,
+      only: options.only,
+      warn: logErr,
+    });
     const plan = planSync({
       headSha,
       state,
@@ -249,14 +258,7 @@ export function runSync(options: SyncCliOptions): void {
           ? `build (${plan.appImage.reason}) -> ${appImagePath}`
           : `skip (${plan.appImage.reason}${plan.appImage.detail ? `: ${plan.appImage.detail}` : ""})`;
       log(`[dry-run] ${APP_IMAGE_TARGET_ID}: ${appDesc}`);
-      for (const entry of plan.fleet.hosts) {
-        const d = entry.decision;
-        const desc =
-          d.action === "build"
-            ? `sync (${d.reason})`
-            : `skip (${d.reason}${d.detail ? `: ${d.detail}` : ""})`;
-        log(`[dry-run] fleet ${entry.host.name} (${entry.host.kind}): ${desc}`);
-      }
+      for (const line of formatFleetDryRunLines(plan.fleet.hosts)) log(line);
       return;
     }
 

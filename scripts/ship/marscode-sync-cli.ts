@@ -43,7 +43,7 @@ export function formatUsage(): string {
     "  --skip-app            Skip desktop AppImage target",
     "  --skip-fleet          Skip fleet rollout to configured SSH hosts",
     "  --fleet-config FILE   Path to local fleet-deploy.json (default: <prefix>/lib/marscode/fleet-deploy.json)",
-    "  --only CSV            Comma-separated target IDs (e.g. ship-queue,app,fleet)",
+    "  --only CSV            Comma-separated target IDs (e.g. ship-queue,app,fleet,fleet-rollout,<host>)",
     "  --primary DIR         Primary git repository path",
     "  --data-root DIR       Persistent data/worktree root for sync-worktree, state, and lock",
     "  --target-sha SHA      Git commit or ref to sync (defaults to SHIP_QUEUE_BASE_SHA or HEAD)",
@@ -132,7 +132,7 @@ export function parseCliArgs(argv: ReadonlyArray<string>, cwd = process.cwd()): 
   let skipStage = false;
   let skipApp = false;
   let skipFleet = false;
-  let fleetConfigArg = process.env.MARSCODE_FLEET_CONFIG?.trim() || undefined;
+  let fleetConfigArg: string | undefined;
   let only: Set<string> | undefined;
   let primaryArg: string | undefined;
   let dataRootArg: string | undefined;

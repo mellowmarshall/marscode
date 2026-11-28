@@ -1,10 +1,16 @@
-// Builds the shared linux-x64 server archive once and rolls out MarsCode to configured SSH hosts.
+// Rolls out built MarsCode artifacts to configured SSH hosts with per-host failure isolation.
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- standalone post-merge script runs from the extracted step tree without Effect or node_modules (#81).
+import * as NodeChildProcess from "node:child_process";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- standalone post-merge script runs from the extracted step tree without Effect or node_modules (#81).
 import * as NodeFS from "node:fs";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- standalone post-merge script runs from the extracted step tree without Effect or node_modules (#81).
-import * as NodePath from "node:path";
 
 import {
+  ensureLinuxServerArchive,
+  readDesktopVersionAtSha,
+  utcDate,
+} from "./marscode-sync-fleet-build.ts";
+import {
+  FLEET_ROLLOUT_TARGET_ID,
   chooseFleetVersion,
   parseFleetConfig,
   type FleetArtifactRecord,
@@ -16,20 +22,24 @@ import {
   assertValidSha,
   assertValidVersion,
   buildLinuxActivateScript,
+  buildLinuxStageProbeScript,
   buildMacDeployScript,
-  remotePathExpr,
-  shellSingleQuote,
 } from "./marscode-sync-fleet-scripts.ts";
 import { runChecked, runCmd } from "./marscode-sync-install.ts";
 
-const RESOURCE_MONITOR_TARGET = "x86_64-unknown-linux-gnu";
-const SSH_COMMON_ARGS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"] as const;
-const RELEASE_PACKAGE_FILES = [
-  "apps/server/package.json",
-  "apps/desktop/package.json",
-  "apps/web/package.json",
-  "packages/contracts/package.json",
+const SSH_COMMON_ARGS = [
+  "-o",
+  "BatchMode=yes",
+  "-o",
+  "ConnectTimeout=5",
+  "-o",
+  "ServerAliveInterval=15",
+  "-o",
+  "ServerAliveCountMax=4",
 ] as const;
+const LINUX_SSH_TIMEOUT_MS = 5 * 60_000;
+const MAC_SSH_TIMEOUT_MS = 15 * 60_000;
+const SSH_MAX_BUFFER = 8 * 1024 * 1024;
 
 export type FleetHostOutcome =
   | { readonly status: "updated"; readonly version: string }
@@ -37,12 +47,61 @@ export type FleetHostOutcome =
   | { readonly status: "unreachable"; readonly detail: string }
   | { readonly status: "failed"; readonly detail: string };
 
+export interface CommandResult {
+  readonly status: number;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
 export interface CommandRunner {
-  readonly runCmd: typeof runCmd;
+  readonly runCmd: (
+    command: string,
+    args: ReadonlyArray<string>,
+    options: {
+      readonly cwd: string;
+      readonly env?: Readonly<Record<string, string | undefined>>;
+      readonly inheritStdio?: boolean;
+      readonly input?: string | undefined;
+      readonly timeoutMs?: number | undefined;
+    },
+  ) => CommandResult;
   readonly runChecked: typeof runChecked;
 }
 
-const DEFAULT_RUNNER: CommandRunner = { runCmd, runChecked };
+function runFleetCmd(
+  command: string,
+  args: ReadonlyArray<string>,
+  options: {
+    readonly cwd: string;
+    readonly env?: Readonly<Record<string, string | undefined>>;
+    readonly inheritStdio?: boolean;
+    readonly input?: string | undefined;
+    readonly timeoutMs?: number | undefined;
+  },
+): CommandResult {
+  if (options.input === undefined && options.timeoutMs === undefined) {
+    return runCmd(command, args, options);
+  }
+  const res = NodeChildProcess.spawnSync(command, [...args], {
+    cwd: options.cwd,
+    env: options.env ?? process.env,
+    encoding: "utf8",
+    input: options.input,
+    timeout: options.timeoutMs,
+    maxBuffer: SSH_MAX_BUFFER,
+    stdio: options.inheritStdio ? "inherit" : "pipe",
+  });
+  if (res.error) {
+    return { status: 1, stdout: res.stdout ?? "", stderr: res.error.message };
+  }
+  return {
+    status: res.status ?? 1,
+    stdout: res.stdout ?? "",
+    stderr: res.stderr ?? "",
+  };
+}
+
+const DEFAULT_RUNNER: CommandRunner = { runCmd: runFleetCmd, runChecked };
 
 /** Reads local fleet-deploy.json. Missing file is normal (returns []); bad JSON throws. */
 export function readFleetConfig(configPath: string): ReadonlyArray<FleetHostConfig> {
@@ -50,142 +109,39 @@ export function readFleetConfig(configPath: string): ReadonlyArray<FleetHostConf
   return parseFleetConfig(NodeFS.readFileSync(configPath, "utf8"));
 }
 
-function utcDate(): string {
-  // @effect-diagnostics-next-line globalDate:off -- standalone post-merge script has no Effect clock (#81).
-  return new Date().toISOString().slice(0, 10).replace(/-/g, "");
-}
-
-function readDesktopVersion(worktree: string): string {
-  const manifestPath = NodePath.join(worktree, "apps/desktop/package.json");
-  return (JSON.parse(NodeFS.readFileSync(manifestPath, "utf8")) as { version: string }).version;
-}
-
-/**
- * Builds and smoke-tests the linux-x64 standalone t3 archive once per commit and caches it under
- * `<dataRoot>/fleet-artifacts/<headSha>/` so deferred or offline hosts do not trigger rebuilds.
- */
-export function ensureLinuxServerArchive(input: {
-  readonly worktree: string;
-  readonly dataRoot: string;
-  readonly headSha: string;
-  readonly previousArtifact?: FleetArtifactRecord | undefined;
-  readonly env: Readonly<Record<string, string>>;
-  readonly log: (message: string) => void;
-  readonly date?: string | undefined;
-  readonly runner?: CommandRunner | undefined;
-}): FleetArtifactRecord {
-  const runner = input.runner ?? DEFAULT_RUNNER;
-  const sha = assertValidSha(input.headSha);
-  if (
-    input.previousArtifact?.sha === sha &&
-    NodeFS.existsSync(input.previousArtifact.archivePath)
-  ) {
-    input.log(
-      `marscode-sync: reusing cached linux-x64 archive ${input.previousArtifact.version} at ${sha.slice(0, 10)}`,
-    );
-    return input.previousArtifact;
-  }
-
-  const version = assertValidVersion(
-    chooseFleetVersion({
-      desktopVersion: readDesktopVersion(input.worktree),
-      previousVersion: input.previousArtifact?.version,
-      date: input.date ?? utcDate(),
-    }),
-  );
-
-  const artifactsRoot = NodePath.join(input.dataRoot, "fleet-artifacts");
-  const outDir = NodePath.join(artifactsRoot, sha);
-  const stagingDir = NodePath.join(artifactsRoot, `.staging-${sha}-${process.pid}`);
-  NodeFS.mkdirSync(stagingDir, { recursive: true });
-
-  const runInWorktree = (command: string, args: ReadonlyArray<string>) =>
-    runner.runChecked(command, args, { cwd: input.worktree, env: input.env, inheritStdio: true });
-
+/** Loads fleet hosts for a sync run; malformed config warns unless fleet was explicitly targeted. */
+export function loadFleetHostsForSync(input: {
+  readonly configPath: string;
+  readonly skipFleet: boolean;
+  readonly only?: ReadonlySet<string> | undefined;
+  readonly warn: (message: string) => void;
+}): ReadonlyArray<FleetHostConfig> {
+  if (input.skipFleet) return [];
   try {
-    try {
-      runInWorktree("node", ["scripts/update-release-package-versions.ts", version]);
-      runInWorktree("vp", ["run", "--filter", "t3", "build"]);
-      runInWorktree("node", [
-        "scripts/apply-web-brand-assets.ts",
-        "nightly",
-        "apps/server/dist/client",
-      ]);
-      runInWorktree("node", ["apps/server/scripts/cli.ts", "build-exe"]);
-      runInWorktree("cargo", [
-        "build",
-        "--locked",
-        "--release",
-        "--manifest-path",
-        "native/resource-monitor/Cargo.toml",
-        "--target",
-        RESOURCE_MONITOR_TARGET,
-      ]);
-      const monitorDir = NodePath.join(stagingDir, "resource-monitor");
-      NodeFS.mkdirSync(monitorDir, { recursive: true });
-      NodeFS.copyFileSync(
-        NodePath.join(
-          input.worktree,
-          "native/resource-monitor/target",
-          RESOURCE_MONITOR_TARGET,
-          "release/t3-resource-monitor",
-        ),
-        NodePath.join(monitorDir, "t3-resource-monitor"),
-      );
-      runInWorktree("node", [
-        "scripts/build-cli-archive.ts",
-        "--platform",
-        "linux",
-        "--arch",
-        "x64",
-        "--version",
-        version,
-        "--output-dir",
-        stagingDir,
-        "--resource-monitor-dir",
-        monitorDir,
-      ]);
-    } finally {
-      runner.runCmd("git", ["-C", input.worktree, "checkout", "--", ...RELEASE_PACKAGE_FILES], {
-        cwd: input.worktree,
-      });
-    }
-
-    const archiveName = `t3-${version}-linux-x64.tar.gz`;
-    const stagedArchive = NodePath.join(stagingDir, archiveName);
-    if (!NodeFS.existsSync(stagedArchive)) {
-      throw new Error(`marscode-sync: built archive missing at ${stagedArchive}`);
-    }
-    runInWorktree("node", [
-      "scripts/smoke-cli-archive.ts",
-      "--archive",
-      stagedArchive,
-      "--expect-version",
-      version,
-    ]);
-
-    NodeFS.rmSync(outDir, { recursive: true, force: true });
-    NodeFS.mkdirSync(outDir, { recursive: true });
-    const finalArchive = NodePath.join(outDir, archiveName);
-    NodeFS.renameSync(stagedArchive, finalArchive);
-
-    // Keep only the current commit's archive so fleet-artifacts never grows unbounded.
-    for (const entry of NodeFS.readdirSync(artifactsRoot)) {
-      if (entry !== sha && !entry.startsWith(".staging-")) {
-        NodeFS.rmSync(NodePath.join(artifactsRoot, entry), { recursive: true, force: true });
-      }
-    }
-
-    return { sha, version, archivePath: finalArchive };
-  } finally {
-    NodeFS.rmSync(stagingDir, { recursive: true, force: true });
+    return readFleetConfig(input.configPath);
+  } catch (err) {
+    const fleetOnly =
+      input.only !== undefined &&
+      (input.only.has("fleet") || input.only.has(FLEET_ROLLOUT_TARGET_ID));
+    if (fleetOnly) throw err;
+    input.warn(`marscode-sync: warning: ignoring invalid fleet config: ${String(err)}`);
+    return [];
   }
 }
 
-function parseRemoteOutcome(
-  res: { readonly status: number; readonly stdout: string; readonly stderr: string },
-  version: string,
-): FleetHostOutcome {
+export function formatFleetDryRunLines(
+  planned: ReadonlyArray<FleetHostPlan>,
+): ReadonlyArray<string> {
+  return planned.map(({ host, decision }) => {
+    const desc =
+      decision.action === "build"
+        ? `sync (${decision.reason})`
+        : `skip (${decision.reason}${decision.detail ? `: ${decision.detail}` : ""})`;
+    return `[dry-run] fleet ${host.name} (${host.kind}): ${desc}`;
+  });
+}
+
+function parseRemoteOutcome(res: CommandResult, version: string): FleetHostOutcome {
   if (res.status === 255) {
     return { status: "unreachable", detail: res.stderr.trim() || "ssh connection failed" };
   }
@@ -203,6 +159,23 @@ function parseRemoteOutcome(
   };
 }
 
+/** Runs a POSIX shell script on `sshTarget` via `sh -s` on stdin so non-POSIX login shells work. */
+function runRemotePosixScript(input: {
+  readonly runner: CommandRunner;
+  readonly sshTarget: string;
+  readonly script: string;
+  readonly cwd: string;
+  readonly env: Readonly<Record<string, string>>;
+  readonly timeoutMs: number;
+}): CommandResult {
+  return input.runner.runCmd("ssh", [...SSH_COMMON_ARGS, "--", input.sshTarget, "sh", "-s"], {
+    cwd: input.cwd,
+    env: input.env,
+    input: `${input.script}\n`,
+    timeoutMs: input.timeoutMs,
+  });
+}
+
 /** Stages a prebuilt linux-x64 archive over SSH/rsync and activates it if the host is idle. */
 export function deployLinuxServerHost(input: {
   readonly host: FleetHostConfig;
@@ -214,15 +187,15 @@ export function deployLinuxServerHost(input: {
   const runner = input.runner ?? DEFAULT_RUNNER;
   const t3Home = input.host.t3Home ?? "~/.t3";
   const version = assertValidVersion(input.artifact.version);
-  const probeScript = [
-    `T3_HOME=${remotePathExpr(t3Home)}`,
-    `TARGET="$T3_HOME/runtime/versions"/${shellSingleQuote(version)}`,
-    `if [ -x "$TARGET/t3" ] && [ "$(cat "$TARGET/.install-complete" 2>/dev/null || true)" = ${shellSingleQuote(version)} ]; then echo STAGED; else echo NEED_STAGE; fi`,
-  ].join("; ");
-
-  const probe = runner.runCmd("ssh", [...SSH_COMMON_ARGS, "--", input.host.ssh, probeScript], {
+  const headSha = assertValidSha(input.artifact.sha);
+  const probeScript = buildLinuxStageProbeScript({ version, headSha, t3Home });
+  const probe = runRemotePosixScript({
+    runner,
+    sshTarget: input.host.ssh,
+    script: probeScript,
     cwd: input.cwd,
     env: input.env,
+    timeoutMs: 30_000,
   });
   if (probe.status !== 0) {
     return probe.status === 255
@@ -243,7 +216,7 @@ export function deployLinuxServerHost(input: {
         input.artifact.archivePath,
         `${input.host.ssh}:${remoteArchivePath}`,
       ],
-      { cwd: input.cwd, env: input.env },
+      { cwd: input.cwd, env: input.env, timeoutMs: LINUX_SSH_TIMEOUT_MS },
     );
     if (copy.status !== 0) {
       return {
@@ -253,10 +226,14 @@ export function deployLinuxServerHost(input: {
     }
   }
 
-  const script = buildLinuxActivateScript({ version, t3Home, remoteArchivePath });
-  const activate = runner.runCmd("ssh", [...SSH_COMMON_ARGS, "--", input.host.ssh, script], {
+  const script = buildLinuxActivateScript({ version, headSha, t3Home, remoteArchivePath });
+  const activate = runRemotePosixScript({
+    runner,
+    sshTarget: input.host.ssh,
+    script,
     cwd: input.cwd,
     env: input.env,
+    timeoutMs: LINUX_SSH_TIMEOUT_MS,
   });
   return parseRemoteOutcome(activate, version);
 }
@@ -279,9 +256,13 @@ export function deployMacAppHost(input: {
     appPath: input.host.appPath ?? "/Applications/T3 Code (Nightly).app",
     t3Home: input.host.t3Home ?? "~/.t3",
   });
-  const res = runner.runCmd("ssh", [...SSH_COMMON_ARGS, "--", input.host.ssh, script], {
+  const res = runRemotePosixScript({
+    runner,
+    sshTarget: input.host.ssh,
+    script,
     cwd: input.cwd,
     env: input.env,
+    timeoutMs: MAC_SSH_TIMEOUT_MS,
   });
   return parseRemoteOutcome(res, input.version);
 }
@@ -303,12 +284,14 @@ export function runFleetSync(input: {
   readonly date?: string | undefined;
   readonly runner?: CommandRunner | undefined;
 }): void {
+  const runner = input.runner ?? DEFAULT_RUNNER;
   const toSync = input.planned.filter((entry) => entry.decision.action === "build");
   if (toSync.length === 0) return;
 
   let linuxArtifact: FleetArtifactRecord | undefined;
   if (input.needsLinuxBuild) {
     linuxArtifact = ensureLinuxServerArchive({
+      primary: input.primary,
       worktree: input.worktree,
       dataRoot: input.dataRoot,
       headSha: input.headSha,
@@ -316,47 +299,58 @@ export function runFleetSync(input: {
       env: input.env,
       log: input.log,
       date: input.date,
-      runner: input.runner,
+      runner,
     });
     input.onArtifactBuilt(linuxArtifact);
   }
 
-  const versionRoot = NodeFS.existsSync(NodePath.join(input.worktree, "apps/desktop/package.json"))
-    ? input.worktree
-    : input.primary;
   const macVersion =
     linuxArtifact?.version ??
     chooseFleetVersion({
-      desktopVersion: readDesktopVersion(versionRoot),
+      desktopVersion: readDesktopVersionAtSha({
+        primary: input.primary,
+        worktree: input.worktree,
+        headSha: input.headSha,
+        runner,
+      }),
       previousVersion: input.previousArtifact?.version,
       date: input.date ?? utcDate(),
     });
   const sshCwd = NodeFS.existsSync(input.worktree) ? input.worktree : input.primary;
 
   for (const { host } of toSync) {
-    const outcome =
-      host.kind === "linux-x64-server"
-        ? deployLinuxServerHost({
-            host,
-            artifact: linuxArtifact!,
-            cwd: sshCwd,
-            env: input.env,
-            runner: input.runner,
-          })
-        : deployMacAppHost({
-            host,
-            headSha: input.headSha,
-            version: macVersion,
-            cwd: sshCwd,
-            env: input.env,
-            runner: input.runner,
-          });
+    let outcome: FleetHostOutcome;
+    try {
+      outcome =
+        host.kind === "linux-x64-server"
+          ? deployLinuxServerHost({
+              host,
+              artifact: linuxArtifact!,
+              cwd: sshCwd,
+              env: input.env,
+              runner,
+            })
+          : deployMacAppHost({
+              host,
+              headSha: input.headSha,
+              version: macVersion,
+              cwd: sshCwd,
+              env: input.env,
+              runner,
+            });
+    } catch (err) {
+      outcome = {
+        status: "failed",
+        detail: err instanceof Error ? err.message : String(err),
+      };
+    }
 
     if (outcome.status === "updated") {
       input.onHostSynced(host.name, { sha: input.headSha, version: outcome.version });
       input.log(`marscode-sync: fleet ${host.name} (${host.kind}): updated to ${outcome.version}`);
     } else if (outcome.status === "deferred") {
-      input.log(
+      const emit = outcome.reason === "sync_locked" ? input.warn : input.log;
+      emit(
         `marscode-sync: fleet ${host.name} (${host.kind}): staged; deferred (${outcome.reason})`,
       );
     } else if (outcome.status === "unreachable") {
