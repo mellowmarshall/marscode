@@ -25,7 +25,7 @@ import {
 } from "./signing.ts";
 
 describe("@t3tools/guard-protocol", () => {
-  it("computes deterministic bundle keys insensitive to gate/path order and sensitive to protected diff changes", () => {
+  it("keys an approval on the repository and branch: one approval covers the pull request", () => {
     const diffA = canonicalProtectedDiffSha256(
       "diff --git a/host-guards/exceptions.json\n+marscode",
     );
@@ -65,7 +65,22 @@ describe("@t3tools/guard-protocol", () => {
     });
 
     expect(key1).toBe(key2);
-    expect(keyChanged).not.toBe(key1);
+    // A later change to the protected files on the same branch keeps the approval.
+    expect(keyChanged).toBe(key1);
+    const base = {
+      repo: "example-org/example-repo",
+      branch: "issue-1352",
+      prOrIssue: "#1352",
+      guard: "ship-queue",
+      gateIds: ["allowlist"],
+      protectedPaths: [".gitleaks.toml"],
+      protectedDiffSha256: diffA,
+      bodySha256: "",
+    };
+    // Every guard shares it; another branch or repository does not.
+    expect(computeBundleKey({ ...base, guard: "playbook" })).toBe(key1);
+    expect(computeBundleKey({ ...base, branch: "issue-1353" })).not.toBe(key1);
+    expect(computeBundleKey({ ...base, repo: "example-org/other-repo" })).not.toBe(key1);
   });
 
   it("forces whole-commit gates (no-review, unproven, ci-run-judge) to be non-bundle-eligible", () => {

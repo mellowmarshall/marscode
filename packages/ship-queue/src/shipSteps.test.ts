@@ -320,6 +320,8 @@ describe("declared merge and routing waits", () => {
     const job = readJob(fx.root, id)!;
     expect(job).toMatchObject({ state: "done", merge_exit: 0 });
     expect(consumed).toEqual([true]);
+    // The job never waited for the owner: it found the pull request's earlier approval.
+    expect(fx.markers(id)).toContain("protected diff approval reused: infra/x.txt");
     expect(fx.ciRuns()).toBe(2);
     expect(fx.merged).toEqual([]);
     const calls = NodeFS.readFileSync(fx.stateFile("merge-calls"), "utf8").trim().split("\n");

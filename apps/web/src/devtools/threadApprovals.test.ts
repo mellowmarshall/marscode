@@ -423,7 +423,7 @@ describe("threadApprovals unified approval subroutine", () => {
     markRepoDepsDeciding(envId, "example-repo", depScanKey(hold));
   });
 
-  it("renders bundled protected-diff approvals with Approve for this diff and sends scope=bundle, while whole-commit gates stay Approve once", async () => {
+  it("renders bundled protected-diff approvals with Approve for this PR and sends scope=bundle, while whole-commit gates stay Approve once", async () => {
     const fetchSpy = vi
       .spyOn(devtoolsClient, "fetchDevtoolsJson")
       .mockResolvedValue({ ok: true, status: 200, data: { ok: true } });
@@ -473,7 +473,7 @@ describe("threadApprovals unified approval subroutine", () => {
     expect(entries[0]?.approval.detail).toContain("Gates: allowlist");
     expect(entries[0]?.approval.detail).toContain("Protected files: host-guards/exceptions.json");
     expect(entries[0]?.approval.options?.find((o) => o.decision === "accept")?.label).toBe(
-      "Approve for this diff",
+      "Approve for this PR",
     );
     expect(entries[1]?.approval.detail).toContain("Whole-commit gate (no-review)");
     expect(entries[1]?.approval.options?.find((o) => o.decision === "accept")?.label).toBe(

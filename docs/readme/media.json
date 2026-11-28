@@ -87,7 +87,7 @@
       "apps/web/src/components/ui/*.tsx",
       "apps/web/test/readme/readmeMediaCapture.tsx"
     ],
-    "hash": "8b9f78819e7a5603"
+    "hash": "0ee2d690b2c1f448"
   },
   "approval-glow.gif": {
     "sources": [
@@ -102,7 +102,7 @@
       "apps/web/src/components/ui/*.tsx",
       "apps/web/test/readme/readmeMediaCapture.tsx"
     ],
-    "hash": "8b9f78819e7a5603"
+    "hash": "0ee2d690b2c1f448"
   },
   "permission-key.webp": {
     "sources": [
@@ -117,7 +117,7 @@
       "apps/web/src/components/ui/*.tsx",
       "apps/web/test/readme/readmeMediaCapture.tsx"
     ],
-    "hash": "8b9f78819e7a5603"
+    "hash": "0ee2d690b2c1f448"
   },
   "fleet-icon.webp": {
     "sources": [
@@ -167,7 +167,7 @@
       "apps/web/src/components/ui/*.tsx",
       "apps/web/test/readme/readmeMediaCapture.tsx"
     ],
-    "hash": "b7804b60439e53cb"
+    "hash": "fd189c2671ce9a48"
   },
   "ship-steps.webp": {
     "sources": [
