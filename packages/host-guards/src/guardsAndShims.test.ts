@@ -980,6 +980,55 @@ exit ${REFUSED_EXIT_CODE}
     expect(NodeFS.lstatSync(keptFly).isSymbolicLink()).toBe(false);
   });
 
+  it("keeps git working when the first git on PATH is an outside link to the binary at its shim destination", () => {
+    const tmpRoot = NodeFS.existsSync("/tmp") ? "/tmp" : NodeOS.tmpdir();
+    const root = NodeFS.mkdtempSync(NodePath.join(tmpRoot, "hg-extlink-"));
+    tempDirs.push(root);
+    const fakeHome = NodePath.join(root, "home");
+    const prefix = NodePath.join(fakeHome, ".local");
+    const binGit = NodePath.join(prefix, "bin", "git");
+    const outside = NodePath.join(root, "outside-bin");
+    NodeFS.mkdirSync(NodePath.join(prefix, "bin"), { recursive: true });
+    NodeFS.mkdirSync(outside, { recursive: true });
+    // The real git lives at the shim destination, and an outside directory first on PATH links to it.
+    NodeFS.writeFileSync(binGit, '#!/bin/sh\necho "own git $*"\n', { mode: 0o755 });
+    NodeFS.symlinkSync(binGit, NodePath.join(outside, "git"));
+    const env = {
+      ...process.env,
+      HOME: fakeHome,
+      PATH: `${outside}:${prefix}/bin:/usr/bin:/bin`,
+      HOST_GUARDS_BUNDLE: buildGuardBundle(),
+    };
+    for (const pass of [1, 2]) {
+      const res = NodeChildProcess.spawnSync(
+        "bash",
+        [
+          NodePath.join(PKG_ROOT, "scripts", "install.sh"),
+          "--prefix",
+          prefix,
+          "--org",
+          "example-org",
+          "--real-node",
+          process.execPath,
+        ],
+        { env, encoding: "utf8" },
+      );
+      expect(res.status, `install ${pass}: ${res.stderr}`).toBe(0);
+      // Through the shim and through the outside link, git still reaches the real binary.
+      for (const git of [binGit, NodePath.join(outside, "git")]) {
+        const run = NodeChildProcess.spawnSync(git, ["--version"], { env, encoding: "utf8" });
+        expect(run.status, `${git} after install ${pass}: ${run.stderr}`).toBe(0);
+        expect(run.stdout).toContain("own git --version");
+      }
+    }
+    const config = JSON.parse(
+      NodeFS.readFileSync(NodePath.join(prefix, "lib", "marscode", "host-guards.json"), "utf8"),
+    ) as { realGit: string };
+    expect(config.realGit).toBe(
+      NodePath.join(prefix, "lib", "marscode", "host-guards", "real", "git"),
+    );
+  });
+
   it("refuses an install whose existing guard config names other roots than the host's", () => {
     const tmpRoot = NodeFS.existsSync("/tmp") ? "/tmp" : NodeOS.tmpdir();
     const root = NodeFS.mkdtempSync(NodePath.join(tmpRoot, "hg-roots-"));

@@ -120,12 +120,34 @@ replace_kept() {
 # Destinations whose binary this run kept (atomic_render_shim keeps any other one aside).
 KEPT_SOURCES=" "
 
+# The first shim destination on PATH a link chain passes through (followed up to 16 links), if
+# any. A link elsewhere (/usr/local/bin/git -> $BIN_DIR/git) is then really that destination,
+# whose file a shim is about to replace.
+shim_dest_in_chain() {
+  local path="$1" hops=0 next=""
+  while [ "$hops" -lt 16 ]; do
+    if is_shim_dest "$path"; then
+      printf '%s\n' "$path"
+      return 0
+    fi
+    [ -L "$path" ] || return 0
+    next="$(readlink "$path")"
+    case "$next" in /*) ;; *) next="$(phys_dir "$path")/$next" ;; esac
+    path="$next"
+    hops=$((hops + 1))
+  done
+}
+
 # KEPT_REAL is the result install.sh reads after each call.
 # shellcheck disable=SC2034
 keep_real() {
-  local real="$1" kept="" target=""
+  local real="$1" kept="" target="" via=""
   KEPT_REAL="$real"
-  [ -n "$real" ] && is_shim_dest "$real" || return 0
+  [ -n "$real" ] || return 0
+  # A real binary reached through a link to a shim destination is kept like one found there.
+  via="$(shim_dest_in_chain "$real")"
+  [ -n "$via" ] && real="$via"
+  is_shim_dest "$real" || return 0
   if is_guard_shim "$real"; then
     printf 'install.sh: fatal: %s is where a shim is written, not a real binary\n' "$real" >&2
     exit 1
