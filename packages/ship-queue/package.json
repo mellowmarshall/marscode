@@ -26,6 +26,10 @@
       "types": "./src/cli.ts",
       "import": "./src/cli.ts"
     },
+    "./cliSubcommands": {
+      "types": "./src/cliSubcommands.ts",
+      "import": "./src/cliSubcommands.ts"
+    },
     "./declaration": {
       "types": "./src/declaration.ts",
       "import": "./src/declaration.ts"
@@ -66,9 +70,17 @@
       "types": "./src/houseGate.ts",
       "import": "./src/houseGate.ts"
     },
+    "./ciToggleAudit": {
+      "types": "./src/ciToggleAudit.ts",
+      "import": "./src/ciToggleAudit.ts"
+    },
     "./hostProbe": {
       "types": "./src/hostProbe.ts",
       "import": "./src/hostProbe.ts"
+    },
+    "./hostsToggle": {
+      "types": "./src/hostsToggle.ts",
+      "import": "./src/hostsToggle.ts"
     },
     "./hostProvision": {
       "types": "./src/hostProvision.ts",

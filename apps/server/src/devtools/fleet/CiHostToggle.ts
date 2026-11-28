@@ -1,14 +1,13 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off - The Fleet CI on/off policy: confirm a turn-on that removes a reasoned `.off` marker, and audit every request.
 import { isSafeHostName } from "@t3tools/ship-queue/ciHosts";
 import { readHostOffState, setCiHostAvailability } from "@t3tools/ship-queue/hostProbe";
-
 import {
   appendCiToggleAudit,
-  cleanAuditLabel,
   type CiToggleOffRecord,
   type CiToggleOutcome,
-  type CiToggleRequest,
-} from "./CiToggleAudit.ts";
+} from "@t3tools/ship-queue/ciToggleAudit";
+
+import { cleanAuditLabel, type CiToggleRequest } from "./CiToggleAudit.ts";
 
 export interface CiHostToggleResult {
   readonly ok: boolean;

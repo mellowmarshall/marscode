@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { isHostOff, setCiHostAvailability } from "@t3tools/ship-queue/hostProbe";
 
-import { ciToggleAuditPath, readCiToggleAudit } from "./CiToggleAudit.ts";
+import { ciToggleAuditPath } from "@t3tools/ship-queue/ciToggleAudit";
+
+import { readCiToggleAudit } from "./CiToggleAudit.ts";
 import { handleNativeFleetRequest } from "./FleetRoutes.ts";
 import { NativeCiHosts } from "./NativeCiHosts.ts";
 import { NativeFleetService } from "./NativeFleetService.ts";
