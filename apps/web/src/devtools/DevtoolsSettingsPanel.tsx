@@ -846,7 +846,7 @@ function DevtoolsSettingsPanelInner() {
               <RoleModelCard
                 title={gt("Ship Queue Adversarial Review")}
                 description={gt(
-                  "Default code reviewer model and usage-aware fallback exposed to agents via orchestrator_capabilities and ship-queue review-model before submitting to Ship Queue.",
+                  "Default code reviewer model and usage-aware fallback exposed to agents via orchestrator_capabilities before submitting to Ship Queue.",
                 )}
                 roleConfig={draft.ship_queue_review}
                 resolved={payload?.resolved.shipQueueReview ?? null}

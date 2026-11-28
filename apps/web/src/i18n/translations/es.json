@@ -2973,7 +2973,7 @@
   "6ebcb03109222cca": "Playbook Challenge",
   "160e768947acc6f2": "Strictly evaluates changes against PLAYBOOK.md via direct headless CLI (codex, claude, agy, grok). Falls back automatically when remaining usage drops below threshold or on quota errors.",
   "1518d6bdec083972": "Ship Queue Adversarial Review",
-  "f4414b712e486f79": "Default code reviewer model and usage-aware fallback exposed to agents via orchestrator_capabilities and ship-queue review-model before submitting to Ship Queue.",
+  "b02ebb1b4711d58f": "Default code reviewer model and usage-aware fallback exposed to agents via orchestrator_capabilities before submitting to Ship Queue.",
   "d40d6fb9ef5907dd": "Host guards",
   "a0ed629f01b58683": "Active approvals, alerts & audit",
   "20bd64aac66b73e2": "Manage active guard bundles, 24-hour password access, host-guard notifications, and audit history in Security & approvals.",
