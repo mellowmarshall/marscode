@@ -4,9 +4,14 @@ import * as NodePath from "node:path";
 import { combinedOutput, runCiSteps } from "./ciSteps.ts";
 import type { ShipDeclaration } from "./declaration.ts";
 import { failureExcerpt } from "./failureExcerpt.ts";
-import { gitOut } from "./gitQueries.ts";
+import { checkoutIsPinned, passKey } from "./gitQueries.ts";
 import { appendLog, jobDir, updateJob } from "./jobStore.ts";
-import { CI_TIMEOUT_MS, prepareStepTree, removeStepTree } from "./shipSteps.ts";
+import {
+  CI_TIMEOUT_MS,
+  declaredInstallSteps,
+  prepareStepTree,
+  removeStepTree,
+} from "./shipSteps.ts";
 import { shouldWithholdSecretsForStage } from "./stepRunner.ts";
 import type { JobRecord, ShipQueueDeps, StepTiming } from "./types.ts";
 
@@ -36,12 +41,11 @@ export async function runMergeGate(
   const cmdline = decl.mergeGate.trim();
   if (!cmdline) return { kind: "pass" };
   const log = (text: string) => appendLog(deps.root, job.id, text);
-  if (job.gate_tip === rebase.head) {
+  if (job.gate_tip === passKey(rebase)) {
     log(`merge gate passed on ${rebase.head.slice(0, 12)} already`);
     return { kind: "pass" };
   }
-  const headIsTip = async () =>
-    (await gitOut(deps.run, job.worktree, ["rev-parse", "HEAD"])) === rebase.head;
+  const headIsTip = () => checkoutIsPinned(deps.run, job.worktree, rebase.head);
   if (!(await headIsTip())) return { kind: "fail", reason: `head_moved_during_ci pr=${pr}` };
   const prepared = await prepareStepTree(deps, job, decl, rebase, {
     dataRoot: process.env.SHIP_QUEUE_DATA_ROOT?.trim() ?? "",
@@ -58,7 +62,9 @@ export async function runMergeGate(
       job,
       decl,
       ctx: prepared.ctx,
+      // A remote gate gets a fresh worktree: the declared install prepares it first.
       steps: [
+        ...declaredInstallSteps(decl),
         { name: "ship_merge_gate", cmdline, withholdSecrets: withhold, timeoutMs: CI_TIMEOUT_MS },
       ],
       remoteAllowed: true,
@@ -68,7 +74,10 @@ export async function runMergeGate(
     if (gate.kind === "wait") return { kind: "wait" };
     if (gate.kind === "cancelled") return { kind: "fail", reason: "cancelled" };
     if (gate.kind === "fail") {
-      if (!gate.failed) return { kind: "fail", reason: gate.reason };
+      if (!gate.failed || gate.failed.name !== "ship_merge_gate") {
+        if (gate.failed) log(failureExcerpt(combinedOutput(gate.failed.res)));
+        return { kind: "fail", reason: gate.reason };
+      }
       log(failureExcerpt(combinedOutput(gate.failed.res)));
       return {
         kind: "fail",
@@ -82,6 +91,6 @@ export async function runMergeGate(
     removeStepTree(deps.root, job.id);
   }
   if (!(await headIsTip())) return { kind: "fail", reason: `head_moved_during_ci pr=${pr}` };
-  updateJob(deps.root, job.id, { gate_tip: rebase.head });
+  updateJob(deps.root, job.id, { gate_tip: passKey(rebase) });
   return { kind: "pass" };
 }

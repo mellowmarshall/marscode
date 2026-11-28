@@ -7,7 +7,7 @@ import type { RemoteStep } from "./ciRemote.ts";
 import { parseShipDeclaration, type ShipDeclaration } from "./declaration.ts";
 import { extractBaseStepTree } from "./declarationValidation.ts";
 import { failureExcerpt } from "./failureExcerpt.ts";
-import { git, gitOut } from "./gitQueries.ts";
+import { checkoutIsPinned, git, gitOut, passKey } from "./gitQueries.ts";
 import { planPrePush, prePushStep } from "./prePushCi.ts";
 import { appendLog, jobBodyPath, jobDir, mark, updateJob } from "./jobStore.ts";
 import { runLocalStep, type StepJobContext } from "./stepRunner.ts";
@@ -92,6 +92,13 @@ export function removeStepTree(root: string, id: string): void {
   NodeFS.rmSync(stepTreePath(root, id), { recursive: true, force: true });
 }
 
+/** The declared `ship_install`, which every worktree that runs CI or the merge gate needs first. */
+export function declaredInstallSteps(decl: ShipDeclaration): RemoteStep[] {
+  const cmdline = decl.install.trim();
+  if (!cmdline) return [];
+  return [{ name: "ship_install", cmdline, withholdSecrets: true, timeoutMs: INSTALL_TIMEOUT_MS }];
+}
+
 /**
  * Runs the declared `ship_body_check`, `ship_install`, and `ship_ci` against the rebased head,
  * install and CI on the host routing picks, then the push's pre-push hook here (the CI of a
@@ -108,16 +115,7 @@ export async function runDeclaredSteps(
   const prePush = decl.ci.trim() === "pre-push";
   const ciCmd = prePush ? "" : decl.ci.trim();
   const ciSteps: RemoteStep[] = [
-    ...(decl.install.trim()
-      ? [
-          {
-            name: "ship_install",
-            cmdline: decl.install.trim(),
-            withholdSecrets: true,
-            timeoutMs: INSTALL_TIMEOUT_MS,
-          },
-        ]
-      : []),
+    ...declaredInstallSteps(decl),
     ...(ciCmd
       ? [{ name: "ship_ci", cmdline: ciCmd, withholdSecrets: false, timeoutMs: CI_TIMEOUT_MS }]
       : []),
@@ -127,7 +125,7 @@ export async function runDeclaredSteps(
   // A pass counts for the hook only when the hook ran in it (`steps_hook_tip`).
   if (
     job.steps_tip === rebase.head &&
-    (hook.kind === "none" || job.steps_hook_tip === rebase.head)
+    (hook.kind === "none" || job.steps_hook_tip === passKey(rebase))
   ) {
     log(`declared steps passed on ${rebase.head.slice(0, 12)} already`);
     return { kind: "pass" };
@@ -197,6 +195,10 @@ export async function runDeclaredSteps(
       if (stopped) return stopped;
     }
     if (hook.kind === "hook") {
+      // Install ran here: the hook judges the pinned commit only, never files install rewrote.
+      if (!(await checkoutIsPinned(deps.run, job.worktree, rebase.head))) {
+        return { kind: "fail", reason: "checkout_changed_before_hook" };
+      }
       const step = await prePushStep({
         run: deps.run,
         job,
@@ -211,10 +213,10 @@ export async function runDeclaredSteps(
       const stopped = await runSteps([step.step], false, ciSteps.length > 0);
       if (stopped) return stopped;
       // The hook judged the checkout: it counts only while that is still the tip the queue pushes.
-      if ((await gitOut(deps.run, job.worktree, ["rev-parse", "HEAD"])) !== rebase.head) {
+      if (!(await checkoutIsPinned(deps.run, job.worktree, rebase.head))) {
         return { kind: "fail", reason: "head_moved_during_ci" };
       }
-      updateJob(deps.root, job.id, { steps_hook_tip: rebase.head });
+      updateJob(deps.root, job.id, { steps_hook_tip: passKey(rebase) });
     }
     return passed(deps, job, rebase.head);
   } finally {

@@ -273,6 +273,26 @@ describe("pre-push CI", () => {
     expect(fx.prs.size).toBe(0);
   });
 
+  it("fails before the hook when install rewrites a tracked file", async () => {
+    const fx = makeFixture({ declaration: PRE_PUSH_DECL });
+    const steps = NodePath.join(fx.primary, "scripts", "ship", "steps.sh");
+    const dirtying = NodeFS.readFileSync(steps, "utf8").replace(
+      'install) echo "install ok"; names ;;',
+      'install) echo "install ok"; echo rewritten >> README.md; names ;;',
+    );
+    addToBase(fx, {
+      ".githooks/pre-push": { text: PRE_PUSH_HOOK, mode: 0o755 },
+      "scripts/ship/steps.sh": { text: dirtying, mode: 0o755 },
+    });
+    const wt = fx.worktree("feat/119-dirty", { "d.txt": "d\n" });
+    const id = await fx.submit(wt, "feat/119-dirty");
+
+    expect(await runJob(fx.deps, id)).toBe("ended");
+    expect(readJob(fx.root, id)?.reason).toBe("checkout_changed_before_hook");
+    expect(NodeFS.existsSync(fx.stateFile("prepush-calls"))).toBe(false);
+    expect(fx.prs.size).toBe(0);
+  });
+
   it("runs the hook on resume when the earlier pass at this head did not include it", async () => {
     const fx = makeFixture({ declaration: PRE_PUSH_DECL });
     addToBase(fx, { ".githooks/pre-push": { text: PRE_PUSH_HOOK, mode: 0o755 } });
@@ -355,12 +375,15 @@ describe("ship_merge_gate", () => {
 
       expect(await runJob(fx.deps, id)).toBe("ended");
       const job = readJob(fx.root, id)!;
-      expect(job).toMatchObject({ state: "done", merge_exit: 0, gate_tip: job.pushed_sha });
+      expect(job).toMatchObject({ state: "done", merge_exit: 0 });
+      expect(job.gate_tip?.endsWith(` ${job.pushed_sha}`)).toBe(true);
       expect(fx.merged).toEqual([1]);
+      // The gate's worktree gets the declared install first (a remote gate's is fresh).
       expect(job.steps?.map((s) => s.name)).toEqual([
         "ship_body_check",
         "ship_install",
         "ship_ci",
+        "ship_install",
         "ship_merge_gate",
       ]);
       expect(NodeFS.readFileSync(fx.stateFile("gate-calls"), "utf8")).toBe(
@@ -405,10 +428,34 @@ describe("ship_merge_gate", () => {
     addToBase(moved, { "other.txt": { text: "other\n" } });
     expect(await runJob(moved.deps, id2)).toBe("ended");
     const job = readJob(moved.root, id2)!;
-    expect(job).toMatchObject({ state: "done", merge_exit: 0, gate_tip: job.pushed_sha });
+    expect(job).toMatchObject({ state: "done", merge_exit: 0 });
+    expect(job.gate_tip?.endsWith(` ${job.pushed_sha}`)).toBe(true);
     const tips = gateTips(moved);
     expect(tips).toHaveLength(2);
     expect(tips[0]).not.toBe(tips[1]);
     expect(tips[1]).toBe(`1 ${job.pushed_sha} ${job.pushed_sha}`);
+  });
+  it("runs the gate again when the base moves but the head stays the same", async () => {
+    const fx = makeFixture({
+      declaration:
+        "ship_merge=scripts/ship/steps.sh merge\nship_merge_gate=scripts/ship/steps.sh gate\n",
+    });
+    const wt = fx.worktree("feat/119-gate-base", { "a.txt": "a\n" });
+    const first = sh(wt, ["rev-parse", "HEAD"]).trim();
+    NodeFS.writeFileSync(NodePath.join(wt, "b.txt"), "b\n");
+    sh(wt, ["add", "b.txt"]);
+    sh(wt, ["commit", "-q", "-m", "second"]);
+    const id = await fx.submit(wt, "feat/119-gate-base");
+    expect(await runJob(fx.deps, id)).toBe("blocked");
+    // The base fast-forwards to the PR's own first commit: rebasing keeps the head, the base moves.
+    sh(wt, ["push", "-q", "origin", `${first}:refs/heads/main`]);
+    expect(await runJob(fx.deps, id)).toBe("ended");
+
+    const job = readJob(fx.root, id)!;
+    expect(job.state).toBe("done");
+    const calls = NodeFS.readFileSync(fx.stateFile("gate-calls"), "utf8").trim().split("\n");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toBe(calls[1]);
+    expect(job.gate_tip).toBe(`${first} ${job.pushed_sha}`);
   });
 });
