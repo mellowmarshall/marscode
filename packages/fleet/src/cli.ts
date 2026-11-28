@@ -15,7 +15,7 @@ import {
   queryEntities,
 } from "./fleetEntities.ts";
 import { FLEET_LOCATIONS, findFleetDeclaration, findRepoRoot } from "./fleetLocate.ts";
-import { renderCheck, renderDashboard, renderEntity } from "./fleetRender.ts";
+import { pythonJsonDumps, renderCheck, renderDashboard, renderEntity } from "./fleetRender.ts";
 
 export const HELP = `fleet: Infrastructure and fleet declaration query, validation, and onboarding engine.
 
@@ -127,12 +127,12 @@ function lookup(
   io: FleetCliIo,
 ): number {
   if (!q.query && !q.kind) {
-    io.out(`${q.json ? JSON.stringify(entities, null, 2) : renderDashboard(entities, file)}\n`);
+    io.out(`${q.json ? pythonJsonDumps(entities) : renderDashboard(entities, file)}\n`);
     return 0;
   }
   const results = queryEntities(entities, q.query, q.kind);
   if (q.json) {
-    io.out(`${JSON.stringify(results, null, 2)}\n`);
+    io.out(`${pythonJsonDumps(results)}\n`);
     return 0;
   }
   if (results.length === 0) {

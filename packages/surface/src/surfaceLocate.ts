@@ -42,15 +42,11 @@ export function findRepoRoot(cwd: string): string | null {
   return res.status === 0 && res.stdout.trim() ? res.stdout.trim() : null;
 }
 
-/** `key=value` lines of the repo's .tree-guard.conf. */
-export function readTreeGuardConf(repoRoot: string): Map<string, string> {
+export const TREE_GUARD = ".tree-guard.conf";
+
+/** `key=value` lines of a .tree-guard.conf text; a repeated key keeps its last value. */
+export function parseTreeGuardConf(text: string): Map<string, string> {
   const conf = new Map<string, string>();
-  let text: string;
-  try {
-    text = NodeFS.readFileSync(NodePath.join(repoRoot, ".tree-guard.conf"), "utf8");
-  } catch {
-    return conf;
-  }
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     const eq = line.indexOf("=");
@@ -58,6 +54,15 @@ export function readTreeGuardConf(repoRoot: string): Map<string, string> {
     conf.set(line.slice(0, eq).trim(), line.slice(eq + 1).trim());
   }
   return conf;
+}
+
+/** `key=value` lines of the repo's .tree-guard.conf. */
+export function readTreeGuardConf(repoRoot: string): Map<string, string> {
+  try {
+    return parseTreeGuardConf(NodeFS.readFileSync(NodePath.join(repoRoot, TREE_GUARD), "utf8"));
+  } catch {
+    return new Map();
+  }
 }
 
 export function readDeclaration(repoRoot: string): Json {

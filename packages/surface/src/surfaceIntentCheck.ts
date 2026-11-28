@@ -8,6 +8,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import { resolveCommit } from "./surfaceBase.ts";
 import { type ContractChange, contractDiff } from "./surfaceIntentItems.ts";
 import { describe, judgeIntent } from "./surfaceIntentJudge.ts";
 import { type ContractName, declaredContracts, findContractPath } from "./surfaceLocate.ts";
@@ -30,9 +31,7 @@ function git(root: string, args: ReadonlyArray<string>): { status: number | null
 
 /** A file's text at a commit; null when the commit lacks it. Throws on a commit that does not exist. */
 export function showAt(root: string, ref: string, path: string): string | null {
-  if (git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).status !== 0) {
-    throw new Error(`${ref} is not a commit`);
-  }
+  if (resolveCommit(root, ref) === null) throw new Error(`${ref} is not a commit here`);
   const res = git(root, ["show", `${ref}:${path}`]);
   return res.status === 0 ? res.stdout : null;
 }
@@ -55,20 +54,48 @@ export function mergeBase(root: string, base: string): string | null {
   return res.status === 0 && res.stdout.trim() ? res.stdout.trim() : null;
 }
 
-/** The first of origin/main, origin/master, main, master that exists. */
-export function defaultBase(root: string): string | null {
-  for (const ref of ["origin/main", "origin/master", "main", "master"]) {
-    if (git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).status === 0) return ref;
-  }
-  return null;
-}
-
 /** The contract files to judge: the ones playbook.json declares, else the surface file found. */
 export function intentFiles(root: string): Partial<Record<ContractName, string>> {
   const declared = declaredContracts(root);
   if (Object.keys(declared).length > 0) return declared;
   const found = findContractPath(root);
   return found ? { surface: NodePath.relative(root, found) } : {};
+}
+
+/** One contract file at the base commit and in the working tree. */
+export interface ContractSide {
+  readonly contract: ContractName;
+  readonly before: Json;
+  readonly after: Json;
+  /** The file is new on the branch. */
+  readonly fresh: boolean;
+}
+
+/** Each contract file at the base commit and in the working tree; a file that cannot be compared is an error. */
+export function contractSides(
+  root: string,
+  files: Partial<Record<ContractName, string>>,
+  base: string,
+): { readonly sides: ContractSide[]; readonly errors: string[] } {
+  const sides: ContractSide[] = [];
+  const errors: string[] = [];
+  for (const [contract, path] of Object.entries(files) as Array<[ContractName, string]>) {
+    let beforeText: string | null;
+    try {
+      beforeText = showAt(root, base, path);
+    } catch (error) {
+      errors.push((error as Error).message);
+      continue;
+    }
+    try {
+      const before = parseObject(beforeText);
+      const after = parseObject(readText(root, path));
+      sides.push({ contract, before, after, fresh: beforeText === null });
+    } catch (error) {
+      errors.push(`${path} is not valid JSON: ${(error as Error).message}`);
+    }
+  }
+  return { sides, errors };
 }
 
 export interface Changes {
@@ -84,28 +111,12 @@ export function contractChanges(
   files: Partial<Record<ContractName, string>>,
   base: string,
 ): Changes {
-  const changes: ContractChange[] = [];
-  const fresh = new Set<string>();
-  const errors: string[] = [];
-  for (const [contract, path] of Object.entries(files) as Array<[ContractName, string]>) {
-    let beforeText: string | null;
-    try {
-      beforeText = showAt(root, base, path);
-    } catch (error) {
-      errors.push((error as Error).message);
-      continue;
-    }
-    try {
-      changes.push(
-        ...contractDiff(contract, parseObject(beforeText), parseObject(readText(root, path))),
-      );
-    } catch (error) {
-      errors.push(`${path} is not valid JSON: ${(error as Error).message}`);
-      continue;
-    }
-    if (beforeText === null) fresh.add(contract);
-  }
-  return { changes, fresh, errors };
+  const { sides, errors } = contractSides(root, files, base);
+  return {
+    changes: sides.flatMap((s) => contractDiff(s.contract, s.before, s.after)),
+    fresh: new Set(sides.filter((s) => s.fresh).map((s) => s.contract)),
+    errors,
+  };
 }
 
 /** Routes in the working tree's surface file; null when it cannot be read. */

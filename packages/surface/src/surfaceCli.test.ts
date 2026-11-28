@@ -172,6 +172,44 @@ describe("surface CLI", () => {
     expect(surface(["declared"]).stdout).toContain("/declared");
   });
 
+  it("ranks the dashboard's top domains as the original did: by routes, ties in file order", () => {
+    write(
+      CONTRACT,
+      JSON.stringify({
+        meta: {},
+        routes: { "/b": { method: "GET", path: "/b", domain: "zeta" } },
+        domains: {
+          zeta: { routes: ["/b"] },
+          beta: { routes: ["/a"] },
+          alpha: { routes: [] },
+          gamma: { routes: ["/c", "/d"] },
+        },
+      }),
+    );
+    const out = surface([]).stdout;
+    const order = ["gamma", "zeta", "beta", "alpha"].map((d) => out.indexOf(`  - ${d} `));
+    expect(order.every((at) => at > 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(out).toContain("  surface verify-intent  Judge a PR body's ## Contract Intent\n");
+    expect(surface(["--list"]).stdout.indexOf("  alpha")).toBeLessThan(
+      surface(["--list"]).stdout.indexOf("  beta"),
+    );
+  });
+
+  it("escapes non-ASCII in JSON as the original's json.dumps does", () => {
+    write(
+      CONTRACT,
+      JSON.stringify({
+        routes: { "/caf\u00e9": { method: "GET", path: "/caf\u00e9", domain: "d\u2014x\u007f" } },
+        domains: {},
+      }),
+    );
+    const r = surface(["api", "", "--json"]);
+    expect(r.stdout).toContain('"path": "/caf\\u00e9"');
+    expect(r.stdout).toContain('"domain": "d\\u2014x\\u007f"');
+    expect(JSON.parse(r.stdout)[0].path).toBe("/caf\u00e9");
+  });
+
   it("refuses to run repo code for --generate", () => {
     const r = surface(["--generate"]);
     expect(r.status).toBe(2);
@@ -193,15 +231,98 @@ describe("surface contract intent", () => {
     expect(gen.status, gen.stderr).toBe(0);
   }
 
-  it("lists the contract changes against the base", () => {
+  function declareSurface(): void {
+    write(
+      "playbook.json",
+      JSON.stringify({ contracts: { intent: { contracts: { surface: CONTRACT } } } }),
+    );
+  }
+
+  function headSha(ref: string): string {
+    return run("git", ["rev-parse", ref]).stdout.trim();
+  }
+
+  it("lists the contract changes against the base as playbook intent-diff prints them", () => {
     branchWithNewRoute();
-    const r = surface(["diff", "main"]);
-    expect(r.status).toBe(0);
-    expect(r.stdout).toContain("- ADD surface DELETE /sample/items/:id (<why>)");
-    const json = JSON.parse(surface(["diff", "main", "--json"]).stdout) as unknown[];
-    expect(json).toEqual([
-      { contract: "surface", action: "ADD", item: "DELETE /sample/items/:id" },
-    ]);
+    let r = surface(["diff", "main"]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toBe(
+      "playbook intent-diff: playbook.json declares no such intent contract (contracts.intent.contracts)\n",
+    );
+    declareSurface();
+    const base = headSha("main");
+    r = surface(["diff", "main"]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toBe(
+      `ADD surface DELETE /sample/items/:id\nintent-diff: 1 contract change(s) against ${base.slice(0, 12)}\n`,
+    );
+    const json = JSON.parse(surface(["diff", "--json", "main"]).stdout) as unknown;
+    expect(json).toEqual({
+      base,
+      changes: [
+        { action: "ADD", contract: "surface", item: "DELETE /sample/items/:id", fields: [] },
+      ],
+    });
+  });
+
+  it("names the fields a MODIFY changes", () => {
+    branchWithNewRoute();
+    declareSurface();
+    const file = NodePath.join(repo, CONTRACT);
+    const data = JSON.parse(NodeFS.readFileSync(file, "utf8"));
+    data.routes["/sample/items"].apiFile = "apps/api/src/routes/moved.ts";
+    NodeFS.writeFileSync(file, JSON.stringify(data));
+    const out = surface(["diff", "main"]).stdout;
+    expect(out).toContain(
+      'MODIFY surface GET /sample/items (apiFile: "apps/api/src/routes/sample.ts" -> "apps/api/src/routes/moved.ts")\n',
+    );
+    expect(out).toContain("intent-diff: 3 contract change(s) against ");
+  });
+
+  it("compares against the gate's base, and exits 2 when there is none", () => {
+    branchWithNewRoute();
+    declareSurface();
+    let r = surface(["diff"]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toBe(
+      "playbook intent-diff: no base to compare against (the gate base); git fetch origin\n",
+    );
+    r = surface(["diff", "no-such-ref"]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain("no base to compare against (no-such-ref)");
+    expect(surface(["diff"], repo, { SHIP_QUEUE_ONTO: "main" }).stdout).toContain(
+      "intent-diff: 1 contract change(s)",
+    );
+    git("update-ref", "refs/remotes/origin/main", "main");
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    r = surface(["diff"]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain(`against ${headSha("main").slice(0, 12)}`);
+    // `surface check` judges against the same base when no --base is given.
+    write(
+      "body.md",
+      "## Contract Intent\n- ADD surface DELETE /sample/items/:id (members remove an item)\n",
+    );
+    expect(surface(["check", "--body", "body.md"]).status).toBe(0);
+  });
+
+  it("has no base when git cannot read origin/HEAD's .tree-guard.conf, never origin/HEAD instead", () => {
+    branchWithNewRoute();
+    declareSurface();
+    git("checkout", "-q", "main");
+    write(".tree-guard.conf", "base_ref=main\n");
+    git("add", ".tree-guard.conf");
+    git("commit", "-qm", "conf");
+    git("checkout", "-q", "feature");
+    git("update-ref", "refs/remotes/origin/main", "main");
+    git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    expect(surface(["diff"]).status).toBe(0);
+    // The conf's blob goes missing from the object store: git can list it but not read it.
+    const blob = run("git", ["rev-parse", "main:.tree-guard.conf"]).stdout.trim();
+    NodeFS.rmSync(NodePath.join(repo, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+    const r = surface(["diff"]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain("no base to compare against");
   });
 
   it("fails an undeclared change and passes a declared one", () => {

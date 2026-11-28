@@ -6,23 +6,20 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import { contractValues, modifiedFields } from "./surfaceIntentItems.ts";
-import {
-  checkIntent,
-  contractChanges,
-  defaultBase,
-  exitCodeOf,
-  intentFiles,
-  mergeBase,
-  renderIntentResults,
-  showAt,
-} from "./surfaceIntentCheck.ts";
-import { describe } from "./surfaceIntentJudge.ts";
+import { gateBase } from "./surfaceBase.ts";
+import { checkIntent, exitCodeOf, renderIntentResults } from "./surfaceIntentCheck.ts";
+import { runIntentDiff } from "./surfaceIntentDiff.ts";
 import { initSurface } from "./surfaceInit.ts";
-import { findContractPath, findRepoRoot, generateCommand } from "./surfaceLocate.ts";
+import {
+  declaredContracts,
+  findContractPath,
+  findRepoRoot,
+  generateCommand,
+} from "./surfaceLocate.ts";
 import { clientServices, domainRows, type FeatureSurface, matchRoutes } from "./surfaceQuery.ts";
 import {
   dashboardJson,
+  pythonJsonDumps,
   renderClientServices,
   renderDashboard,
   renderDomains,
@@ -47,7 +44,8 @@ Usage:
   surface client <filter>      # Client services whose file or called path matches
   surface <query> --json       # Compact JSON output for agents & tooling
   surface --list               # List all domains with route and worker counts
-  surface diff [base] [--json] # Contract changes against the base
+  surface diff [base_ref] [--json]
+                               # Contract changes against base (as playbook intent-diff prints them)
   surface check [--base REF] [--body FILE]
                                # Judge the PR body's ## Contract Intent (body: --body, else SHIP_QUEUE_BODYFILE)
   surface verify-intent FILE   # surface check with that body file
@@ -97,7 +95,7 @@ function query(contractPath: string, args: ReadonlyArray<string>, io: SurfaceCli
   const json = args.includes("--json");
   const words = args.filter((a) => !a.startsWith("-"));
   const print = (v: unknown, text: string) =>
-    io.out(json ? `${JSON.stringify(v, null, 2)}\n` : `${text}\n`);
+    io.out(json ? `${pythonJsonDumps(v)}\n` : `${text}\n`);
   if (args.includes("--list") || args.includes("-l")) {
     const rows = domainRows(surface);
     print(rows, renderDomains(rows));
@@ -151,7 +149,7 @@ function check(
 ): number {
   const { body, code } = readBody(bodyPath, io);
   if (code !== null) return code;
-  const base = flagValue(args, "--base") ?? defaultBase(root);
+  const base = flagValue(args, "--base") ?? gateBase(root, io.env).sha;
   const results = checkIntent({ root, base, body, inQueueJob: Boolean(io.env.SHIP_QUEUE_JOB) });
   io.out(
     `${args.includes("--json") ? JSON.stringify(results, null, 2) : renderIntentResults(results)}\n`,
@@ -159,38 +157,18 @@ function check(
   return exitCodeOf(results);
 }
 
+/** `surface diff [base_ref] [--json]`: the original's `playbook intent-diff --contract surface`. */
 function diff(root: string, args: ReadonlyArray<string>, io: SurfaceCliIo): number {
-  const ref = positional(args) ?? defaultBase(root);
-  if (!ref) {
-    io.err(
-      "surface: no base to compare against (git fetch origin, or name one: surface diff <base>)\n",
-    );
-    return EXIT_UNPROVEN;
-  }
-  const files = intentFiles(root);
-  const start = mergeBase(root, ref) ?? ref;
-  const { changes, errors } = contractChanges(root, files, start);
-  if (errors.length > 0) {
-    io.err(`${errors.map((e) => `surface: ${e}`).join("\n")}\n`);
-    return EXIT_UNPROVEN;
-  }
-  if (args.includes("--json")) {
-    io.out(`${JSON.stringify(changes, null, 2)}\n`);
-    return 0;
-  }
-  const lines = [`${changes.length} contract change(s) since ${ref}:`];
-  for (const change of changes) {
-    lines.push(`- ${describe(change)} (<why>)`);
-    if (change.action !== "MODIFY") continue;
-    const path = files[change.contract] ?? "";
-    const before = JSON.parse(showAt(root, start, path) ?? "{}");
-    const after = JSON.parse(NodeFS.readFileSync(NodePath.join(root, path), "utf8"));
-    const [b, a] = contractValues(change.contract, before, after);
-    for (const f of modifiedFields(b.get(change.item) ?? "null", a.get(change.item) ?? "null"))
-      lines.push(`    ${f}`);
-  }
-  io.out(`${lines.join("\n")}\n`);
-  return 0;
+  const surface = declaredContracts(root).surface;
+  return runIntentDiff({
+    root,
+    files: surface ? { surface } : {},
+    base: args.find((a) => a !== "--json") ?? null,
+    json: args.includes("--json"),
+    env: io.env,
+    out: io.out,
+    err: io.err,
+  });
 }
 
 /** Runs the CLI; returns its exit code. */

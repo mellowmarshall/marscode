@@ -1,0 +1,157 @@
+// @effect-diagnostics nodeBuiltinImport:off extendsNativeError:off - Standalone post-merge installer runs from extracted base tree without Effect/node_modules.
+// Ownership and flag-parity guard for marscode-sync: a CLI this installer did not write (another
+// install's link or file) is replaced only by a MarsCode CLI that passes its flag-parity probe.
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+
+/** The line every MarsCode wrapper carries (infra/ci-host/ci-marscode-cli.sh writes the same one). */
+export const WRAPPER_MARKER = "# Installed by MarsCode; reinstalls replace this file.";
+
+export class CliParityRefusal extends Error {
+  readonly binName: string;
+  constructor(binName: string, message: string) {
+    super(message);
+    this.name = "CliParityRefusal";
+    this.binName = binName;
+  }
+}
+
+interface ProbeRun {
+  readonly status: number | null;
+  readonly stdout: string;
+}
+
+interface ParityProbe {
+  /** What the probe proves, for the refusal message. */
+  readonly what: string;
+  readonly args: ReadonlyArray<string>;
+  /** Why the run fails the probe, or null when it passes. */
+  readonly judge: (run: ProbeRun) => string | null;
+}
+
+function helpNames(words: ReadonlyArray<string>) {
+  return (run: ProbeRun): string | null => {
+    if (run.status !== 0) return `--help exited ${run.status}`;
+    const missing = words.filter((w) => !run.stdout.includes(w));
+    return missing.length === 0 ? null : `--help does not name ${missing.join(", ")}`;
+  };
+}
+
+const CI_SUITE_BEGIN = /^ci-suite: begin x pid=(\d+) by=runlog$/;
+// cpu= is optional, as the queue reads it: runlog leaves it out where it cannot measure it.
+const CI_SUITE_END = /^ci-suite: end x pass pid=(\d+)(?: cpu=\d+\.\d\d)? by=runlog$/;
+
+/**
+ * The flag-parity probe of each CLI ported from an original that other installs provide.
+ * playbook has none: the port lacks subcommands the original's callers use (map,
+ * review-model, doctor, up, snapshot, actions, storage), so it never replaces one.
+ */
+export const PARITY_PROBES: Readonly<Record<string, ParityProbe>> = {
+  runlog: {
+    what: "`runlog --ci-suite x -- true` prints its begin and end lines and exits 0",
+    args: ["--ci-suite", "x", "--", "true"],
+    judge: (run) => {
+      const lines = run.stdout.split("\n").filter((s) => s !== "");
+      const begin = CI_SUITE_BEGIN.exec(lines[0] ?? "");
+      const end = CI_SUITE_END.exec(lines[1] ?? "");
+      if (run.status !== 0) return `it exited ${run.status}`;
+      if (lines.length !== 2 || !begin || !end) {
+        return `it printed ${JSON.stringify(run.stdout.slice(0, 200))}`;
+      }
+      return begin[1] === end[1] ? null : "its begin and end lines name different pids";
+    },
+  },
+  fleet: {
+    what: "`fleet --help` names --kind, --json, check and init",
+    args: ["--help"],
+    judge: helpNames(["--kind", "--json", "fleet check", "fleet init"]),
+  },
+  surface: {
+    what: "`surface --help` names api, client, --list, diff, check, verify-intent and init",
+    args: ["--help"],
+    judge: helpNames([
+      "surface api",
+      "surface client",
+      "--list",
+      "surface diff",
+      "surface check",
+      "surface verify-intent",
+      "surface init",
+    ]),
+  },
+};
+
+/** What sits at the bin path, when it is not a wrapper this installer wrote; null when it is ours or absent. */
+export function foreignCli(binPath: string, bundlePath: string): string | null {
+  let stat: NodeFS.Stats;
+  try {
+    stat = NodeFS.lstatSync(binPath);
+  } catch {
+    return null;
+  }
+  if (stat.isSymbolicLink()) {
+    let target = "";
+    try {
+      target = NodeFS.readlinkSync(binPath);
+    } catch {
+      target = "an unreadable target";
+    }
+    return `a link to ${target}`;
+  }
+  if (!stat.isFile()) return "not a regular file";
+  let text: string;
+  try {
+    text = NodeFS.readFileSync(binPath, "utf8");
+  } catch {
+    return "an unreadable file";
+  }
+  // Wrappers written before the marker name the release link's bundle.
+  if (text.includes(WRAPPER_MARKER) || text.includes(bundlePath)) return null;
+  return "a file another install wrote";
+}
+
+/**
+ * Throws a CliParityRefusal when the bin path holds a CLI this installer did
+ * not write and the staged CLI does not pass its flag-parity probe (a CLI with
+ * no probe never replaces one it did not write).
+ */
+export function assertMayReplace(input: {
+  readonly binName: string;
+  readonly binPath: string;
+  readonly bundlePath: string;
+  readonly stagedBundle: string;
+  readonly nodeBin: string;
+  readonly cwd: string;
+}): void {
+  const foreign = foreignCli(input.binPath, input.bundlePath);
+  if (foreign === null) return;
+  const refuse = (why: string) =>
+    new CliParityRefusal(
+      input.binName,
+      `marscode-sync: refusing to replace ${input.binPath} (${foreign}, not installed by marscode-sync): ${why}. ` +
+        `It stays as it is; remove it yourself to let marscode-sync install its ${input.binName}.`,
+    );
+  const probe = PARITY_PROBES[input.binName];
+  if (!probe) {
+    throw refuse(`the MarsCode ${input.binName} has no flag-parity check, so it never replaces it`);
+  }
+  const res = NodeChildProcess.spawnSync(input.nodeBin, [input.stagedBundle, ...probe.args], {
+    cwd: input.cwd,
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  const why = res.error
+    ? `it did not run: ${res.error.message}`
+    : probe.judge({ status: res.status, stdout: res.stdout ?? "" });
+  if (why !== null) {
+    throw refuse(
+      `the MarsCode ${input.binName} fails its flag-parity check (${probe.what}): ${why}`,
+    );
+  }
+}
+
+/** The release link's bundle a wrapper runs. */
+export function wrapperBundlePath(libDir: string, binName: string): string {
+  return NodePath.join(libDir, binName, "dist", "bin.mjs");
+}

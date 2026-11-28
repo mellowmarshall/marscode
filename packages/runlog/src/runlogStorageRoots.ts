@@ -44,8 +44,17 @@ export function expandUser(p: string, env: Env): string {
   return p;
 }
 
+const UNSET = ["none", "null", ""];
+
+/** An unset root: none, null or empty, in any case (not stripped, as the original reads it). */
 function isUnset(p: string | null | undefined): p is null | undefined {
-  return p === null || p === undefined || ["none", "null", ""].includes(p.trim().toLowerCase());
+  return p === null || p === undefined || UNSET.includes(p.toLowerCase());
+}
+
+/** A root as the source/data comparison sees it: stripped, expanded and absolute; null when unset. */
+function expandOpt(p: string | null, env: Env): string | null {
+  if (p === null || UNSET.includes(p.trim().toLowerCase())) return null;
+  return NodePath.resolve(expandUser(p.trim(), env));
 }
 
 /** realpath of the longest existing prefix, the rest appended: a root need not exist yet. */
@@ -118,7 +127,7 @@ function readConfigFile(env: Env): Record<string, unknown> {
 }
 
 function resolveRoot(p: string, env: Env): string {
-  return NodePath.resolve(expandUser(p.trim(), env));
+  return NodePath.resolve(expandUser(p, env));
 }
 
 /** The host's source and data roots. */
@@ -131,7 +140,7 @@ export function loadStorageRoots(env: Env = process.env): StorageRoots {
     NodePath.join(homeOf(env), "Dev");
   let data: string | null =
     env.DEVTOOLS_DATA_ROOT || env.HOST_GUARDS_DATA_ROOT || hg.get("data_root") || null;
-  if (!isUnset(data) && resolveRoot(data, env) === resolveRoot(source, env)) data = null;
+  if (data && expandOpt(data, env) === expandOpt(source, env)) data = null;
   const file = readConfigFile(env);
   if (typeof file.source_root === "string") source = file.source_root;
   if ("data_root" in file) data = typeof file.data_root === "string" ? file.data_root : null;

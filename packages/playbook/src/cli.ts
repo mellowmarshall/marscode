@@ -6,18 +6,23 @@ import * as NodeUtil from "node:util";
 
 import { requestGuardGrant } from "@t3tools/guard-protocol/client";
 
-import { planAmend } from "./amend.ts";
+import { planAmend, proposeAmendText } from "./amend.ts";
 import { installedExceptionsPath, readExceptionsFile, repoBypasses } from "./bypass.ts";
 import { decodeChallengeReplyText } from "./challengeReply.ts";
 import { createCliChallengeModel } from "./challengeRunner.ts";
 import { runChallenge, type ChallengeModel } from "./challenger.ts";
 import { ALL_GATE_NAMES, runCheck, type OverrideAsk } from "./checks.ts";
+import { ciFiles } from "./ciFiles.ts";
+import { choiceError, SUBCOMMAND_USAGE, USAGE } from "./cliUsage.ts";
 import {
   DECLARATION,
   HOST_VERSION,
   renderDeclaration,
   validateDeclaration,
 } from "./declaration.ts";
+import { cmdMinimal, MINIMAL_DECLARATION } from "./declarationMinimal.ts";
+import { cmdDbDict } from "./dictionaryLookup.ts";
+import { cmdIntentAudit, cmdIntentDiff } from "./intentCommands.ts";
 import { gateBase, repoName, repoRoot } from "./git.ts";
 import { EXIT_FAIL, EXIT_USAGE, renderResult } from "./result.ts";
 import { aggregateReviewStats, sortRecordsNewestFirst } from "./statsAggregate.ts";
@@ -27,6 +32,7 @@ import {
   defaultReviewStatsJsonlPath,
   defaultShipJobsDir,
 } from "./statsStore.ts";
+import { formatStatsTable } from "./statsTable.ts";
 import type { ReviewStatsGroupBy, ReviewStatsSide } from "./statsTypes.ts";
 
 export interface CliIo {
@@ -36,31 +42,6 @@ export interface CliIo {
   readonly cwd: string;
 }
 
-const USAGE = `usage: playbook [-C DIR] <command>
-  check [contract...] [--pr-body FILE] [--ship] [--json]
-                                                  validate playbook.json and repo-emitted playbook-evidence/v1 receipts
-  challenge [--base REF] [--tip REF] [--response FILE] [--out FILE] [--advisory] [--json]
-                                                  the declaration challenge on the real worktree
-  amend <PLAYBOOK.md> [--base REF] [--issue #N] [--collect]
-                                                  amend the standards under the owner's override
-  init [--dry-run]                                write the minimal evidence-only playbook.json
-  stats [--side S] [--by G] [--source S] [--repo R] [--days N] [--json]
-                                                  review verdict statistics
-  version                                         print the host playbook version`;
-
-const SUBCOMMAND_USAGE: Readonly<Record<string, string>> = {
-  check:
-    "usage: playbook [-C DIR] check [contract...] [--pr-body FILE] [--ship] [--json]\n  validate playbook.json and repo-emitted playbook-evidence/v1 receipts (--ship accepted for compatibility; validation is always strict)",
-  challenge:
-    "usage: playbook [-C DIR] challenge [--base REF] [--tip REF] [--response FILE] [--out FILE] [--advisory] [--json]\n  run the read-only declaration challenge on the real worktree",
-  amend:
-    "usage: playbook [-C DIR] amend <PLAYBOOK.md> [--base REF] [--issue #N] [--collect]\n  amend PLAYBOOK.md under the owner's override",
-  init: "usage: playbook [-C DIR] init [--dry-run]\n  write the minimal evidence-only playbook.json",
-  stats:
-    "usage: playbook stats [--side S] [--by G] [--source S] [--repo R] [--days N] [--json]\n  show review verdict statistics",
-  version: "usage: playbook version\n  print the host playbook version",
-};
-
 function wantsHelp(args: ReadonlyArray<string>): boolean {
   for (const arg of args) {
     if (arg === "--") return false;
@@ -68,22 +49,6 @@ function wantsHelp(args: ReadonlyArray<string>): boolean {
   }
   return false;
 }
-
-/** The minimal valid evidence-only declaration. */
-const MINIMAL_DECLARATION = {
-  evidenceDir: ".playbook/evidence",
-  contracts: {
-    size: { evidence: ".playbook/evidence/size.json" },
-    generations: { none: "no generated artifacts yet" },
-    fleet: { none: "no deployed infrastructure yet" },
-    optimization: { none: "nothing to budget: no route, job or action" },
-    tools: { evidence: ".playbook/evidence/tools.json" },
-  },
-  ci: {
-    evidence: ".playbook/evidence/ci.json",
-    granularThresholdMs: 30000,
-  },
-} as const;
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -123,6 +88,17 @@ function jobCiOutput(bodyFile: string | undefined): string | null {
   }
 }
 
+/** Accepted for compatibility with the original CLI: every declared contract is always validated. */
+const TRIGGERS = ["every", "paths", "full"];
+
+function isFile(path: string): boolean {
+  try {
+    return NodeFS.statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
 async function cmdCheck(root: string, args: ReadonlyArray<string>, io: CliIo): Promise<number> {
   const { values, positionals } = NodeUtil.parseArgs({
     args: [...args],
@@ -130,9 +106,20 @@ async function cmdCheck(root: string, args: ReadonlyArray<string>, io: CliIo): P
     options: {
       "pr-body": { type: "string" },
       ship: { type: "boolean" },
+      trigger: { type: "string" },
       json: { type: "boolean" },
     },
   });
+  const badTrigger = choiceError("check", "--trigger", values.trigger, TRIGGERS);
+  if (badTrigger) {
+    io.err(badTrigger);
+    return EXIT_USAGE;
+  }
+  const prBody = values["pr-body"];
+  if (prBody !== undefined && !isFile(NodePath.resolve(io.cwd, prBody))) {
+    io.err(`playbook: --pr-body ${prBody} is not a file`);
+    return EXIT_USAGE;
+  }
   const unknown = positionals.filter((c) => !ALL_GATE_NAMES.includes(c));
   if (unknown.length > 0) {
     io.err(
@@ -144,7 +131,7 @@ async function cmdCheck(root: string, args: ReadonlyArray<string>, io: CliIo): P
     root,
     repo: repoName(root),
     contracts: positionals,
-    body: values["pr-body"] ? readOptional(values["pr-body"]) : undefined,
+    body: prBody !== undefined ? readOptional(NodePath.resolve(io.cwd, prBody)) : undefined,
     bypasses: bypassesFor(root, io),
     today: today(),
     override: overrideAsk(root, ["playbook", "check", ...positionals], io),
@@ -229,9 +216,9 @@ async function cmdAmend(root: string, args: ReadonlyArray<string>, io: CliIo): P
     allowPositionals: true,
     options: { base: { type: "string" }, issue: { type: "string" }, collect: { type: "boolean" } },
   });
-  const file = positionals[0];
-  if (!file || positionals.length > 1) {
-    io.err("usage: playbook amend <PLAYBOOK.md> [--base REF] [--collect]");
+  const [file, textFile] = positionals;
+  if (!file || positionals.length > 2) {
+    io.err("usage: playbook amend <PLAYBOOK.md> [TEXT_FILE] [--base REF] [--collect]");
     return EXIT_USAGE;
   }
   const base = values.base ?? gateBase(root, io.env).sha;
@@ -239,18 +226,42 @@ async function cmdAmend(root: string, args: ReadonlyArray<string>, io: CliIo): P
     io.err("playbook amend: no base to compare against (pass --base)");
     return EXIT_USAGE;
   }
-  const plan = planAmend({ root, file, base, issue: values.issue });
+  if (textFile === undefined) return (await amendWorktree(root, file, base, values, io)).code;
+  const proposed = proposeAmendText(root, file, NodePath.resolve(io.cwd, textFile));
+  if (!proposed.ok) {
+    io.err(`playbook amend: ${proposed.problem}`);
+    return EXIT_USAGE;
+  }
+  // The text is written only once the owner approves it, as the original does.
+  const outcome = await amendWorktree(root, file, base, { ...values, text: proposed.text }, io);
+  if (outcome.approved) proposed.write();
+  return outcome.code;
+}
+
+/** The amend of FILE as the worktree holds it; `approved`: the owner granted it. */
+async function amendWorktree(
+  root: string,
+  file: string,
+  base: string,
+  values: {
+    readonly issue?: string | undefined;
+    readonly collect?: boolean | undefined;
+    readonly text?: string | undefined;
+  },
+  io: CliIo,
+): Promise<{ readonly code: number; readonly approved: boolean }> {
+  const plan = planAmend({ root, file, base, issue: values.issue, text: values.text });
   if (!plan.ok) {
     for (const problem of plan.problems) io.err(`FAIL amend: ${problem}`);
-    return EXIT_FAIL;
+    return { code: EXIT_FAIL, approved: false };
   }
   if (plan.unchanged) {
     io.out(`PASS amend: ${plan.descriptor.file} is unchanged against the base`);
-    return 0;
+    return { code: 0, approved: false };
   }
   if (values.collect) {
     io.out(JSON.stringify(plan.descriptor, null, 2));
-    return 0;
+    return { code: 0, approved: false };
   }
   const reply = await requestGuardGrant({
     guard: "playbook",
@@ -262,10 +273,10 @@ async function cmdAmend(root: string, args: ReadonlyArray<string>, io: CliIo): P
   });
   if (reply.ok) {
     io.out(`PASS amend: ${plan.descriptor.file} approved by the owner`);
-    return 0;
+    return { code: 0, approved: true };
   }
   io.err(`FAIL amend: the owner's override was not granted (${reply.error ?? "denied"})`);
-  return EXIT_FAIL;
+  return { code: EXIT_FAIL, approved: false };
 }
 
 function cmdInit(root: string, args: ReadonlyArray<string>, io: CliIo): number {
@@ -294,6 +305,12 @@ function cmdInit(root: string, args: ReadonlyArray<string>, io: CliIo): number {
   return 0;
 }
 
+const STATS_CHOICES: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
+  ["side", ["reviewer", "submitter", "pair"]],
+  ["by", ["model", "family", "lab", "provider", "repo", "source", "effort", "day"]],
+  ["source", ["all", "playbook_challenge", "ship_queue_review"]],
+];
+
 function cmdStats(args: ReadonlyArray<string>, io: CliIo): number {
   const { values } = NodeUtil.parseArgs({
     args: [...args],
@@ -302,11 +319,23 @@ function cmdStats(args: ReadonlyArray<string>, io: CliIo): number {
       by: { type: "string" },
       source: { type: "string" },
       repo: { type: "string" },
+      lab: { type: "string" },
       days: { type: "string" },
+      "include-bypasses": { type: "boolean" },
       json: { type: "boolean" },
     },
   });
-  const source = values.source;
+  for (const [flag, choices] of STATS_CHOICES) {
+    const problem = choiceError("stats", `--${flag}`, values[flag as "side"], choices);
+    if (problem) {
+      io.err(problem);
+      return EXIT_USAGE;
+    }
+  }
+  if (values.days !== undefined && !/^\s*[-+]?\d+\s*$/.test(values.days)) {
+    io.err(`playbook stats: error: argument --days: invalid int value: '${values.days}'`);
+    return EXIT_USAGE;
+  }
   const stats = aggregateReviewStats(
     sortRecordsNewestFirst(
       collectReviewRecords({
@@ -318,56 +347,81 @@ function cmdStats(args: ReadonlyArray<string>, io: CliIo): number {
     {
       side: (values.side as ReviewStatsSide | undefined) ?? "reviewer",
       by: (values.by as ReviewStatsGroupBy | undefined) ?? "model",
-      source: source === "playbook_challenge" || source === "ship_queue_review" ? source : "all",
+      source:
+        (values.source as "all" | "playbook_challenge" | "ship_queue_review" | undefined) ?? "all",
       repo: values.repo,
-      days: values.days ? Number(values.days) : undefined,
+      lab: values.lab,
+      days: values.days !== undefined && Number(values.days) > 0 ? Number(values.days) : undefined,
+      includeBypasses: values["include-bypasses"] === true,
       nowMs: Date.now(),
       localHostName: NodeOS.hostname(),
     },
   );
-  if (values.json) {
-    io.out(JSON.stringify(stats, null, 2));
-    return 0;
-  }
-  io.out(`${stats.totals.reviews} review(s), ${stats.totals.passRatePct}% passed`);
-  for (const g of stats.groups) {
-    io.out(`  ${g.key}: ${g.reviews} review(s), ${g.flagged} flagged, ${g.total} issue(s)`);
-  }
+  io.out(values.json ? JSON.stringify(stats, null, 2) : formatStatsTable(stats));
   return 0;
 }
 
-export async function runPlaybookCli(argv: ReadonlyArray<string>, io: CliIo): Promise<number> {
+function cmdCiFiles(root: string, args: ReadonlyArray<string>, io: CliIo): number {
+  const { values } = NodeUtil.parseArgs({ args: [...args], options: { rev: { type: "string" } } });
+  io.out(ciFiles(root, values.rev ?? "HEAD").join("\n"));
+  return 0;
+}
+
+/** `-C DIR` or `-CDIR` before the command: (the directory, the rest). */
+function takeDir(argv: ReadonlyArray<string>, cwd: string): { dir: string; args: string[] } {
   const args = [...argv];
-  let dir = io.cwd;
-  if (args[0] === "-C") {
-    dir = NodePath.resolve(io.cwd, args[1] ?? ".");
-    args.splice(0, 2);
+  const first = args[0] ?? "";
+  if (first === "-C") {
+    const dir = NodePath.resolve(cwd, args[1] ?? ".");
+    return { dir, args: args.slice(2) };
   }
+  if (first.startsWith("-C"))
+    return { dir: NodePath.resolve(cwd, first.slice(2)), args: args.slice(1) };
+  return { dir: cwd, args };
+}
+
+export async function runPlaybookCli(argv: ReadonlyArray<string>, io: CliIo): Promise<number> {
+  const { dir, args } = takeDir(argv, io.cwd);
   const [cmd, ...rest] = args;
-  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
+  if (!cmd) {
+    io.err(USAGE);
+    return EXIT_USAGE;
+  }
+  if (cmd === "help" || cmd === "--help" || cmd === "-h") {
     io.out(USAGE);
-    return cmd ? 0 : EXIT_USAGE;
+    return 0;
   }
   const subUsage = SUBCOMMAND_USAGE[cmd];
   if (subUsage && wantsHelp(rest)) {
     io.out(subUsage);
     return 0;
   }
-  if (cmd === "version") {
-    io.out(`playbook ${HOST_VERSION}`);
-    return 0;
-  }
-  if (cmd === "stats") return cmdStats(rest, io);
-  if (!NodeFS.existsSync(dir) || !NodeFS.statSync(dir).isDirectory()) {
-    io.err(`playbook: ${dir} is not a directory`);
-    return EXIT_USAGE;
-  }
-  const root = repoRoot(dir);
   try {
+    if (cmd === "version") {
+      io.out(`playbook ${HOST_VERSION}`);
+      return 0;
+    }
+    if (cmd === "stats") return cmdStats(rest, io);
+    if (cmd === "minimal") {
+      const { values } = NodeUtil.parseArgs({
+        args: rest,
+        options: { merge: { type: "string" } },
+      });
+      return cmdMinimal(values.merge, io);
+    }
+    if (!NodeFS.existsSync(dir) || !NodeFS.statSync(dir).isDirectory()) {
+      io.err(`playbook: ${dir} is not a directory`);
+      return EXIT_USAGE;
+    }
+    const root = repoRoot(dir);
     if (cmd === "check") return await cmdCheck(root, rest, io);
     if (cmd === "challenge") return await cmdChallenge(root, rest, io);
     if (cmd === "amend") return await cmdAmend(root, rest, io);
     if (cmd === "init") return cmdInit(root, rest, io);
+    if (cmd === "db-dict") return cmdDbDict(root, rest, io);
+    if (cmd === "intent-diff") return cmdIntentDiff(root, rest, io);
+    if (cmd === "intent-audit") return cmdIntentAudit(root, rest, io);
+    if (cmd === "ci-files") return cmdCiFiles(root, rest, io);
   } catch (cause) {
     io.err(`playbook ${cmd}: ${cause instanceof Error ? cause.message : String(cause)}`);
     return EXIT_USAGE;
