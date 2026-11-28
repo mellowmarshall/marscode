@@ -58,6 +58,8 @@ export interface JobRecord {
   readonly granted_digest?: string | undefined;
   /** The rebased head the declared steps passed on, and the latest run's per-step timings. */
   readonly steps_tip?: string | undefined;
+  /** The head a pre-push hook last passed on; a resumed pre-push job skips the hook only at it. */
+  readonly steps_hook_tip?: string | undefined;
   readonly steps?: ReadonlyArray<StepTiming> | undefined;
   /** The PR head the declared `ship_merge_gate` passed on; a transient merge retry skips it. */
   readonly gate_tip?: string | undefined;

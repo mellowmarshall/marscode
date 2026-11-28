@@ -177,6 +177,8 @@ export function buildLocalStepEnv(input: {
 
   if (input.mode === "ci") {
     env.SHIP_QUEUE_CI = "1";
+    // Test runners read CI (focused tests fail under it); the allowlist drops the worker's own.
+    env.CI = "1";
     if (env.RUSTC_WRAPPER === "sccache") {
       env.CARGO_INCREMENTAL = "0";
     }
@@ -246,6 +248,7 @@ export function buildRemoteStepScript(input: {
   const exports = [
     "FAST=1",
     "SHIP_QUEUE_CI=1",
+    "CI=1",
     "SHIP_QUEUE_REMOTE_CI=0",
     `SHIP_QUEUE_JOB=${shellSingleQuote(input.ctx.jobId)}`,
     `SHIP_QUEUE_REPO=${shellSingleQuote(input.ctx.repo)}`,

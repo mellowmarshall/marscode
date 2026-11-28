@@ -38,7 +38,8 @@ const STEP_ENV_PREFIXES: ReadonlyArray<string> = [
 
 /**
  * Words that mark a credential inside an allowed family (`CARGO_REGISTRY_TOKEN`,
- * `npm_config_//registry/:_authToken`, `SCCACHE_GCS_KEY_PATH`). Matched without case.
+ * `npm_config_//registry/:_authToken`, `SCCACHE_GCS_KEY_PATH`, and proxies such as
+ * `npm_config_https_proxy`, whose URL can hold a user and password). Matched without case.
  */
 const CREDENTIAL_WORDS: ReadonlyArray<string> = [
   "token",
@@ -48,11 +49,12 @@ const CREDENTIAL_WORDS: ReadonlyArray<string> = [
   "credential",
   "auth",
   "key",
+  "proxy",
 ];
 
 /**
- * The forge's own credentials, for the steps whose work is a forge write or fetch: `ship_merge`
- * (`gh pr merge`) and the post-merge sync (`git fetch`). `gh` keeps its token in the desktop
+ * The forge's own credentials, for the base-owned steps that read or write the forge: the body
+ * check (`gh pr list`), `ship_merge` (`gh pr merge`), and the post-merge sync (`git fetch`). `gh` keeps its token in the desktop
  * keyring here, so the keyring's session bus is part of it. No install or CI step gets these.
  */
 const FORGE_ENV_NAMES: ReadonlyArray<string> = [

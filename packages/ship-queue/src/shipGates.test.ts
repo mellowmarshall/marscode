@@ -4,7 +4,7 @@ import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { ciOutputPath } from "./ciSteps.ts";
-import { readJob, readLog } from "./jobStore.ts";
+import { readJob, readLog, updateJob } from "./jobStore.ts";
 import { mergeGateOutputPath } from "./mergeGate.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
 import type { RemoteCommandRunner } from "./sshExec.ts";
@@ -31,7 +31,11 @@ const DENIED: Readonly<Record<string, string>> = {
   CARGO_REGISTRY_TOKEN: "cargo-worker-token",
   npm_config__authToken: "npm-worker-token",
   NODE_OPTIONS: "--max-old-space-size=4096",
+  npm_config_https_proxy: "http://user:pw@proxy.invalid:8080",
+  CARGO_HTTP_PROXY: "http://user:pw@proxy.invalid:8080",
 };
+
+const FORGE_NAMES = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "SSH_AUTH_SOCK"];
 
 /** Sets worker variables for one test; the returned function puts the old values back. */
 function withWorkerEnv(vars: Readonly<Record<string, string>>): () => void {
@@ -89,7 +93,7 @@ echo "pre-push: ci-local passed"
 const PRE_PUSH_DECL = "ship_ci=pre-push\nship_hooks_path=.githooks\n";
 
 describe("allowlisted step environments", () => {
-  it("gives local install, CI, and body steps none of the worker's credentials, and ship_merge only the forge's", async () => {
+  it("gives install and CI none of the worker's credentials, and the body check and ship_merge only the forge's", async () => {
     const restore = withWorkerEnv({
       ...DENIED,
       FLY_API_TOKEN: "fly-declared",
@@ -113,14 +117,18 @@ describe("allowlisted step environments", () => {
       expect(install!.has("FLY_API_TOKEN")).toBe(false);
       expect(ci!.has("CARGO_HOME")).toBe(true);
       expect(ci!.has("SHIP_QUEUE_TIP")).toBe(true);
+      // Test runners read CI to refuse focused tests; the queue sets it for CI steps.
+      expect(ci!.has("CI")).toBe(true);
 
+      // The base's body check asks the forge whether the branch merged: forge credentials only.
       const body = envNameSets(NodeFS.readFileSync(fx.stateFile("body-env"), "utf8"));
-      expectNoDenied(body);
+      expectNoDenied(body, FORGE_NAMES);
+      expect(body[0]!.has("GH_TOKEN")).toBe(true);
       expect(body[0]!.has("FLY_API_TOKEN")).toBe(false);
 
       // ship_merge runs `gh pr merge`: it gets the forge's credentials and nothing else denied.
       const merge = envNameSets(NodeFS.readFileSync(fx.stateFile("merge-env"), "utf8"));
-      expectNoDenied(merge, ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "SSH_AUTH_SOCK"]);
+      expectNoDenied(merge, FORGE_NAMES);
       expect(merge[0]!.has("GH_TOKEN")).toBe(true);
       expect(merge[0]!.has("FLY_API_TOKEN")).toBe(false);
     } finally {
@@ -180,6 +188,7 @@ describe("allowlisted step environments", () => {
     expectNoDenied(sets);
     expect(sets[1]!.has("CARGO_HOME")).toBe(true);
     expect(sets[1]!.has("SHIP_QUEUE_CI")).toBe(true);
+    expect(sets[1]!.has("CI")).toBe(true);
   });
 });
 
@@ -261,6 +270,22 @@ describe("pre-push CI", () => {
       reason: "ci step=pre-push exit=1",
     });
     expect(readLog(fx.root, id)).toContain("pre-push: lint failed");
+    expect(fx.prs.size).toBe(0);
+  });
+
+  it("runs the hook on resume when the earlier pass at this head did not include it", async () => {
+    const fx = makeFixture({ declaration: PRE_PUSH_DECL });
+    addToBase(fx, { ".githooks/pre-push": { text: PRE_PUSH_HOOK, mode: 0o755 } });
+    const wt = fx.worktree("feat/119-resume", { "prepush-fail": "1\n" });
+    const id = await fx.submit(wt, "feat/119-resume");
+    // A pass recorded before the hook existed: steps_tip at this head, no steps_hook_tip.
+    updateJob(fx.root, id, { steps_tip: sh(wt, ["rev-parse", "HEAD"]).trim() });
+
+    expect(await runJob(fx.deps, id)).toBe("ended");
+    expect(readJob(fx.root, id)).toMatchObject({
+      state: "failed",
+      reason: "ci step=pre-push exit=1",
+    });
     expect(fx.prs.size).toBe(0);
   });
 

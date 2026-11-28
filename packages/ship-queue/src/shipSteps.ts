@@ -122,12 +122,16 @@ export async function runDeclaredSteps(
       ? [{ name: "ship_ci", cmdline: ciCmd, withholdSecrets: false, timeoutMs: CI_TIMEOUT_MS }]
       : []),
   ];
-  if (job.steps_tip === rebase.head) {
+  const hook = await planPrePush(deps.run, job, decl, rebase.onto, log);
+  if (hook.kind === "fail") return { kind: "fail", reason: hook.reason };
+  // A pass counts for the hook only when the hook ran in it (`steps_hook_tip`).
+  if (
+    job.steps_tip === rebase.head &&
+    (hook.kind === "none" || job.steps_hook_tip === rebase.head)
+  ) {
     log(`declared steps passed on ${rebase.head.slice(0, 12)} already`);
     return { kind: "pass" };
   }
-  const hook = await planPrePush(deps.run, job, decl, rebase.onto, log);
-  if (hook.kind === "fail") return { kind: "fail", reason: hook.reason };
   if (!decl.bodyCheck.trim() && ciSteps.length === 0 && hook.kind === "none") {
     return { kind: "pass" };
   }
@@ -146,6 +150,8 @@ export async function runDeclaredSteps(
       const res = await runLocalStep({
         mode: "stage",
         ctx,
+        // The base's body check asks the forge whether the branch already merged.
+        forge: true,
         cmdline: decl.bodyCheck.trim(),
         extraArgs: [jobBodyPath(deps.root, job.id)],
         timeoutMs: BODY_TIMEOUT_MS,
@@ -208,6 +214,7 @@ export async function runDeclaredSteps(
       if ((await gitOut(deps.run, job.worktree, ["rev-parse", "HEAD"])) !== rebase.head) {
         return { kind: "fail", reason: "head_moved_during_ci" };
       }
+      updateJob(deps.root, job.id, { steps_hook_tip: rebase.head });
     }
     return passed(deps, job, rebase.head);
   } finally {
