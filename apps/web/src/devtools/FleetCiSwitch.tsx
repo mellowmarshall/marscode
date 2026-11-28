@@ -2,7 +2,7 @@
  * The Fleet host chip's CI switch. Turning CI off is one click. Turning it back on for a host whose
  * `.off` marker carries a reason (usually the owner protecting a long task) opens a confirmation
  * that shows the reason, who set it and when. Only "Turn CI on" sends the turn-on, carrying the
- * shown marker's time, so the server removes only the marker the owner saw.
+ * shown marker's version, so the server removes only the marker the owner saw.
  */
 import { T, useGT, Var } from "gt-react";
 import { useState } from "react";
@@ -19,11 +19,14 @@ import {
 import { Button } from "../components/ui/button";
 import type { MergedFleetHost } from "./devdeckTypes";
 
-/** `confirmAt` is the `at` of the `.off` marker the confirmation showed; null when none was shown. */
+/**
+ * `confirmVersion` is the content hash of the `.off` marker the confirmation showed; null when no
+ * confirmation was shown. The server removes the marker only if it still has that version.
+ */
 export type FleetCiToggle = (
   host: MergedFleetHost,
   enabled: boolean,
-  confirmAt: string | null,
+  confirmVersion: string | null,
 ) => void;
 
 function formatOffAt(at: string | null | undefined): string | null {
@@ -42,8 +45,8 @@ export function FleetCiSwitch({
   readonly onToggleCi: FleetCiToggle;
 }) {
   const gt = useGT();
-  // The marker time the dialog shows, captured when it opens; null while closed.
-  const [confirmAt, setConfirmAt] = useState<string | null>(null);
+  // The version of the marker the dialog shows, captured when it opens; null while closed.
+  const [shownVersion, setShownVersion] = useState<string | null>(null);
   const ciEnabled = !host.ciOff;
   const reason = host.ciOffReason?.trim() || null;
   const offBy = host.probe?.ci_off_by?.trim() || gt("unknown");
@@ -65,7 +68,7 @@ export function FleetCiSwitch({
         disabled={toggling}
         onClick={() => {
           if (ciEnabled) onToggleCi(host, false, null);
-          else if (reason) setConfirmAt(host.probe?.ci_off_at ?? "");
+          else if (reason) setShownVersion(host.probe?.ci_off_version ?? "");
           else onToggleCi(host, true, null);
         }}
       >
@@ -73,9 +76,9 @@ export function FleetCiSwitch({
         <span>{ciEnabled ? gt("CI on") : gt("CI off")}</span>
       </button>
       <AlertDialog
-        open={confirmAt !== null}
+        open={shownVersion !== null}
         onOpenChange={(open) => {
-          if (!open) setConfirmAt(null);
+          if (!open) setShownVersion(null);
         }}
       >
         <AlertDialogPopup data-testid="ci-on-confirm">
@@ -117,9 +120,9 @@ export function FleetCiSwitch({
             <Button
               variant="destructive"
               onClick={() => {
-                const shownAt = confirmAt ?? "";
-                setConfirmAt(null);
-                onToggleCi(host, true, shownAt);
+                const version = shownVersion ?? "";
+                setShownVersion(null);
+                onToggleCi(host, true, version);
               }}
             >
               <T>Turn CI on</T>

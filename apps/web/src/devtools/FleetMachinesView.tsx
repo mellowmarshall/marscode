@@ -133,7 +133,7 @@ export function FleetMachinesView({
   const handleToggleCi = async (
     host: MergedFleetHost,
     enabled: boolean,
-    confirmAt: string | null,
+    confirmVersion: string | null,
   ) => {
     const probeName = host.probeHostName ?? host.id;
     onFeedback({
@@ -145,8 +145,8 @@ export function FleetMachinesView({
     const res = await withBusyKey(`ci:${probeName}`, () =>
       runTrackedDevdeckAction(environmentId, `/hosts/${encodeURIComponent(probeName)}/ci`, {
         on: enabled,
-        confirm: confirmAt !== null,
-        ...(confirmAt !== null ? { confirm_at: confirmAt } : {}),
+        confirm: confirmVersion !== null,
+        ...(confirmVersion !== null ? { confirm_version: confirmVersion } : {}),
         client: "fleet-console",
       }),
     );
@@ -380,7 +380,7 @@ export function FleetMachinesView({
         selectedHost={selectedHost}
         busyKeys={busyKeys}
         onSelectHost={(id) => setConsoleHost(id)}
-        onToggleCi={(host, enabled, confirmAt) => void handleToggleCi(host, enabled, confirmAt)}
+        onToggleCi={(host, enabled, version) => void handleToggleCi(host, enabled, version)}
         onCheckHosts={() => void handleCheckHosts()}
         onRunStorageReport={(host) => void handleRunStorageReport(host)}
         onStartCleanupReview={(host) => void handleStartCleanupReview(host)}

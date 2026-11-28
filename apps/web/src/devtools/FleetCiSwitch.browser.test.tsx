@@ -11,6 +11,7 @@ import { mergeFleetHosts } from "./devdeckTypes";
 const WINDOW = { width: 1100, height: 780 };
 const OFF_REASON = "runs a long simulation; keep CI off";
 const OFF_AT = "2026-11-28T11:00:00.000Z";
+const VERSION = "3f2a9c0d4b5e6f708192a3b4c5d6e7f8";
 
 function fleetHosts(ciOff: Readonly<Record<string, boolean>>) {
   return mergeFleetHosts({
@@ -39,6 +40,7 @@ function fleetHosts(ciOff: Readonly<Record<string, boolean>>) {
                 ssh: "build-host-01",
                 ci_off: true,
                 ci_off_at: OFF_AT,
+                ci_off_version: VERSION,
                 ci_off_by: "owner",
                 ci_off_reason: OFF_REASON,
               }
@@ -51,7 +53,7 @@ function fleetHosts(ciOff: Readonly<Record<string, boolean>>) {
   });
 }
 
-type ToggleCall = readonly [host: string, enabled: boolean, confirmAt: string | null];
+type ToggleCall = readonly [host: string, enabled: boolean, confirmVersion: string | null];
 
 /** The real strip with real selection state; CI toggles are recorded, not applied. */
 function Harness({ calls }: { readonly calls: ToggleCall[] }) {
@@ -64,7 +66,7 @@ function Harness({ calls }: { readonly calls: ToggleCall[] }) {
         selectedHost={hosts.find((h) => h.id === selected) ?? null}
         busyKeys={new Set()}
         onSelectHost={setSelected}
-        onToggleCi={(host, enabled, confirmAt) => calls.push([host.id, enabled, confirmAt])}
+        onToggleCi={(host, enabled, version) => calls.push([host.id, enabled, version])}
         onCheckHosts={() => {}}
         onRunStorageReport={() => {}}
         onStartCleanupReview={() => {}}
@@ -160,7 +162,7 @@ describe("Fleet CI switch", () => {
     await sw.click();
     await page.getByRole("button", { name: "Turn CI on" }).click();
     await expect.element(page.getByTestId("ci-on-confirm")).not.toBeInTheDocument();
-    expect(calls).toEqual([["build-host-01", true, OFF_AT]]);
+    expect(calls).toEqual([["build-host-01", true, VERSION]]);
   });
 
   it("turns CI on in one click for an off host with no reason", async () => {
@@ -174,7 +176,7 @@ describe("Fleet CI switch", () => {
           selectedHost={hosts[0] ?? null}
           busyKeys={new Set()}
           onSelectHost={() => {}}
-          onToggleCi={(host, enabled, confirmAt) => calls.push([host.id, enabled, confirmAt])}
+          onToggleCi={(host, enabled, version) => calls.push([host.id, enabled, version])}
           onCheckHosts={() => {}}
           onRunStorageReport={() => {}}
           onStartCleanupReview={() => {}}

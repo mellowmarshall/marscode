@@ -10,6 +10,8 @@ export interface CiToggleOffRecord {
   readonly at: string;
   readonly by: string;
   readonly reason: string;
+  /** Content hash of the marker bytes, when it was readable. */
+  readonly version?: string;
 }
 
 export interface CiToggleAuditEntry {

@@ -59,6 +59,7 @@ const DevdeckHostProbeReportSchema = Schema.Struct({
   ci_off_at: Schema.optional(ScalarString),
   ci_off_by: Schema.optional(ScalarString),
   ci_off_reason: Schema.optional(ScalarString),
+  ci_off_version: Schema.optional(ScalarString),
   no_grant: Schema.optional(
     Schema.NullOr(Schema.Union([Schema.Boolean, Schema.Array(Schema.Unknown)])),
   ),
@@ -223,6 +224,7 @@ function decodeHostProbeRows(raw: ReadonlyArray<unknown>): ReadonlyArray<Devdeck
         ...opt("ci_off_at", asNullableStr(h.ci_off_at)),
         ...opt("ci_off_by", asNullableStr(h.ci_off_by)),
         ...opt("ci_off_reason", asNullableStr(h.ci_off_reason)),
+        ...opt("ci_off_version", asNullableStr(h.ci_off_version)),
         ...(h.no_grant !== undefined && h.no_grant !== null ? { no_grant: h.no_grant } : {}),
         ...opt("grant_error", asNullableStr(h.grant_error)),
       },

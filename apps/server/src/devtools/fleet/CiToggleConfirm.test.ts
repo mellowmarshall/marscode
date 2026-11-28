@@ -4,7 +4,11 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { isHostOff, setCiHostAvailability } from "@t3tools/ship-queue/hostProbe";
+import {
+  isHostOff,
+  readHostOffState,
+  setCiHostAvailability,
+} from "@t3tools/ship-queue/hostOffMarker";
 
 import { ciToggleAuditPath } from "@t3tools/ship-queue/ciToggleAudit";
 
@@ -76,16 +80,23 @@ describe("Fleet CI toggle confirmation and audit", () => {
       ci_off_reason: "runs a long simulation; keep CI off",
     });
 
-    // A confirmation without the shown marker's time, or with another time, is refused too.
-    for (const confirmAt of [undefined, "2026-11-27T09:00:00.000Z"]) {
-      const stale = await ciHosts.setCi("host-b", true, undefined, { confirm: true, confirmAt });
+    const shown = readHostOffState(queueRoot, "host-b")!.version;
+    expect(ciHosts.getPanel().report?.hosts.find((h) => h.name === "host-b")?.ci_off_version).toBe(
+      shown,
+    );
+    // A confirmation without the shown marker's version, or with another version, is refused too.
+    for (const confirmVersion of [undefined, "0".repeat(32)]) {
+      const stale = await ciHosts.setCi("host-b", true, undefined, {
+        confirm: true,
+        confirmVersion,
+      });
       expect(stale.ok).toBe(false);
       expect(isHostOff(queueRoot, "host-b")).toBe(true);
     }
 
     const confirmed = await ciHosts.setCi("host-b", true, undefined, {
       confirm: true,
-      confirmAt: OFF_AT,
+      confirmVersion: shown,
       actor: "browser-session",
       client: "fleet-console",
     });
@@ -204,7 +215,12 @@ describe("Fleet CI toggle confirmation and audit", () => {
         fleet,
         "POST",
         "/api/hosts/host-b/ci",
-        { on: true, confirm: true, confirm_at: OFF_AT, client: "fleet-console" },
+        {
+          on: true,
+          confirm: true,
+          confirm_version: readHostOffState(queueRoot, "host-b")!.version,
+          client: "fleet-console",
+        },
         "session-subject-1",
       );
       expect(accepted.status).toBe(202);
@@ -241,7 +257,10 @@ describe("Fleet CI toggle confirmation and audit", () => {
     const { queueRoot, ciHosts } = setup();
     const marker = NodePath.join(queueRoot, "hosts", "host-b.off");
     NodeFS.mkdirSync(marker, { recursive: true });
-    const res = await ciHosts.setCi("host-b", true, undefined, { confirm: true, confirmAt: "" });
+    const res = await ciHosts.setCi("host-b", true, undefined, {
+      confirm: true,
+      confirmVersion: "",
+    });
     expect(res.ok).toBe(false);
     expect(NodeFS.existsSync(marker)).toBe(true);
     expect(ciHosts.getPanel().report?.hosts.find((h) => h.name === "host-b")).toMatchObject({
@@ -271,21 +290,19 @@ describe("Fleet CI toggle confirmation and audit", () => {
     });
   });
 
-  it("ship-queue removes a marker only when it is still the one that was checked", () => {
-    const { queueRoot, manifestPath } = setup();
-    ownerTurnsOff(queueRoot, manifestPath);
-    const on = (expectOffAt: string) =>
-      setCiHostAvailability({
-        queueRoot,
-        hostName: "host-b",
-        enabled: true,
-        manifestPath,
-        expectOffAt,
-      });
-    expect(on("2026-11-27T09:00:00.000Z").ok).toBe(false);
-    expect(isHostOff(queueRoot, "host-b")).toBe(true);
-    expect(NodeFS.readdirSync(NodePath.join(queueRoot, "hosts"))).toEqual(["host-b.off"]);
-    expect(on(OFF_AT)).toMatchObject({ ok: true, changed: true });
-    expect(isHostOff(queueRoot, "host-b")).toBe(false);
+  it("a confirmation never applies to a marker rewritten after the dialog showed it", async () => {
+    const { queueRoot, ciHosts } = setup();
+    // Two hand-written markers with no time: only their content tells them apart.
+    const marker = NodePath.join(queueRoot, "hosts", "host-b.off");
+    NodeFS.mkdirSync(NodePath.dirname(marker), { recursive: true });
+    NodeFS.writeFileSync(marker, "short test run\n");
+    const shown = readHostOffState(queueRoot, "host-b")!.version;
+    NodeFS.writeFileSync(marker, "long render job, do not touch\n");
+    const res = await ciHosts.setCi("host-b", true, undefined, {
+      confirm: true,
+      confirmVersion: shown,
+    });
+    expect(res.ok).toBe(false);
+    expect(NodeFS.readFileSync(marker, "utf8")).toContain("long render job");
   });
 });

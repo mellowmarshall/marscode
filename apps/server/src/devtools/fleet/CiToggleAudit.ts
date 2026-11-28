@@ -6,8 +6,8 @@ import { readLegacyAuditTail } from "../GuardAuditFiles.ts";
 /** Who sent a CI toggle and whether the owner confirmed a turn-on that removes a reasoned marker. */
 export interface CiToggleRequest {
   readonly confirm?: boolean | undefined;
-  /** The `at` of the `.off` marker the confirmation dialog showed. */
-  readonly confirmAt?: string | undefined;
+  /** The `version` (content hash) of the `.off` marker the confirmation dialog showed. */
+  readonly confirmVersion?: string | undefined;
   readonly actor?: string | undefined;
   readonly client?: string | undefined;
 }

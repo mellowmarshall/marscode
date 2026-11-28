@@ -2,7 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import { readHostOffState } from "@t3tools/ship-queue/hostProbe";
+import { readHostOffState } from "@t3tools/ship-queue/hostOffMarker";
 
 import type { FleetHostsReport } from "./FleetTypes.ts";
 
@@ -72,12 +72,12 @@ export function withLiveOffState(
   const hosts = [...rep.hosts, ...extra].map((h) => {
     const name = typeof h.name === "string" ? h.name : "";
     if (!name) return h;
-    let off: { at: string; by: string; reason: string } | null;
+    let off: { at: string; by: string; reason: string; version: string } | null;
     try {
       off = readHostOffState(queueRoot, name);
     } catch {
       // The marker exists but cannot be read: show the host as off, never as on.
-      off = { at: "", by: "", reason: "unreadable .off marker" };
+      off = { at: "", by: "", reason: "unreadable .off marker", version: "" };
     }
     return {
       ...h,
@@ -85,6 +85,7 @@ export function withLiveOffState(
       ci_off_at: off?.at || null,
       ci_off_by: off?.by || null,
       ci_off_reason: off?.reason || null,
+      ci_off_version: off?.version || null,
     };
   });
   return { ...rep, hosts };

@@ -1,6 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off - The Fleet CI on/off policy: confirm a turn-on that removes a reasoned `.off` marker, and audit every request.
 import { isSafeHostName } from "@t3tools/ship-queue/ciHosts";
-import { readHostOffState, setCiHostAvailability } from "@t3tools/ship-queue/hostProbe";
+import {
+  readHostOffState,
+  setCiHostAvailability,
+  type HostOffState,
+} from "@t3tools/ship-queue/hostOffMarker";
 import {
   appendCiToggleAudit,
   type CiToggleOffRecord,
@@ -18,12 +22,13 @@ export interface CiHostToggleResult {
 
 const UNREADABLE = "unreadable .off marker";
 
-function liveOffState(queueRoot: string, host: string): CiToggleOffRecord | null {
+/** The one read of the marker a request acts on. */
+function liveOffState(queueRoot: string, host: string): HostOffState | null {
   try {
     return readHostOffState(queueRoot, host);
   } catch {
-    // The marker exists but cannot be read: it is off, and nobody can see why.
-    return { at: "", by: "", reason: UNREADABLE };
+    // The marker exists but cannot be read: it is off, nobody can see why, and nothing matches it.
+    return { at: "", by: "", reason: UNREADABLE, version: "" };
   }
 }
 
@@ -53,10 +58,41 @@ function audit(
 
 /**
  * A turn-on that would remove an `.off` marker carrying a reason (usually the owner protecting a
- * long task) needs `confirm: true` together with the marker's `at`, so a confirmation only removes
- * the marker the dialog showed. Reads the live marker, never a cached report. Returns the audited
- * refusal, or null to proceed.
+ * long task) needs `confirm: true` together with the `version` of the marker the dialog showed, so
+ * a confirmation only ever applies to that exact marker. Pure: judges the one read it is given.
  */
+function confirmationRefusal(
+  name: string,
+  prior: HostOffState | null,
+  request: CiToggleRequest,
+): CiHostToggleResult | null {
+  const reason = prior?.reason.trim() ?? "";
+  if (!prior || !reason) return null;
+  if (reason === UNREADABLE) {
+    return {
+      ok: false,
+      message: `CI stays off on ${name}: its .off marker cannot be read. Inspect it with \`ship-queue hosts\` first.`,
+    };
+  }
+  const who = `${prior.by || "unknown"} at ${prior.at || "an unknown time"} (${reason})`;
+  if (request.confirm !== true) {
+    return {
+      ok: false,
+      needsConfirm: true,
+      message: `CI stays off on ${name}: it was turned off by ${who}. Turning it on needs an explicit confirmation.`,
+    };
+  }
+  if (request.confirmVersion !== prior.version) {
+    return {
+      ok: false,
+      needsConfirm: true,
+      message: `CI stays off on ${name}: its .off marker changed since the confirmation was shown (now by ${who}). Confirm again.`,
+    };
+  }
+  return null;
+}
+
+/** The route's early answer (409/423) before an action starts; audited. Null to proceed. */
 export function refuseUnconfirmedTurnOn(
   queueRoot: string,
   host: string,
@@ -66,19 +102,10 @@ export function refuseUnconfirmedTurnOn(
   const name = host.trim();
   if (!enabled || !isSafeHostName(name)) return null;
   const prior = liveOffState(queueRoot, name);
-  const reason = prior?.reason.trim() ?? "";
-  if (!prior || !reason) return null;
-  let message: string | null = null;
-  if (reason === UNREADABLE) {
-    message = `CI stays off on ${name}: its .off marker cannot be read. Inspect it with \`ship-queue hosts\` first.`;
-  } else if (request.confirm !== true) {
-    message = `CI stays off on ${name}: it was turned off by ${prior.by || "unknown"} at ${prior.at || "an unknown time"} (${reason}). Turning it on needs an explicit confirmation.`;
-  } else if (request.confirmAt !== prior.at) {
-    message = `CI stays off on ${name}: its .off marker changed since the confirmation was shown (now by ${prior.by || "unknown"}: ${reason}). Confirm again.`;
-  }
-  if (message === null) return null;
-  audit(queueRoot, name, true, "refused", request, reason, prior, message);
-  return { ok: false, message, needsConfirm: reason !== UNREADABLE };
+  const refusal = confirmationRefusal(name, prior, request);
+  if (refusal)
+    audit(queueRoot, name, true, "refused", request, prior?.reason ?? "", prior, refusal.message);
+  return refusal;
 }
 
 /** Applies one Fleet CI toggle under the confirmation policy, and audits it whatever the outcome. */
@@ -100,11 +127,20 @@ export function toggleCiHost(input: {
   if (input.knownHosts.size > 0 && !input.knownHosts.has(name)) {
     return refuse(`${name} is not a known CI host`);
   }
-  const refusal = refuseUnconfirmedTurnOn(queueRoot, name, enabled, request);
-  if (refusal) return refusal;
-
+  // One read: the confirmation is judged against it, and only this exact marker is removed.
   const prior = enabled ? liveOffState(queueRoot, name) : null;
   const priorReason = prior?.reason.trim() ?? "";
+  const refusal = confirmationRefusal(name, prior, request);
+  if (refusal) {
+    audit(queueRoot, name, true, "refused", request, priorReason, prior, refusal.message);
+    return refusal;
+  }
+  if (enabled && !prior) {
+    // Nothing was seen, so nothing is removed, even a marker written after this read.
+    const message = `ci host ${name} is already on for CI`;
+    audit(queueRoot, name, true, "unchanged", request, "", null, message);
+    return { ok: true, message };
+  }
   // A turn-on is the dangerous direction: it is recorded before it happens, or it does not happen.
   if (enabled && prior) {
     const pre = `turning CI on for ${name}`;
@@ -126,7 +162,7 @@ export function toggleCiHost(input: {
       reason: "",
       actor: actor ? `t3code (${actor})` : "t3code",
       manifestPath: input.manifestPath,
-      expectOffAt: prior ? prior.at : undefined,
+      expectVersion: prior?.version,
     });
   } catch (error) {
     res = {

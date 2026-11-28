@@ -24,6 +24,7 @@ import { mergeFleetHosts } from "./devdeckTypes";
 import { FleetMachinesView } from "./FleetMachinesView";
 
 const OFF_AT = "2026-11-28T11:00:00.000Z";
+const VERSION = "3f2a9c0d4b5e6f708192a3b4c5d6e7f8";
 
 const hosts = mergeFleetHosts({
   localHost: { name: "host-a", cpu_pct: 12 },
@@ -41,6 +42,7 @@ const hosts = mergeFleetHosts({
           ssh: "host-b",
           ci_off: true,
           ci_off_at: OFF_AT,
+          ci_off_version: VERSION,
           ci_off_by: "owner",
           ci_off_reason: "runs a long simulation; keep CI off",
         },
@@ -81,7 +83,7 @@ describe("Fleet CI toggle requests", () => {
       .poll(() => posts)
       .toContainEqual({
         path: "/hosts/host-b/ci",
-        body: { on: true, confirm: true, confirm_at: OFF_AT, client: "fleet-console" },
+        body: { on: true, confirm: true, confirm_version: VERSION, client: "fleet-console" },
       });
   });
 });

@@ -66,16 +66,16 @@ export async function handleNativeFleetRequest(
     if (typeof parsedBody?.on !== "boolean") {
       return { status: 400, body: { error: 'body must be {"on": true|false}' } };
     }
-    const { confirm, confirm_at: confirmAt, client } = parsedBody;
+    const { confirm, confirm_version: confirmVersion, client } = parsedBody;
     if (confirm !== undefined && typeof confirm !== "boolean") {
       return { status: 400, body: { error: '"confirm" must be true or false' } };
     }
-    if (confirmAt !== undefined && typeof confirmAt !== "string") {
-      return { status: 400, body: { error: '"confirm_at" must be a string' } };
+    if (confirmVersion !== undefined && typeof confirmVersion !== "string") {
+      return { status: 400, body: { error: '"confirm_version" must be a string' } };
     }
     const request = {
       confirm: confirm === true,
-      confirmAt,
+      confirmVersion,
       actor: actor ?? "unknown",
       client: typeof client === "string" ? client : "unknown",
     };

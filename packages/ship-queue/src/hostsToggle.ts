@@ -3,12 +3,9 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import {
-  appendCiToggleAudit,
-  type CiToggleOffRecord,
-  type CiToggleOutcome,
-} from "./ciToggleAudit.ts";
-import { readHostOffState, setCiHostAvailability } from "./hostProbe.ts";
+import { isSafeHostName } from "./ciHosts.ts";
+import { appendCiToggleAudit, type CiToggleOutcome } from "./ciToggleAudit.ts";
+import { readHostOffState, setCiHostAvailability, type HostOffState } from "./hostOffMarker.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
 
 /** Runs the host guard's `ci-host-on-check` rule; exit 0 means the turn-on may go ahead. */
@@ -90,18 +87,19 @@ function osUser(): string {
   }
 }
 
-function liveOff(queueRoot: string, host: string): CiToggleOffRecord | null {
+function liveOff(queueRoot: string, host: string): HostOffState | null {
   try {
     return readHostOffState(queueRoot, host);
   } catch {
-    return { at: "", by: "", reason: "unreadable .off marker" };
+    // Exists but unreadable: off, and no version can match it, so it is never removed from here.
+    return { at: "", by: "", reason: "unreadable .off marker", version: "" };
   }
 }
 
 /**
- * `ship-queue hosts on|off NAME`. Turning on a host whose `.off` marker has a reason first passes
- * the host guard's owner-only rule (the `HOST_GUARD_OVERRIDE` approval flow), then removes only
- * that same marker. Every request is appended to the CI toggle audit.
+ * `ship-queue hosts on|off NAME`. The name is normalized once and used for every step. A turn-on
+ * of a marker with a reason needs the host guard's owner approval; any marker removal is audited
+ * first (or nothing changes), and only the marker version read here is removed.
  */
 export async function runHostsToggle(input: {
   readonly queueRoot: string;
@@ -115,14 +113,19 @@ export async function runHostsToggle(input: {
   readonly stderr: (text: string) => void;
   readonly guard?: CiHostGuardRunner | undefined;
 }): Promise<number> {
-  const { queueRoot, host, enabled } = input;
+  const { queueRoot, enabled } = input;
+  const host = input.host.trim();
+  if (!isSafeHostName(host)) {
+    input.stderr(`ship-queue hosts: invalid host name ${JSON.stringify(input.host)}\n`);
+    return 64;
+  }
   const prior = enabled ? liveOff(queueRoot, host) : null;
   const priorReason = prior?.reason.trim() ?? "";
   let confirmed = false;
   const audit = (outcome: CiToggleOutcome, message: string) =>
     appendCiToggleAudit(queueRoot, {
       at: new Date().toISOString(),
-      host: host.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 128),
+      host,
       on: enabled,
       outcome,
       actor: osUser(),
@@ -132,7 +135,22 @@ export async function runHostsToggle(input: {
       prior,
       message,
     }).ok;
+  const refuse = (message: string, code: number): number => {
+    audit("refused", message);
+    input.stderr(`${message}\n`);
+    return code;
+  };
 
+  if (enabled && !prior) {
+    // Nothing was read, so nothing is removed, even a marker written after this read.
+    const message = `ci host ${host} is already on for CI`;
+    audit("unchanged", message);
+    input.stdout(`${message}\n`);
+    return 0;
+  }
+  if (prior && !prior.version) {
+    return refuse(`CI stays off on ${host}: its .off marker cannot be read; fix it by hand`, 1);
+  }
   if (prior && priorReason) {
     const verdict = await (input.guard ?? installedCiHostGuard)({
       queueRoot,
@@ -142,16 +160,17 @@ export async function runHostsToggle(input: {
     });
     if (verdict.stderr.trim()) input.stderr(`${verdict.stderr.trimEnd()}\n`);
     if (verdict.exitCode !== 0) {
-      const message = `CI stays off on ${host}: turned off by ${prior.by || "unknown"} at ${prior.at || "an unknown time"} (${priorReason}); only the owner can turn it back on`;
-      audit("refused", message);
-      input.stderr(`${message}\n`);
-      return verdict.exitCode;
+      const who = `${prior.by || "unknown"} at ${prior.at || "an unknown time"} (${priorReason})`;
+      return refuse(
+        `CI stays off on ${host}: turned off by ${who}; only the owner can turn it back on`,
+        verdict.exitCode,
+      );
     }
     confirmed = true;
-    if (!audit("requested", `turning CI on for ${host} with owner approval`)) {
-      input.stderr(`CI stays off on ${host}: the CI toggle audit cannot be written\n`);
-      return 1;
-    }
+  }
+  if (prior && !audit("requested", `turning CI on for ${host}`)) {
+    input.stderr(`CI stays off on ${host}: the CI toggle audit cannot be written\n`);
+    return 1;
   }
 
   let res: { readonly ok: boolean; readonly message: string; readonly changed: boolean };
@@ -162,7 +181,7 @@ export async function runHostsToggle(input: {
       enabled,
       reason: input.reason,
       manifestPath: input.manifestPath,
-      expectOffAt: prior ? prior.at : undefined,
+      expectVersion: prior?.version,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -170,7 +189,8 @@ export async function runHostsToggle(input: {
   }
   const audited = audit(!res.ok ? "failed" : res.changed ? "applied" : "unchanged", res.message);
   (res.ok ? input.stdout : input.stderr)(`${res.message}\n`);
-  if (!audited)
+  if (!audited) {
     input.stderr("ship-queue hosts: warning: the CI toggle audit could not be written\n");
+  }
   return res.ok ? 0 : 1;
 }

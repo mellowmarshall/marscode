@@ -10,12 +10,8 @@ import {
   resolveCiHostsPath,
 } from "@t3tools/ship-queue/ciHosts";
 import { resolveQueueRoot } from "@t3tools/ship-queue/cli";
-import {
-  checkCiHosts,
-  hostOffFilePath,
-  readHostOffState,
-  type HostExecDeps,
-} from "@t3tools/ship-queue/hostProbe";
+import { checkCiHosts, type HostExecDeps } from "@t3tools/ship-queue/hostProbe";
+import { hostOffFilePath, readHostOffState } from "@t3tools/ship-queue/hostOffMarker";
 import { provisionCiHost } from "@t3tools/ship-queue/hostProvision";
 import { collectRepoToolRequirements } from "@t3tools/ship-queue/repoRequirements";
 import {
@@ -260,7 +256,7 @@ export class NativeCiHosts {
     try {
       off = readHostOffState(this.queueRoot, targetHost);
     } catch {
-      off = { at: "", by: "", reason: "unreadable .off marker" };
+      off = { at: "", by: "", reason: "unreadable .off marker", version: "" };
     }
     const rec: ToggleRecord = {
       at: Date.now(),

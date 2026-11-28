@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { decideShipQueueDeps, listShipQueueDeps } from "@t3tools/ship-queue/depsEngine";
 import { SqliteDepsStore } from "@t3tools/ship-queue/depsStore";
-import { setCiHostAvailability } from "@t3tools/ship-queue/hostProbe";
+import { setCiHostAvailability } from "@t3tools/ship-queue/hostOffMarker";
 import type { ProcessRunner } from "@t3tools/ship-queue/types";
 
 import { NativeCiHosts, readCiHostsManifest } from "./NativeCiHosts.ts";

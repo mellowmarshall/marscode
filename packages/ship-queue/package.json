@@ -74,6 +74,10 @@
       "types": "./src/ciToggleAudit.ts",
       "import": "./src/ciToggleAudit.ts"
     },
+    "./hostOffMarker": {
+      "types": "./src/hostOffMarker.ts",
+      "import": "./src/hostOffMarker.ts"
+    },
     "./hostProbe": {
       "types": "./src/hostProbe.ts",
       "import": "./src/hostProbe.ts"

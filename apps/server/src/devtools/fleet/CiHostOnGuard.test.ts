@@ -8,7 +8,8 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { runHostGuardCli } from "@t3tools/host-guards/cli";
 import { runHostsSubcommand } from "@t3tools/ship-queue/cliSubcommands";
 import type { CiHostGuardRunner } from "@t3tools/ship-queue/hostsToggle";
-import { isHostOff, setCiHostAvailability } from "@t3tools/ship-queue/hostProbe";
+import { ciToggleAuditPath } from "@t3tools/ship-queue/ciToggleAudit";
+import { isHostOff, setCiHostAvailability } from "@t3tools/ship-queue/hostOffMarker";
 
 import { readCiToggleAudit } from "./CiToggleAudit.ts";
 
@@ -121,12 +122,13 @@ async function hostsOn(
   ctx: ReturnType<typeof setup>,
   env: Record<string, string>,
   guard: CiHostGuardRunner,
+  host = "host-b",
 ) {
   const out: string[] = [];
   const err: string[] = [];
   const code = await runHostsSubcommand(
     ctx.queueRoot,
-    ["on", "host-b"],
+    ["on", host],
     {
       stdout: (t) => out.push(t),
       stderr: (t) => err.push(t),
@@ -208,6 +210,49 @@ describe("ship-queue hosts on for a host turned off with a reason", () => {
     expect(res.code).toBe(0);
     expect(guardCalls).toBe(0);
     expect(isHostOff(ctx.queueRoot, "host-b")).toBe(false);
-    expect(readCiToggleAudit(ctx.queueRoot).map((e) => e.outcome)).toEqual(["applied"]);
+    // Recorded before the marker is removed, then the outcome.
+    expect(readCiToggleAudit(ctx.queueRoot).map((e) => e.outcome)).toEqual([
+      "requested",
+      "applied",
+    ]);
+  });
+
+  it("trims the host name once and uses that same name for the read, the guard and the change", async () => {
+    const ctx = setup();
+    turnOff(ctx.queueRoot, ctx.manifestPath, OFF_REASON);
+    const guardHosts: string[] = [];
+    const refusing: CiHostGuardRunner = async (input) => {
+      guardHosts.push(input.host);
+      return realGuard(ctx.configPath, "")(input);
+    };
+    const res = await hostsOn(ctx, AGENT_ENV, refusing, " host-b ");
+    expect(res.code).not.toBe(0);
+    expect(guardHosts).toEqual(["host-b"]);
+    expect(isHostOff(ctx.queueRoot, "host-b")).toBe(true);
+
+    let calls = 0;
+    const bad = await hostsOn(
+      ctx,
+      AGENT_ENV,
+      async () => {
+        calls += 1;
+        return { exitCode: 0, stderr: "" };
+      },
+      "host-b/../host-b",
+    );
+    expect(bad.code).toBe(64);
+    expect(calls).toBe(0);
+    expect(isHostOff(ctx.queueRoot, "host-b")).toBe(true);
+  });
+
+  it("changes nothing and exits non-zero when the audit cannot be written before a turn-on", async () => {
+    const ctx = setup();
+    turnOff(ctx.queueRoot, ctx.manifestPath, "");
+    // A directory where the audit file goes makes every append fail.
+    NodeFS.mkdirSync(ciToggleAuditPath(ctx.queueRoot), { recursive: true });
+    const res = await hostsOn(ctx, AGENT_ENV, async () => ({ exitCode: 0, stderr: "" }));
+    expect(res.code).not.toBe(0);
+    expect(res.err).toContain("audit cannot be written");
+    expect(isHostOff(ctx.queueRoot, "host-b")).toBe(true);
   });
 });
