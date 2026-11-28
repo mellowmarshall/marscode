@@ -478,3 +478,44 @@ describe("unanswered challenge", () => {
     expect(NodeFS.existsSync(overrideRequestPath(fx.root, id))).toBe(false);
   });
 });
+
+describe("owner approval of a protected diff", () => {
+  it("opens the owner's window itself, once, and says so in the marker", async () => {
+    const fx = makeFixture();
+    const asked: string[] = [];
+    const bundle = {
+      repo: "acme-fixture/sample-repo",
+      branch: "feat/147-window",
+      pr_or_issue: "",
+      gates: [{ gate_id: "infra", reason: "fixture protected path" }],
+      protected_paths: ["infra/x.txt"],
+      protected_diff_sha256: "a".repeat(64),
+      body_sha256: "",
+      commit_sha: "",
+    };
+    const deps: ShipQueueDeps = {
+      ...fx.deps,
+      guard: {
+        inspect: () => bundle,
+        check: async () => ({ ok: false }),
+        request: async ({ jobId }) => {
+          asked.push(jobId);
+          return { ok: true };
+        },
+      },
+    };
+    const wt = fx.worktree("feat/147-window", { "w.txt": "w\n" });
+    const id = await fx.submit(wt, "feat/147-window", deps);
+
+    expect(await runJob(deps, id)).toBe("blocked");
+    expect(readJob(fx.root, id)).toMatchObject({ state: "waiting", waiting_for: "action" });
+    expect(asked).toEqual([id]);
+    expect(fx.markers(id).find((l) => l.startsWith("ACTION_REQUIRED"))).toContain(
+      "the queue opened the owner's approval window",
+    );
+    // A job still waiting on the same diff opens no second window.
+    expect(await runJob(deps, id)).toBe("blocked");
+    expect(asked).toEqual([id]);
+    expect(fx.ciRuns()).toBe(0);
+  });
+});

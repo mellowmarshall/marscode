@@ -192,6 +192,13 @@ export interface ShipGuard {
     readonly jobId: string;
     readonly consume: boolean;
   }) => Promise<GuardCheck>;
+  /** Opens the owner's approval window for the job's bundle, in the job's thread; never waits. */
+  readonly request?: (input: {
+    readonly worktree: string;
+    readonly branch: string;
+    readonly bundle: WireGuardBundle;
+    readonly jobId: string;
+  }) => Promise<GuardCheck>;
 }
 
 export interface SecretFinding {

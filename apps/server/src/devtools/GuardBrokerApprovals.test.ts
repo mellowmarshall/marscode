@@ -423,10 +423,23 @@ describe("GuardGrantBroker owner approvals", () => {
       ok: false,
       error: "grant check does not match the job's worktree and branch",
     });
-    expect(await check(good, "request", { refusal: "x" })).toMatchObject({
-      ok: false,
-      error: "queue workers cannot request grants",
+    // A verified worker opens the owner's window for its own job, in the job's thread. A thread
+    // that already holds the approval gets it back and no window opens.
+    expect(await check(good, "request", { refusal: "x", wait: false })).toMatchObject({
+      ok: true,
+      scope: "bundle",
     });
+    expect(broker.listPending()).toEqual([]);
+    const unapproved = await boundJob("thread-new");
+    peer.threadId = "";
+    peer.pid = workerPid;
+    expect(await check(unapproved, "request", { refusal: "x", wait: false })).toMatchObject({
+      ok: true,
+      queued: true,
+    });
+    expect(broker.listPending().map((r) => [r.guard, r.threadId])).toEqual([
+      ["ship-queue", "thread-new"],
+    ]);
     expect(await check(good, "check", { thread_id: "thread-other" })).toMatchObject({
       ok: false,
       error: "thread_id does not match caller process",
