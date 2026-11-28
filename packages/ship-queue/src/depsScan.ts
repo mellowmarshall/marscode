@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import type { renovateLookup } from "./depsRenovate.ts";
 import { defaultScanRepo, resolveRegisteredRepoPrimary } from "./depsRepoFiles.ts";
 import { SqliteDepsStore } from "./depsStore.ts";
 import {
@@ -16,7 +17,10 @@ import type { ProcessRunner } from "./types.ts";
 
 export const DEP_RESCAN_INTERVAL_S = 20 * 3600;
 export const DEP_RETRY_FAILED_S = 45 * 60;
-export const DEP_SCAN_INFLIGHT_S = 1800;
+/** Retry cadence for a report with failed lookups: an incomplete report never admits a job. */
+export const DEP_RETRY_INCOMPLETE_S = 4 * 3600;
+/** How long a scan claim holds: past the Renovate lookup timeout (30 min) plus extract and git work. */
+export const DEP_SCAN_INFLIGHT_S = 3600;
 
 export interface DepsScanOutcome {
   readonly ok: boolean;
@@ -31,6 +35,12 @@ export interface DepsScanOptions {
   readonly run?: ProcessRunner | undefined;
   readonly runRepoScan?:
     | ((repo: string, checkout?: string) => Promise<DepReportRecord>)
+    | undefined;
+  /** The update lookup the default scanner uses; the pinned Renovate CLI unless replaced. */
+  readonly lookup?: typeof renovateLookup | undefined;
+  /** Told once whether this scan claimed the repo (and why not), before any lookup runs. */
+  readonly onClaim?:
+    | ((claim: { readonly started: boolean; readonly reason?: string }) => void)
     | undefined;
 }
 
@@ -86,23 +96,30 @@ export async function scanShipQueueDepsRepo(
 
     const claim = store.runInImmediateTransaction(
       ():
-        | { readonly status: "skip"; readonly report?: DepReportRecord | undefined }
+        | {
+            readonly status: "skip";
+            readonly reason: string;
+            readonly report?: DepReportRecord | undefined;
+          }
         | { readonly status: "claimed"; readonly current: DepRepoState } => {
         const current = store.getRepoState(input.repo) ?? { repo: input.repo, holding: false };
         const lastReport = current.report;
-        const failed = Boolean(lastReport?.error || lastReport?.status === "unknown");
-        if (
-          input.due &&
-          lastReport &&
-          lastReport.created > now - (failed ? DEP_RETRY_FAILED_S : DEP_RESCAN_INTERVAL_S)
-        ) {
-          return { status: "skip", report: lastReport };
+        // A scan that could not run retries soon; one whose lookup failed for some dependency
+        // retries on a longer cadence, since a private or git dependency may fail every time.
+        const retryAfter =
+          lastReport?.status === "incomplete"
+            ? DEP_RETRY_INCOMPLETE_S
+            : lastReport?.error || lastReport?.status === "unknown"
+              ? DEP_RETRY_FAILED_S
+              : DEP_RESCAN_INTERVAL_S;
+        if (input.due && lastReport && lastReport.created > now - retryAfter) {
+          return { status: "skip", reason: "scanned recently", report: lastReport };
         }
         if (current.attempt && ACTIVE_DEP_ATTEMPT_STATES.has(current.attempt.status)) {
-          return { status: "skip", report: lastReport };
+          return { status: "skip", reason: "an update attempt is active", report: lastReport };
         }
         if (current.scanStarted && current.scanStarted > now - DEP_SCAN_INFLIGHT_S) {
-          return { status: "skip", report: lastReport };
+          return { status: "skip", reason: "a scan is already running", report: lastReport };
         }
         store.saveRepoState({ ...current, scanStarted: now }, now);
         return { status: "claimed", current };
@@ -110,8 +127,10 @@ export async function scanShipQueueDepsRepo(
     );
 
     if (claim.status === "skip") {
+      options.onClaim?.({ started: false, reason: claim.reason });
       return { ok: true, skipped: true, ...(claim.report ? { report: claim.report } : {}) };
     }
+    options.onClaim?.({ started: true });
 
     let report: DepReportRecord;
     let scanError: string | undefined;
@@ -122,9 +141,9 @@ export async function scanShipQueueDepsRepo(
             queueRoot: options.queueRoot,
             repo: input.repo,
             checkout: input.checkout,
-            previousState: claim.current,
             nowEpochSec: now,
             run: options.run,
+            lookup: options.lookup,
           });
     } catch (err) {
       scanError = err instanceof Error ? err.message : String(err);
@@ -139,11 +158,13 @@ export async function scanShipQueueDepsRepo(
       };
     }
 
-    if (scanError && !claim.current.holding) {
-      // Never lock out future scans when a repo cannot be scanned (e.g., unregistered primary).
+    if (scanError && resolveRegisteredRepoPrimary(options.queueRoot, input.repo) === null) {
+      // An unregistered repo saves nothing; clearing the claim never locks out future scans.
       clearScanStarted(store, input.repo, claim.current, now);
       return { ok: false, error: scanError, report };
     }
+    // A registered repo's failed scan is saved below like any report (so status polling shows
+    // the error), under the same attempt and checkout guards; an error never turns the hold on.
 
     store.runInImmediateTransaction(() => {
       const latest = store.getRepoState(input.repo) ?? claim.current;
@@ -158,6 +179,9 @@ export async function scanShipQueueDepsRepo(
       } else if (!latest.attempt || !ACTIVE_DEP_ATTEMPT_STATES.has(latest.attempt.status)) {
         const shouldDropMerged =
           latest.attempt?.status === "merged" && latest.attempt.report.id !== report.id;
+        // The hold is a pilot the owner turns on: a repo holds once the owner decides a report
+        // (depsEngine sets holding), or once a scan finds it clean. Until then the gate admits
+        // jobs with reason hold_inactive, whatever a scan found.
         const becameHolding = latest.holding || report.status === "clean";
         const next: DepRepoState = {
           ...withoutStarted,

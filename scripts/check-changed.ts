@@ -440,7 +440,8 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
     if (bin !== "knip" || /["'$\\|;&<>]/.test(command)) {
       return yield* Effect.fail(`check:changed cannot split knip:check: ${command}`);
     }
-    knipPasses.push(["exec", "knip", ...args]);
+    // --performance prints knip's per-function timing table (PLAYBOOK §14.3 breakdown, ~0 cost).
+    knipPasses.push(["exec", "knip", ...args, "--performance"]);
   }
 
   // A version bump can leave a patch unused, causing pnpm to reject the install

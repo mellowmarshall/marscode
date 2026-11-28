@@ -138,6 +138,18 @@ function locateAndValidateReport(
       },
     };
   }
+  if (report.status === "unknown" || report.error) {
+    if (report.status !== "incomplete") {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          error: "the scan failed; there is no report to decide. Scan again",
+          errorCode: "invalid_input",
+        },
+      };
+    }
+  }
   if (decision === "approve") {
     if (isCheckoutReport || report.source?.kind === "checkout") {
       return {
@@ -149,10 +161,12 @@ function locateAndValidateReport(
         },
       };
     }
+    // A report whose lookup failed for any dependency is not a complete list, whatever it found.
     if (
       report.status !== "pending" ||
       !Array.isArray(report.updates) ||
-      report.updates.length === 0
+      report.updates.length === 0 ||
+      (Array.isArray(report.incomplete) && report.incomplete.length > 0)
     ) {
       return {
         ok: false,

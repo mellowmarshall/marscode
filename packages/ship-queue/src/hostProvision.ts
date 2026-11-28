@@ -4,9 +4,15 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { loadCiHostsManifest, type CiHostEntry } from "./ciHosts.ts";
-import { computeHostLacks } from "./ciToolVersion.ts";
+import { computeHostLacks, isToolOutOfScope } from "./ciToolVersion.ts";
 import { execOnHost, probeCiHost, type HostExecDeps } from "./hostProbe.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
+import {
+  buildPayloadBundles,
+  missingPayloadBundles,
+  PAYLOAD_BUNDLE_PATHS,
+  payloadBundleCacheDir,
+} from "./payloadBundles.ts";
 import {
   buildWslRootLines,
   expandRootCommand,
@@ -37,24 +43,16 @@ export function resolveHostSyncPaths(marscodeRoot: string): ReadonlyArray<string
 /** The one line an installer prints when it kept another install's CLI (ci-marscode-cli.sh). */
 const SKIPPED_INSTALL = /^[\w.-]+: warning: skipped .*$/m;
 
-/** MarsCode CLIs whose prebuilt bundles ride in the payload for `infra/ci-host/ci-marscode-cli.sh`. */
-export const PAYLOAD_CLI_BUNDLES: ReadonlyArray<string> = ["runlog", "playbook"];
-
-/** Where the post-merge sync installs MarsCode CLI bundles (`<dir>/<name>/dist/bin.mjs`). */
-export function defaultCliBundleDir(homeDir: string = NodeOS.homedir()): string {
-  return NodePath.join(homeDir, ".local", "lib", "marscode-tools");
-}
-
 /**
- * Ships `marscode@sourceRef:infra/ci-host` + bundled MarsCode packages to a CI host, plus every
- * prebuilt CLI bundle from `bundleDir` at `packages/<name>/dist/bin.mjs` (refuses when one is missing),
- * and the playbook's design scan (`packages/playbook/dist/pb_design_scan.mjs`) when the release holds it.
+ * Ships `marscode@sourceRef:infra/ci-host` + bundled MarsCode packages to a CI host, plus each
+ * package's `dist/bin.mjs` built from that same commit (`buildPayloadBundles`, cached per commit).
  */
 export async function syncCiHostPayload(input: {
   readonly host: CiHostEntry;
   readonly marscodeRoot: string;
   readonly sourceRef?: string | undefined;
-  readonly bundleDir?: string | undefined;
+  /** `payloadBundleCacheDir(...)`: where per-commit bundle builds are kept. */
+  readonly bundleCacheDir: string;
   readonly deps?: HostExecDeps | undefined;
 }): Promise<{
   readonly ok: boolean;
@@ -66,51 +64,80 @@ export async function syncCiHostPayload(input: {
   if (!ref || ref.startsWith("-") || /[\s\0]/.test(ref)) {
     return { ok: false, paths, error: `invalid sourceRef: ${JSON.stringify(input.sourceRef)}` };
   }
-  const bundleDir = input.bundleDir ?? defaultCliBundleDir();
-  const clis = PAYLOAD_CLI_BUNDLES.filter((name) =>
-    NodeFS.existsSync(NodePath.join(bundleDir, name, "dist", "bin.mjs")),
-  );
-  const missingClis = PAYLOAD_CLI_BUNDLES.filter((name) => !clis.includes(name));
-  if (missingClis.length > 0) {
-    return {
-      ok: false,
-      paths,
-      error: `missing CLI bundle(s) ${missingClis.join(", ")} under ${bundleDir}; run the post-merge sync (marscode-sync) on this host first`,
-    };
-  }
   const runLocal = input.deps?.runLocal ?? nodeProcessRunner;
-  const archive = await runLocal({
-    command: "bash",
+  const rev = await runLocal({
+    command: "git",
     args: [
-      "-c",
-      [
-        "set -euo pipefail",
-        "t=$(mktemp); trap 'rm -f \"$t\"' EXIT",
-        'r=$1; sha=$(git -C "$r" rev-parse --verify --end-of-options "$2^{commit}")',
-        'b=$3; IFS=, read -r -a clis <<< "$4"; shift 4',
-        'git -C "$r" archive --format=tar -o "$t" "$sha" -- "$@"',
-        'for n in "${clis[@]}"; do for f in dist/bin.mjs dist/pb_design_scan.mjs; do if [ -f "$b/$n/$f" ]; then tar -rf "$t" -C "$b/$n/" --transform "s,^dist/,packages/$n/dist/," "$f"; fi; done; done',
-        'base64 < "$t"',
-      ].join("; "),
-      "--",
+      "-C",
       input.marscodeRoot,
-      ref,
-      bundleDir,
-      clis.join(","),
-      ...paths,
+      "rev-parse",
+      "--verify",
+      "--end-of-options",
+      `${ref}^{commit}`,
     ],
     cwd: input.marscodeRoot,
   });
-  if (archive.exitCode !== 0) {
-    return {
-      ok: false,
-      paths,
-      error: archive.stderr.trim() || `git archive exited ${archive.exitCode}`,
-    };
+  if (rev.exitCode !== 0) {
+    return { ok: false, paths, error: rev.stderr.trim() || `unknown ref ${ref}` };
+  }
+  const sha = rev.stdout.trim();
+  const built = await buildPayloadBundles({
+    marscodeRoot: input.marscodeRoot,
+    sha,
+    cacheDir: input.bundleCacheDir,
+    run: runLocal,
+  });
+  if (!built.ok) return { ok: false, paths, error: built.error };
+  // Every bundle is archived by its exact path, and a missing one stops the sync before the
+  // host's working payload is replaced.
+  const missing = missingPayloadBundles(built.dir);
+  if (missing.length > 0) {
+    return { ok: false, paths, error: `payload bundles missing: ${missing.join(", ")}` };
+  }
+  // The base64 payload goes to a file, not stdout: the process runner caps captured output.
+  const payloadFile = NodePath.join(
+    NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "sq-payload-")),
+    "payload.b64",
+  );
+  let payload: string;
+  try {
+    const archive = await runLocal({
+      command: "bash",
+      args: [
+        "-c",
+        [
+          "set -euo pipefail",
+          "t=$(mktemp); trap 'rm -f \"$t\"' EXIT",
+          "r=$1; sha=$2; b=$3; out=$4; bundles=$5; shift 5",
+          'git -C "$r" archive --format=tar -o "$t" "$sha" -- "$@"',
+          // The bundle paths are fixed package names (PAYLOAD_BUNDLE_PATHS), split on spaces.
+          'tar -rf "$t" -C "$b" $bundles',
+          'base64 < "$t" > "$out"',
+        ].join("; "),
+        "--",
+        input.marscodeRoot,
+        sha,
+        built.dir,
+        payloadFile,
+        PAYLOAD_BUNDLE_PATHS.join(" "),
+        ...paths,
+      ],
+      cwd: input.marscodeRoot,
+    });
+    if (archive.exitCode !== 0) {
+      return {
+        ok: false,
+        paths,
+        error: archive.stderr.trim() || `git archive exited ${archive.exitCode}`,
+      };
+    }
+    payload = NodeFS.readFileSync(payloadFile, "utf8");
+  } finally {
+    NodeFS.rmSync(NodePath.dirname(payloadFile), { recursive: true, force: true });
   }
   const unpackScript = `d=${REMOTE_PAYLOAD_DIR}; rm -rf "$d.next" && mkdir -p "$d.next" && python3 -c "import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.buffer.read()))" | tar -x -C "$d.next" && rm -rf "$d" && mv "$d.next" "$d"`;
   const unpack = await execOnHost(input.host, unpackScript, input.deps, {
-    stdin: archive.stdout,
+    stdin: payload,
     timeoutMs: 120_000,
   });
   if (unpack.exitCode !== 0) {
@@ -120,14 +147,9 @@ export async function syncCiHostPayload(input: {
       error: unpack.stderr.trim() || `remote unpack exited ${unpack.exitCode}`,
     };
   }
-  const designScan = NodeFS.existsSync(
-    NodePath.join(bundleDir, "playbook", "dist", "pb_design_scan.mjs"),
-  )
-    ? ["packages/playbook/dist/pb_design_scan.mjs"]
-    : [];
   return {
     ok: true,
-    paths: [...paths, ...clis.map((name) => `packages/${name}/dist/bin.mjs`), ...designScan],
+    paths: [...paths, ...PAYLOAD_BUNDLE_PATHS],
   };
 }
 
@@ -160,10 +182,17 @@ export async function provisionCiHost(input: {
   if (!host) return { ok: false, message: `no CI host ${input.hostName} in manifest` };
 
   if (input.marscodeRoot) {
+    const bundleCacheDir = payloadBundleCacheDir(loaded.manifest.hosts);
+    if (!bundleCacheDir) {
+      const msg = `PROVISION host=${host.name} sync result=failed: the manifest has no local (ssh: null) host to build payload bundles on`;
+      input.onProgress?.(msg);
+      return { ok: false, message: msg };
+    }
     const synced = await syncCiHostPayload({
       host,
       marscodeRoot: input.marscodeRoot,
       sourceRef: input.sourceRef,
+      bundleCacheDir,
       deps: input.deps,
     });
     if (!synced.ok) {
@@ -203,6 +232,8 @@ export async function provisionCiHost(input: {
 
   for (const [toolName, spec] of Object.entries(loaded.manifest.toolchain)) {
     if (onlyNames && !onlyNames.has(toolName)) continue;
+    // A tool for another OS is never installed, refresh or not (its installer refuses this OS).
+    if (isToolOutOfScope(spec, probe.__os)) continue;
     if (!lackingNames.has(toolName) && (onlyNames || !spec.refresh)) continue;
     if (!spec.install) {
       if (lackingNames.has(toolName) && input.allowRoot === false) {
@@ -260,6 +291,23 @@ export async function provisionCiHost(input: {
       input.onProgress?.(line);
       if (!failed) failed = line;
     }
+  }
+
+  // The host guards install last, after node is in place, on every full provision.
+  const guards = loaded.manifest.guards;
+  if (guards && !onlyNames) {
+    const res = await execOnHost(host, `${envPrefix}\n${guards.install}`, input.deps, {
+      timeoutMs: 15 * 60_000,
+    });
+    const guardsSkipped = res.exitCode === 0 ? SKIPPED_INSTALL.exec(res.stdout)?.[0] : undefined;
+    const line =
+      res.exitCode !== 0
+        ? `PROVISION host=${host.name} guards result=failed: ${res.stderr.trim() || `exit ${res.exitCode}`}`
+        : guardsSkipped
+          ? `PROVISION host=${host.name} guards result=skipped: ${guardsSkipped}`
+          : `PROVISION host=${host.name} guards result=installed`;
+    input.onProgress?.(line);
+    if (res.exitCode !== 0 && !failed) failed = line;
   }
 
   if (installedTools.length > 0) {

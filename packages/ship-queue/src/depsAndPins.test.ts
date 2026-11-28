@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { decideShipQueueDeps, listShipQueueDeps } from "./depsEngine.ts";
+import { applyPinLimits, buildPinPackageRules, reconcileDeclaredPins } from "./depsRenovate.ts";
 import { computeReportDigest, resolveRegisteredRepoPrimary } from "./depsRepoFiles.ts";
 import { rollbackShipQueueDepsAttempt, type OwnerApprovalInput } from "./depsRollback.ts";
 import { evaluateDepsGate, scanDueDepsRepos, scanShipQueueDepsRepo } from "./depsScan.ts";
@@ -295,9 +296,33 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
     await git(primary, ["commit", "-m", "init"]);
     await git(primary, ["push", "-u", "origin", "main"]);
 
+    // The update lookup stands in for the registry: it reports vitest's newest release, so a
+    // report turns pending only when upstream publishes one, never because a manifest changed.
+    let latestVitest = "4.0.0";
+    const lookup = async (input: { files: ReadonlyMap<string, Uint8Array> }) => {
+      const manifest = JSON.parse(new TextDecoder().decode(input.files.get("package.json"))) as {
+        dependencies: Record<string, string>;
+      };
+      const current = manifest.dependencies.vitest ?? "";
+      return {
+        updates:
+          current === latestVitest
+            ? []
+            : [
+                {
+                  packageFile: "package.json",
+                  depName: "vitest",
+                  currentValue: current,
+                  newValue: latestVitest,
+                },
+              ],
+        incomplete: [],
+      };
+    };
+
     // Unregistered repo scan fails cleanly AND clears scanStarted (no 30-min lockout).
     const unregistered = await scanShipQueueDepsRepo(
-      { queueRoot, nowEpochSec: () => now },
+      { queueRoot, nowEpochSec: () => now, lookup },
       { repo: "realrepo" },
     );
     expect(unregistered.ok).toBe(false);
@@ -307,7 +332,7 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
     NodeFS.writeFileSync(NodePath.join(queueRoot, "repos", "realrepo", "primary"), `${primary}\n`);
 
     const scan1 = await scanShipQueueDepsRepo(
-      { queueRoot, nowEpochSec: () => now + 5 },
+      { queueRoot, nowEpochSec: () => now + 5, lookup },
       { repo: "realrepo" },
     );
     expect(scan1.ok).toBe(true);
@@ -315,17 +340,11 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
     expect(scan1.report?.status).toBe("clean");
     expect(scan1.report?.files["package.json"]).toMatch(/^[0-9a-f]{64}$/);
 
-    // Push a manifest change to origin/main -> next scan detects real drift as 'pending'.
-    NodeFS.writeFileSync(
-      NodePath.join(primary, "package.json"),
-      JSON.stringify({ name: "demo", dependencies: { vitest: "4.1.0" } }),
-    );
-    await git(primary, ["add", "package.json"]);
-    await git(primary, ["commit", "-m", "bump"]);
-    await git(primary, ["push", "origin", "main"]);
+    // Upstream publishes vitest 4.1.0 -> the next scan reports it as a pending update.
+    latestVitest = "4.1.0";
 
     const scan2 = await scanShipQueueDepsRepo(
-      { queueRoot, nowEpochSec: () => now + 10 },
+      { queueRoot, nowEpochSec: () => now + 10, lookup },
       { repo: "realrepo" },
     );
     expect(scan2.ok).toBe(true);
@@ -467,6 +486,335 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
     expect(expectedDigest).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it("never reads a lookup with failed dependencies as clean, so the gate holds the job", async () => {
+    const queueRoot = mkTempDir("sq-deps-incomplete-");
+    const primary = mkTempDir("sq-deps-incomplete-repo-");
+    const git = async (args: string[]) => {
+      const r = await nodeProcessRunner({ command: "git", args, cwd: primary });
+      if (r.exitCode !== 0) throw new Error(r.stderr);
+      return r.stdout.trim();
+    };
+    await git(["init", "-b", "main"]);
+    await git(["config", "user.email", "test@example.com"]);
+    await git(["config", "user.name", "Test User"]);
+    NodeFS.writeFileSync(
+      NodePath.join(primary, "package.json"),
+      '{"name":"demo","dependencies":{"vitest":"4.0.0"}}',
+    );
+    await git(["add", "package.json"]);
+    await git(["commit", "-m", "init"]);
+    writeRegistration(queueRoot, "demo", {
+      primary,
+      remoteUrl: "https://example.invalid/demo.git",
+    });
+
+    let incomplete: string[] = [];
+    const lookup = async () => ({ updates: [], incomplete });
+    const clean = await scanShipQueueDepsRepo(
+      { queueRoot, nowEpochSec: () => fixedNow, lookup },
+      { repo: "demo" },
+    );
+    expect(clean.report?.status).toBe("clean");
+    const files = clean.report!.files;
+    const gate = (at: number) =>
+      evaluateDepsGate({
+        queueRoot,
+        repo: "demo",
+        jobId: "job-1",
+        worktree: primary,
+        files,
+        nowEpochSec: () => at,
+      });
+    expect(gate(fixedNow + 1)).toEqual({ allowed: true, reason: "clean_report" });
+
+    // The next lookup fails for one dependency (rate limit, no token): not clean, and the gate holds.
+    incomplete = ["package.json: vitest"];
+    const failed = await scanShipQueueDepsRepo(
+      { queueRoot, nowEpochSec: () => fixedNow + 21 * 3600, lookup },
+      { repo: "demo", due: true },
+    );
+    expect(failed.report?.status).toBe("incomplete");
+    expect(failed.report?.incomplete).toEqual(["package.json: vitest"]);
+    expect(gate(fixedNow + 21 * 3600 + 1).allowed).toBe(false);
+
+    // A mixed result (an update found, another lookup failed) is incomplete too, and the owner
+    // cannot approve it as if it were a complete list.
+    incomplete = ["package.json: vitest"];
+    const mixedLookup = async () => ({
+      updates: [
+        {
+          packageFile: "package.json",
+          depName: "vitest",
+          currentValue: "4.0.0",
+          newValue: "4.1.0",
+        },
+      ],
+      incomplete,
+    });
+    const mixed = await scanShipQueueDepsRepo(
+      { queueRoot, nowEpochSec: () => fixedNow + 26 * 3600, lookup: mixedLookup },
+      { repo: "demo", due: true },
+    );
+    expect(mixed.report?.status).toBe("incomplete");
+    let asked = 0;
+    const approve = await decideShipQueueDeps(
+      {
+        queueRoot,
+        nowEpochSec: () => fixedNow + 26 * 3600 + 5,
+        requestOwnerApproval: async () => {
+          asked += 1;
+          return { ok: true, approvedBy: "human" };
+        },
+      },
+      { reportId: mixed.report!.id, decision: "approve", cwd: primary },
+    );
+    expect(approve.ok).toBe(false);
+    expect(asked).toBe(0);
+  });
+
+  it("keeps a registered repo's failed scan for status polling, with the hold still off", async () => {
+    const queueRoot = mkTempDir("sq-deps-failscan-");
+    const primary = mkTempDir("sq-deps-failscan-repo-");
+    const git = async (args: string[]) => {
+      const r = await nodeProcessRunner({ command: "git", args, cwd: primary });
+      if (r.exitCode !== 0) throw new Error(r.stderr);
+    };
+    await git(["init", "-b", "main"]);
+    await git(["config", "user.email", "test@example.com"]);
+    await git(["config", "user.name", "Test User"]);
+    NodeFS.writeFileSync(NodePath.join(primary, "package.json"), '{"name":"demo"}');
+    await git(["add", "package.json"]);
+    await git(["commit", "-m", "init"]);
+    writeRegistration(queueRoot, "demo", {
+      primary,
+      remoteUrl: "https://example.invalid/demo.git",
+    });
+    const lookup = async (): Promise<never> => {
+      throw new Error("Renovate is not installed");
+    };
+    const scan = await scanShipQueueDepsRepo(
+      { queueRoot, nowEpochSec: () => fixedNow, lookup },
+      { repo: "demo" },
+    );
+    expect(scan.ok).toBe(false);
+    // What a client polls after POST /deps/scan answered `started`: the failure is there.
+    const repo = listShipQueueDeps(queueRoot, () => fixedNow + 5).repos.find(
+      (r) => r.repo === "demo",
+    );
+    expect(repo?.error).toContain("Renovate is not installed");
+    expect(repo?.holding).toBe(false);
+    // A failed scan is not a report to decide: neither approve nor reject applies to it.
+    const failedId = listShipQueueDeps(queueRoot, () => fixedNow + 6).repos.find(
+      (r) => r.repo === "demo",
+    )?.reportId;
+    expect(failedId).toBeTruthy();
+    {
+      const rejected = await decideShipQueueDeps(
+        {
+          queueRoot,
+          nowEpochSec: () => fixedNow + 7,
+          requestOwnerApproval: async () => ({ ok: true, approvedBy: "human" }),
+        },
+        { reportId: failedId!, decision: "reject", cwd: primary },
+      );
+      expect(rejected.ok).toBe(false);
+    }
+    // The claim is cleared: a new scan may run at once.
+    const again = await scanShipQueueDepsRepo(
+      { queueRoot, nowEpochSec: () => fixedNow + 10, lookup },
+      { repo: "demo" },
+    );
+    expect(again.skipped).not.toBe(true);
+  });
+
+  it("reads every file Renovate's npm manager reads, and reports the claim before a lookup", async () => {
+    const queueRoot = mkTempDir("sq-deps-catalogs-");
+    const primary = mkTempDir("sq-deps-catalogs-repo-");
+    const git = async (args: string[]) => {
+      const r = await nodeProcessRunner({ command: "git", args, cwd: primary });
+      if (r.exitCode !== 0) throw new Error(r.stderr);
+    };
+    await git(["init", "-b", "main"]);
+    await git(["config", "user.email", "test@example.com"]);
+    await git(["config", "user.name", "Test User"]);
+    for (const [file, text] of [
+      ["package.json", '{"name":"root"}'],
+      ["apps/a/package.json", '{"name":"a","dependencies":{"x":"catalog:"}}'],
+      ["apps/a/pnpm-workspace.yaml", "catalog:\n  x: 1.0.0\n"],
+      [".yarnrc.yml", "catalog:\n  y: 2.0.0\n"],
+      ["apps/a/.yarnrc", 'registry "https://registry.example.invalid/"\n'],
+      ["apps/a/.npmrc", "registry=https://registry.example.invalid/\n"],
+    ] as const) {
+      NodeFS.mkdirSync(NodePath.dirname(NodePath.join(primary, file)), { recursive: true });
+      NodeFS.writeFileSync(NodePath.join(primary, file), text);
+    }
+    await git(["add", "-A"]);
+    await git(["commit", "-m", "init"]);
+    writeRegistration(queueRoot, "demo", {
+      primary,
+      remoteUrl: "https://example.invalid/demo.git",
+    });
+
+    let seenPaths: ReadonlyArray<string> = [];
+    const lookup = async (input: { files: ReadonlyMap<string, Uint8Array> }) => {
+      seenPaths = [...input.files.keys()];
+      return { updates: [], incomplete: [] };
+    };
+    const claims: Array<{ started: boolean; reason?: string }> = [];
+    const first = await scanShipQueueDepsRepo(
+      { queueRoot, nowEpochSec: () => fixedNow, lookup, onClaim: (c) => claims.push(c) },
+      { repo: "demo" },
+    );
+    expect(seenPaths).toEqual(
+      expect.arrayContaining([
+        ".yarnrc.yml",
+        "apps/a/.yarnrc",
+        "apps/a/pnpm-workspace.yaml",
+        "apps/a/.npmrc",
+      ]),
+    );
+    expect(Object.keys(first.report!.files)).toEqual(
+      expect.arrayContaining([
+        ".yarnrc.yml",
+        "apps/a/.yarnrc",
+        "apps/a/pnpm-workspace.yaml",
+        "apps/a/.npmrc",
+      ]),
+    );
+    // A scan that cannot claim the repo says why before any lookup.
+    const store = new SqliteDepsStore(queueRoot);
+    try {
+      store.saveRepoState(
+        { ...store.getRepoState("demo")!, scanStarted: fixedNow + 1 },
+        fixedNow + 1,
+      );
+    } finally {
+      store.close();
+    }
+    await scanShipQueueDepsRepo(
+      { queueRoot, nowEpochSec: () => fixedNow + 2, lookup, onClaim: (c) => claims.push(c) },
+      { repo: "demo" },
+    );
+    expect(claims).toEqual([
+      { started: true },
+      { started: false, reason: "a scan is already running" },
+    ]);
+  });
+
+  it("reads a lockfile larger than one read batch exactly, and the owner can decide its report", async () => {
+    const queueRoot = mkTempDir("sq-deps-biglock-");
+    const primary = mkTempDir("sq-deps-biglock-repo-");
+    const git = async (args: string[]) => {
+      const r = await nodeProcessRunner({ command: "git", args, cwd: primary });
+      if (r.exitCode !== 0) throw new Error(r.stderr);
+    };
+    await git(["init", "-b", "main"]);
+    await git(["config", "user.email", "test@example.com"]);
+    await git(["config", "user.name", "Test User"]);
+    NodeFS.writeFileSync(
+      NodePath.join(primary, "package.json"),
+      '{"name":"demo","dependencies":{"vitest":"4.0.0"}}',
+    );
+    // A 3.5 MiB lockfile: more than the 3 MiB batch target, less than the runner's 4 MiB cap.
+    const entry = (i: number) =>
+      `  /pkg-${i}@1.0.0:\n    resolution: {integrity: sha512-${"a".repeat(80)}}\n`;
+    let lock = "lockfileVersion: '9.0'\npackages:\n";
+    for (let i = 0; lock.length < 3.5 * 1024 * 1024; i += 1) lock += entry(i);
+    NodeFS.writeFileSync(NodePath.join(primary, "pnpm-lock.yaml"), lock);
+    await git(["add", "package.json", "pnpm-lock.yaml"]);
+    await git(["commit", "-m", "init"]);
+    // A real origin: the owner's decision re-reads the dependency files at origin/main.
+    const origin = mkTempDir("sq-deps-biglock-origin-");
+    await git(["init", "--bare", "-b", "main", origin]);
+    await git(["remote", "add", "origin", origin]);
+    await git(["push", "-q", "origin", "main"]);
+    await git(["fetch", "-q", "origin"]);
+    writeRegistration(queueRoot, "demo", {
+      primary,
+      remoteUrl: "https://example.invalid/demo.git",
+    });
+    let seenLock: Uint8Array | undefined;
+    const lookup = async (input: { files: ReadonlyMap<string, Uint8Array> }) => {
+      seenLock = input.files.get("pnpm-lock.yaml");
+      return {
+        updates: [
+          {
+            packageFile: "package.json",
+            depName: "vitest",
+            currentValue: "4.0.0",
+            newValue: "4.1.0",
+          },
+        ],
+        incomplete: [],
+      };
+    };
+    const scan = await scanShipQueueDepsRepo(
+      { queueRoot, nowEpochSec: () => fixedNow, lookup },
+      { repo: "demo" },
+    );
+    expect(scan.report?.status).toBe("pending");
+    expect(Buffer.from(seenLock!).equals(Buffer.from(lock))).toBe(true);
+    expect(Object.keys(scan.report!.files)).toContain("pnpm-lock.yaml");
+    const rejected = await decideShipQueueDeps(
+      {
+        queueRoot,
+        nowEpochSec: () => fixedNow + 5,
+        requestOwnerApproval: async () => ({ ok: true, approvedBy: "human" }),
+      },
+      { reportId: scan.report!.id, decision: "reject", cwd: primary },
+    );
+    expect(rejected.ok).toBe(true);
+  });
+
+  it("keeps the hold off until the owner decides, even when the first scan finds updates", async () => {
+    const queueRoot = mkTempDir("sq-deps-pilot-");
+    const primary = mkTempDir("sq-deps-pilot-repo-");
+    const git = async (args: string[]) => {
+      const r = await nodeProcessRunner({ command: "git", args, cwd: primary });
+      if (r.exitCode !== 0) throw new Error(r.stderr);
+    };
+    await git(["init", "-b", "main"]);
+    await git(["config", "user.email", "test@example.com"]);
+    await git(["config", "user.name", "Test User"]);
+    NodeFS.writeFileSync(
+      NodePath.join(primary, "package.json"),
+      '{"name":"demo","dependencies":{"vitest":"4.0.0"}}',
+    );
+    await git(["add", "package.json"]);
+    await git(["commit", "-m", "init"]);
+    writeRegistration(queueRoot, "demo", {
+      primary,
+      remoteUrl: "https://example.invalid/demo.git",
+    });
+    const lookup = async () => ({
+      updates: [
+        {
+          packageFile: "package.json",
+          depName: "vitest",
+          currentValue: "4.0.0",
+          newValue: "4.1.0",
+        },
+      ],
+      incomplete: [],
+    });
+    const first = await scanShipQueueDepsRepo(
+      { queueRoot, nowEpochSec: () => fixedNow, lookup },
+      { repo: "demo" },
+    );
+    expect(first.report?.status).toBe("pending");
+    // The documented pilot: the hold is the owner's to turn on, so the gate admits jobs until then.
+    expect(
+      evaluateDepsGate({
+        queueRoot,
+        repo: "demo",
+        jobId: "job-1",
+        worktree: primary,
+        files: first.report!.files,
+        nowEpochSec: () => fixedNow + 1,
+      }),
+    ).toEqual({ allowed: true, reason: "hold_inactive" });
+  });
+
   it("scans due repos on cadence via scanDueDepsRepos and admits clean reports through evaluateDepsGate", async () => {
     const queueRoot = mkTempDir("sq-deps-scan-");
     NodeFS.mkdirSync(NodePath.join(queueRoot, "repos", "alpha"), { recursive: true });
@@ -563,13 +911,143 @@ describe("sq_pins.json specification validation, version extraction, digests, an
       NodePath.join(repoRoot, "infra", "ci-host", "ci-hosts.json"),
       "utf8",
     );
-    expect(extractCurrentPinValue(catalogText, sccachePin!)).toBe("0.20.1");
+    // The extracted pin agrees with the catalog's own install line, whatever release it names.
+    const sccacheInstall = (
+      JSON.parse(catalogText) as { toolchain: Record<string, { install: string }> }
+    ).toolchain.sccache!.install;
+    const sccachePinned = extractCurrentPinValue(catalogText, sccachePin!);
+    expect(sccachePinned).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(sccacheInstall).toContain(`ci-sccache.sh" ${sccachePinned} `);
     const digests = computePinDigests({ "infra/ci-host/ci-hosts.json": catalogText }, spec);
     expect(digests["pin:vp"]).toMatch(/^[0-9a-f]{64}$/);
 
     const managers = buildRenovateCustomManagers(spec);
     expect(managers).toHaveLength(spec.pins.length);
     expect(managers.some((m) => m.depNameTemplate === "voidzero-dev/vite-plus")).toBe(true);
+  });
+
+  it("marks a declared pin that Renovate did not assess as incomplete", () => {
+    const repoRoot = NodePath.resolve(import.meta.dirname, "../../..");
+    const spec = loadPinsSpec(NodePath.join(repoRoot, "infra", "ci-host", "sq_pins.json"));
+    const pinFiles = [...new Set(spec.pins.map((pin) => pin.file))];
+    const files = new Map(
+      pinFiles.map((file) => [file, NodeFS.readFileSync(NodePath.join(repoRoot, file))] as const),
+    );
+    // Renovate's record for each pin, with the value it read (as a full lookup reports it).
+    const assessed = new Map(
+      spec.pins.map((pin) => [
+        `${pin.file}\0${pin.depName}`,
+        extractCurrentPinValue(files.get(pin.file)!.toString("utf8"), pin)!,
+      ]),
+    );
+    expect(reconcileDeclaredPins(spec, files, assessed)).toEqual([]);
+    const vp = spec.pins.find((pin) => pin.name === "vp")!;
+    const fly = spec.pins.find((pin) => pin.name === "fly")!;
+    // The pin's file is missing from the commit: every pin in it is unassessed.
+    const noFleetTools = new Map(files);
+    noFleetTools.delete(fly.file);
+    expect(reconcileDeclaredPins(spec, noFleetTools, assessed)).toContain(
+      `${fly.file}: ${fly.depName} (the pin's file is not in the commit)`,
+    );
+    // Renovate emitted no record for a pin (its manager matched nothing it could look up).
+    const noVp = new Map(assessed);
+    noVp.delete(`${vp.file}\0${vp.depName}`);
+    expect(reconcileDeclaredPins(spec, files, noVp)).toEqual([
+      `${vp.file}: ${vp.depName} (Renovate reported no lookup for this pin)`,
+    ]);
+    // Renovate read another value than the pin's pattern matches.
+    const otherVp = new Map(assessed).set(`${vp.file}\0${vp.depName}`, "0.0.1");
+    expect(reconcileDeclaredPins(spec, files, otherVp)[0]).toContain("Renovate read 0.0.1");
+    // The pin's pattern no longer matches its file.
+    const broken = new Map(files).set(vp.file, Buffer.from("{}\n"));
+    expect(reconcileDeclaredPins(spec, broken, assessed)).toContain(
+      `${vp.file}: ${vp.depName} (the pin's pattern matches no version)`,
+    );
+  });
+
+  it("passes the pin limits to Renovate, so it picks the newest allowed release", () => {
+    const repoRoot = NodePath.resolve(import.meta.dirname, "../../..");
+    const spec = loadPinsSpec(NodePath.join(repoRoot, "infra", "ci-host", "sq_pins.json"));
+    const rules = buildPinPackageRules(spec);
+    const forDep = (depName: string) =>
+      rules.filter((r) => (r.matchDepNames as string[] | undefined)?.includes(depName));
+    // uv has no `major`: Renovate must not choose a new major or a new 0.x minor for it.
+    expect(forDep("astral-sh/uv")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ matchUpdateTypes: ["major"], enabled: false }),
+        expect.objectContaining({
+          matchCurrentVersion: "/^v?0\\./",
+          matchUpdateTypes: ["minor"],
+          enabled: false,
+        }),
+      ]),
+    );
+    expect(forDep("astral-sh/uv")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ separateMinorPatch: true })]),
+    );
+    // ffmpeg takes majors and only month-end builds; its own exact range is the only one set
+    // (a later rule would replace it).
+    const ffmpegPin = spec.pins.find((pin) => pin.depName === "BtbN/FFmpeg-Builds")!;
+    const ffmpeg = forDep("BtbN/FFmpeg-Builds");
+    expect(ffmpeg.some((r) => r.enabled === false)).toBe(false);
+    const ranges = ffmpeg.map((r) => r.allowedVersions).filter((v) => typeof v === "string");
+    expect(ranges).toEqual(
+      ffmpegPin.allowedVersions ? [ffmpegPin.allowedVersions] : [expect.any(String)],
+    );
+    // Every rule is scoped to the pin's own file.
+    for (const rule of rules) {
+      expect(spec.pins.some((pin) => (rule.matchFileNames as string[])[0] === pin.file)).toBe(true);
+    }
+  });
+
+  it("offers only the tool-pin updates sq_pins.json allows", () => {
+    const repoRoot = NodePath.resolve(import.meta.dirname, "../../..");
+    const spec = loadPinsSpec(NodePath.join(repoRoot, "infra", "ci-host", "sq_pins.json"));
+    const file = "infra/ci-host/ci-hosts.json";
+    const limited = applyPinLimits(
+      {
+        updates: [
+          {
+            packageFile: file,
+            depName: "astral-sh/uv",
+            currentValue: "0.13.9",
+            newValue: "0.13.10",
+          },
+          {
+            packageFile: file,
+            depName: "astral-sh/uv",
+            currentValue: "0.13.9",
+            newValue: "0.14.0",
+          },
+          { packageFile: file, depName: "typescript", currentValue: "5.9.3", newValue: "7.0.2" },
+          {
+            packageFile: file,
+            depName: "BtbN/FFmpeg-Builds",
+            currentValue: "2026-10-31-12-59",
+            newValue: "2026-11-27-12-42",
+          },
+          {
+            packageFile: file,
+            depName: "BtbN/FFmpeg-Builds",
+            currentValue: "2026-10-31-12-59",
+            newValue: "2026-11-30-12-50",
+          },
+          {
+            packageFile: "package.json",
+            depName: "knip",
+            currentValue: "6.34.0",
+            newValue: "7.0.0",
+          },
+        ],
+        incomplete: [],
+      },
+      spec,
+    );
+    expect(limited.updates.map((u) => `${u.depName} ${u.newValue}`)).toEqual([
+      "astral-sh/uv 0.13.10",
+      "BtbN/FFmpeg-Builds 2026-11-30-12-50",
+      "knip 7.0.0",
+    ]);
   });
 
   it("anchors every pin in a tracked file, exactly once", () => {

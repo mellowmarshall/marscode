@@ -48,33 +48,45 @@ install_deps() {
   VP_GIT_HOOKS=0 vp install --frozen-lockfile
 }
 
+timed() { # NAME CMD...: run CMD and print its wall time (PLAYBOOK §14.2 per-step timing)
+  local name="$1" start end rc=0
+  shift
+  start=$(date +%s%N)
+  "$@" || rc=$?
+  end=$(date +%s%N)
+  printf 'ship-steps: step %s exit=%s ms=%s\n' "$name" "$rc" "$(((end - start) / 1000000))"
+  return "$rc"
+}
+
 ci() {
   local base_ref="${SHIP_QUEUE_BASE_REF:-origin/main}"
   # PLAYBOOK §16 over the whole tree; CI hosts hold no private denylist, so generic rules only.
-  node packages/hygiene/src/bin.ts tree --public-only || return $?
+  timed hygiene node packages/hygiene/src/bin.ts tree --public-only || return $?
   # README images must match the components they show; hashes only, no browser.
-  node scripts/readme-media.ts --check || return $?
-  # PLAYBOOK §13.1: lint this file and every shell script the change touches under infra/.
+  timed readme-media node scripts/readme-media.ts --check || return $?
+  # PLAYBOOK §13.1: lint this file and every shell script the change touches (vendored .repos is
+  # not ours), following sourced files, at full severity: a touched script is fixed, never baselined.
   local changed_shell shell_files=()
-  changed_shell=$(git diff --name-only --diff-filter=d "$base_ref...HEAD" -- ':(glob)infra/**/*.sh') || {
+  changed_shell=$(git diff --name-only --diff-filter=d "$base_ref...HEAD" -- '*.sh' ':!.repos' ':!scripts/ship/ship-steps.sh') || {
     echo "marscode ship-steps: cannot diff $base_ref...HEAD" >&2
     return 1
   }
   [ -z "$changed_shell" ] || mapfile -t shell_files <<<"$changed_shell"
   echo "marscode ship-steps: shellcheck scripts/ship/ship-steps.sh ${shell_files[*]}"
-  shellcheck scripts/ship/ship-steps.sh "${shell_files[@]}" || return $?
+  timed shellcheck shellcheck -x scripts/ship/ship-steps.sh "${shell_files[@]}" || return $?
   # Skip workspace install and check:changed when only ship-queue declaration/step files changed.
   local non_ship
   non_ship=$(git diff --name-only "$base_ref...HEAD" -- . ':!.tree-guard.conf' ':!scripts/ship/ship-steps.sh') || {
     echo "marscode ship-steps: cannot diff $base_ref...HEAD" >&2
     return 1
   }
+  # Only ship-queue files changed: ship-steps.sh was checked by the pass above.
   [ -n "$non_ship" ] || return 0
   ensure_vp_path || return $?
   if [ ! -d node_modules ]; then
-    VP_GIT_HOOKS=0 vp install --frozen-lockfile || return $?
+    VP_GIT_HOOKS=0 timed install vp install --frozen-lockfile || return $?
   fi
-  vp run check:changed "$base_ref"
+  timed check-changed vp run check:changed "$base_ref"
 }
 
 merge() { # PR

@@ -4,7 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterAll, afterEach, describe, expect, it } from "vite-plus/test";
 
 import { runHostGuardCli } from "./cli.ts";
 import { decideCloudCli } from "./cloudCliGuard.ts";
@@ -19,6 +19,25 @@ import { checkShimDepth } from "./shimDepth.ts";
 import { decideTreeGuard } from "./treeGuard.ts";
 
 const PKG_ROOT = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
+
+// install.sh copies the CLI bundle. Build it once into a temp dir, so a test run on a fresh
+// checkout neither needs a prior build nor writes dist/ into the checkout.
+let guardBundle: string | undefined;
+function buildGuardBundle(): string {
+  if (guardBundle) return guardBundle;
+  const outDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "hg-bundle-"));
+  const vp = NodePath.join(PKG_ROOT, "..", "..", "node_modules", ".bin", "vp");
+  const res = NodeChildProcess.spawnSync(vp, ["pack", "--out-dir", outDir], {
+    cwd: PKG_ROOT,
+    encoding: "utf8",
+  });
+  if (res.status !== 0) throw new Error(`vp pack failed: ${res.stderr}${res.stdout}`);
+  guardBundle = NodePath.join(outDir, "bin.mjs");
+  return guardBundle;
+}
+afterAll(() => {
+  if (guardBundle) NodeFS.rmSync(NodePath.dirname(guardBundle), { recursive: true, force: true });
+});
 
 function runGit(cwd: string, args: ReadonlyArray<string>): string {
   const res = NodeChildProcess.spawnSync("/usr/bin/git", ["-C", cwd, ...args], {
@@ -717,6 +736,257 @@ exit ${REFUSED_EXIT_CODE}
     expect(selfReport.pythonRequired).toBe(false);
   });
 
+  it("keeps a real binary at a shim destination even when PATH chooses another one", () => {
+    const tmpRoot = NodeFS.existsSync("/tmp") ? "/tmp" : NodeOS.tmpdir();
+    const root = NodeFS.mkdtempSync(NodePath.join(tmpRoot, "hg-keep-"));
+    tempDirs.push(root);
+    const fakeHome = NodePath.join(root, "home");
+    const prefix = NodePath.join(fakeHome, ".local");
+    const binGit = NodePath.join(prefix, "bin", "git");
+    const realDir = NodePath.join(prefix, "lib", "marscode", "host-guards", "real");
+    NodeFS.mkdirSync(NodePath.join(prefix, "bin"), { recursive: true });
+    const install = (path: string) =>
+      NodeChildProcess.spawnSync(
+        "bash",
+        [
+          NodePath.join(PKG_ROOT, "scripts", "install.sh"),
+          "--prefix",
+          prefix,
+          "--real-node",
+          process.execPath,
+        ],
+        {
+          env: {
+            ...process.env,
+            HOME: fakeHome,
+            PATH: path,
+            HOST_GUARDS_BUNDLE: buildGuardBundle(),
+          },
+          encoding: "utf8",
+        },
+      );
+    // Run 1: the user's own git at the shim destination, first on PATH: it is kept as real/git,
+    // and both the shim and the guard config record that copy.
+    const ownGit = "#!/bin/sh\necho own-git\n";
+    NodeFS.writeFileSync(binGit, ownGit, { mode: 0o755 });
+    const first = install(`${prefix}/bin:/usr/bin:/bin`);
+    expect(first.status, first.stderr).toBe(0);
+    const keptGit = NodePath.join(realDir, "git");
+    expect(NodeFS.readFileSync(keptGit, "utf8")).toBe(ownGit);
+    expect(NodeFS.readFileSync(binGit, "utf8")).toContain(`REAL_GIT='${keptGit}'`);
+    const config = NodePath.join(prefix, "lib", "marscode", "host-guards.json");
+    expect((JSON.parse(NodeFS.readFileSync(config, "utf8")) as { realGit: string }).realGit).toBe(
+      keptGit,
+    );
+    // Run 2: another binary replaced the shim, and /usr/bin/git comes first on PATH. The shim runs
+    // /usr/bin/git, the recorded real/git is unchanged, and the other binary is kept beside it.
+    const stray = "#!/bin/sh\necho stray\n";
+    NodeFS.rmSync(binGit);
+    NodeFS.writeFileSync(binGit, stray, { mode: 0o755 });
+    const second = install(`/usr/bin:/bin:${prefix}/bin`);
+    expect(second.status, second.stderr).toBe(0);
+    expect(NodeFS.readFileSync(binGit, "utf8")).toContain("REAL_GIT='/usr/bin/git'");
+    expect(NodeFS.readFileSync(keptGit, "utf8")).toBe(ownGit);
+    const displaced = NodeFS.readdirSync(realDir).filter((f) => f.startsWith("git.displaced."));
+    expect(displaced).toHaveLength(1);
+    expect(NodeFS.readFileSync(NodePath.join(realDir, displaced[0]!), "utf8")).toBe(stray);
+    // Run 3: another file replaced the shim again, and $BIN_DIR comes first on PATH. The kept
+    // real/git still wins, so the shim and config keep running it; the new file is kept aside.
+    const stray2 = "#!/bin/sh\necho stray-two\n";
+    NodeFS.rmSync(binGit);
+    NodeFS.writeFileSync(binGit, stray2, { mode: 0o755 });
+    const third = install(`${prefix}/bin:/usr/bin:/bin`);
+    expect(third.status, third.stderr).toBe(0);
+    expect(NodeFS.readFileSync(keptGit, "utf8")).toBe(ownGit);
+    expect(NodeFS.readFileSync(binGit, "utf8")).toContain(`REAL_GIT='${keptGit}'`);
+    const kept = NodeFS.readdirSync(realDir)
+      .filter((f) => f.startsWith("git.displaced."))
+      .map((f) => NodeFS.readFileSync(NodePath.join(realDir, f), "utf8"));
+    expect(kept).toContain(stray2);
+    // A user's own wrapper that mentions host-guards is a real binary, not a shim: it is kept as
+    // real/gh, and a reinstall's cleanup of stray shims in real/ leaves it in place.
+    const wrapper =
+      '#!/bin/bash -p\n# my gh wrapper; see host-guards docs\nexec /usr/bin/gh "$@"\n';
+    const binGh = NodePath.join(prefix, "bin", "gh");
+    NodeFS.writeFileSync(binGh, wrapper, { mode: 0o755 });
+    expect(install(`${prefix}/bin:/usr/bin:/bin`).status).toBe(0);
+    expect(install(`${prefix}/bin:/usr/bin:/bin`).status).toBe(0);
+    expect(NodeFS.readFileSync(NodePath.join(realDir, "gh"), "utf8")).toBe(wrapper);
+    expect(NodeFS.readFileSync(binGh, "utf8")).toContain(
+      `REAL_GH='${NodePath.join(realDir, "gh")}'`,
+    );
+  });
+
+  it("treats older devtools guards as shims, keeps displaced binaries apart, and never writes into a linked directory", () => {
+    const tmpRoot = NodeFS.existsSync("/tmp") ? "/tmp" : NodeOS.tmpdir();
+    const root = NodeFS.mkdtempSync(NodePath.join(tmpRoot, "hg-legacy-"));
+    tempDirs.push(root);
+    const fakeHome = NodePath.join(root, "home");
+    const prefix = NodePath.join(fakeHome, ".local");
+    const bin = NodePath.join(prefix, "bin");
+    const guards = NodePath.join(prefix, "guards");
+    const lib = NodePath.join(prefix, "lib");
+    const realDir = NodePath.join(lib, "marscode", "host-guards", "real");
+    const realBin = NodePath.join(root, "realbin");
+    const stub = NodePath.join(root, "stub");
+    for (const dir of [bin, guards, realDir, realBin, stub])
+      NodeFS.mkdirSync(dir, { recursive: true });
+    for (const name of ["fly", "pnpm", "npm"]) {
+      NodeFS.writeFileSync(NodePath.join(realBin, name), `#!/bin/sh\necho real-${name}\n`, {
+        mode: 0o755,
+      });
+    }
+    // The devtools install wrote these guards: a link to its Python install guard for each package
+    // manager, and a marker wrapper for each cloud CLI.
+    const pyGuard = NodePath.join(lib, "home-dev-install-guard.py");
+    NodeFS.writeFileSync(pyGuard, "#!/usr/bin/python3 -IB\nprint('guard')\n", { mode: 0o755 });
+    NodeFS.symlinkSync(pyGuard, NodePath.join(bin, "pnpm"));
+    const cliGuard =
+      "#!/usr/bin/env bash\n# managed by devtools/host-guards: the EXP config and deploy guard for every AI CLI\n" +
+      `exec /usr/bin/python3 -IB ${lib}/exp-cli-guard.py "$0" "$@"\n`;
+    NodeFS.writeFileSync(NodePath.join(guards, "fly"), cliGuard, { mode: 0o755 });
+    // An earlier faulty run kept the same guards in real/: the cleanup drops them.
+    NodeFS.writeFileSync(NodePath.join(realDir, "fly"), cliGuard, { mode: 0o755 });
+    NodeFS.symlinkSync(pyGuard, NodePath.join(realDir, "pnpm"));
+    // A link to a directory where the npm shim goes.
+    const userDir = NodePath.join(root, "user-dir");
+    NodeFS.mkdirSync(userDir);
+    NodeFS.symlinkSync(userDir, NodePath.join(bin, "npm"));
+    // Every install in this test happens in the same second.
+    NodeFS.writeFileSync(NodePath.join(stub, "date"), "#!/bin/sh\necho 1700000000\n", {
+      mode: 0o755,
+    });
+    const install = () =>
+      NodeChildProcess.spawnSync(
+        "bash",
+        [
+          NodePath.join(PKG_ROOT, "scripts", "install.sh"),
+          "--prefix",
+          prefix,
+          "--real-node",
+          process.execPath,
+        ],
+        {
+          env: {
+            ...process.env,
+            HOME: fakeHome,
+            PATH: `${stub}:${guards}:${bin}:${realBin}:/usr/bin:/bin`,
+            HOST_GUARDS_BUNDLE: buildGuardBundle(),
+          },
+          encoding: "utf8",
+        },
+      );
+    const first = install();
+    expect(first.status, first.stderr).toBe(0);
+    // The shims run the real binaries, never a devtools guard (which would loop back to the shim).
+    expect(NodeFS.readFileSync(NodePath.join(guards, "fly"), "utf8")).toContain(
+      `REAL='${realBin}/fly'`,
+    );
+    expect(NodeFS.readFileSync(NodePath.join(bin, "pnpm"), "utf8")).toContain(
+      `REAL='${realBin}/pnpm'`,
+    );
+    expect(NodeFS.existsSync(NodePath.join(realDir, "fly"))).toBe(false);
+    expect(NodeFS.existsSync(NodePath.join(realDir, "pnpm"))).toBe(false);
+    // The npm shim replaced the link (it was not written into the directory), which is kept aside.
+    expect(NodeFS.lstatSync(NodePath.join(bin, "npm")).isSymbolicLink()).toBe(false);
+    expect(NodeFS.readFileSync(NodePath.join(bin, "npm"), "utf8")).toContain(
+      `REAL='${realBin}/npm'`,
+    );
+    expect(NodeFS.readdirSync(userDir)).toEqual([]);
+    const keptNpm = NodeFS.readdirSync(realDir).filter((f) => f.startsWith("npm.displaced."));
+    expect(keptNpm).toHaveLength(1);
+    expect(NodeFS.readlinkSync(NodePath.join(realDir, keptNpm[0]!))).toBe(userDir);
+    // Two binaries at the git shim's place, in installs within one second, are both kept: the
+    // first one this run chose (real/git), the next two beside it (git.displaced.*), with the
+    // same timestamp.
+    const binGit = NodePath.join(bin, "git");
+    for (const text of [
+      "#!/bin/sh\necho stray-x\n",
+      "#!/bin/sh\necho stray-y\n",
+      "#!/bin/sh\necho stray-z\n",
+    ]) {
+      NodeFS.rmSync(binGit, { force: true });
+      NodeFS.writeFileSync(binGit, text, { mode: 0o755 });
+      const res = install();
+      expect(res.status, res.stderr).toBe(0);
+    }
+    const keptGit = NodeFS.readdirSync(realDir)
+      .filter((f) => f === "git" || f.startsWith("git."))
+      .map((f) => NodeFS.readFileSync(NodePath.join(realDir, f), "utf8"));
+    expect(keptGit).toEqual(
+      expect.arrayContaining([
+        "#!/bin/sh\necho stray-x\n",
+        "#!/bin/sh\necho stray-y\n",
+        "#!/bin/sh\necho stray-z\n",
+      ]),
+    );
+  });
+
+  it("refuses an install whose existing guard config names other roots than the host's", () => {
+    const tmpRoot = NodeFS.existsSync("/tmp") ? "/tmp" : NodeOS.tmpdir();
+    const root = NodeFS.mkdtempSync(NodePath.join(tmpRoot, "hg-roots-"));
+    tempDirs.push(root);
+    const fakeHome = NodePath.join(root, "home");
+    const prefix = NodePath.join(fakeHome, ".local");
+    const dataRoot = NodePath.join(root, "srv-ci");
+    NodeFS.mkdirSync(dataRoot, { recursive: true });
+    NodeFS.mkdirSync(NodePath.join(fakeHome, "Dev"), { recursive: true });
+    // The data root is reached through a home link, as on hosts whose data moved out of /home.
+    NodeFS.symlinkSync(dataRoot, NodePath.join(fakeHome, "Dev-data"));
+    const install = (args: ReadonlyArray<string>) =>
+      NodeChildProcess.spawnSync(
+        "bash",
+        [
+          NodePath.join(PKG_ROOT, "scripts", "install.sh"),
+          "--prefix",
+          prefix,
+          "--real-node",
+          process.execPath,
+          ...args,
+        ],
+        {
+          env: {
+            ...process.env,
+            HOME: fakeHome,
+            PATH: "/usr/local/bin:/usr/bin:/bin",
+            HOST_GUARDS_BUNDLE: buildGuardBundle(),
+          },
+          encoding: "utf8",
+        },
+      );
+    const first = install([
+      "--org",
+      "example-org",
+      "--source-root",
+      "~/Dev",
+      "--data-root",
+      "~/Dev-data",
+    ]);
+    expect(first.status, first.stderr).toBe(0);
+    // The same roots, spelled as the provision gives them (the link resolved), pass.
+    const same = install([
+      "--source-root",
+      NodePath.join(fakeHome, "Dev"),
+      "--data-root",
+      dataRoot,
+    ]);
+    expect(same.status, same.stderr).toBe(0);
+    // Another data root fails, names the file and key to fix, and leaves the config unchanged.
+    const config = NodePath.join(prefix, "lib", "marscode", "host-guards.json");
+    const before = NodeFS.readFileSync(config, "utf8");
+    const other = install([
+      "--source-root",
+      NodePath.join(fakeHome, "Dev"),
+      "--data-root",
+      "/data/Dev",
+    ]);
+    expect(other.status).toBe(1);
+    expect(other.stderr).toContain(
+      `dataRoot in ${config} is ~/Dev-data, but this host's root is /data/Dev`,
+    );
+    expect(NodeFS.readFileSync(config, "utf8")).toBe(before);
+  });
+
   it("installs atomically via install.sh, migrates legacy hooks, never overwrites existing config, and passes self-probes", () => {
     const tmpRoot = NodeFS.existsSync("/tmp") ? "/tmp" : NodeOS.tmpdir();
     const root = NodeFS.mkdtempSync(NodePath.join(tmpRoot, "hg-inst-"));
@@ -752,6 +1022,7 @@ exit ${REFUSED_EXIT_CODE}
       ...process.env,
       HOME: fakeHome,
       PATH: `/usr/local/bin:/usr/bin:/bin`,
+      HOST_GUARDS_BUNDLE: buildGuardBundle(),
     };
 
     // 1. Dry-run creates nothing
