@@ -222,6 +222,27 @@ describe("runlog --ci-suite", () => {
     expect(body[0]).toBe("a".repeat(3_000_000));
   });
 
+  it("exits 120 with no stack trace when its reader closes stdout, as the original does", () => {
+    for (const args of [
+      ["--ci-suite", "pipe", "--", "seq", "1", "2000000"],
+      ["--", "bash", "-c", "seq 1 10"],
+    ]) {
+      // A shell pipeline whose reader exits at once, as `| head -0` does.
+      const script = `"$0" "$@" | head -c 0; echo "rc=\${PIPESTATUS[0]}" >&2`;
+      const res = NodeChildProcess.spawnSync(
+        "bash",
+        ["-c", script, process.execPath, BIN, ...args],
+        {
+          cwd: tmp,
+          env,
+          encoding: "utf8",
+          timeout: 60_000,
+        },
+      );
+      expect(res.stderr, JSON.stringify(args)).toBe("rc=120\n");
+    }
+  });
+
   it("refuses a blank or multi-line name, a missing name and a missing command with exit 2", () => {
     for (const args of [
       ["--ci-suite", "", "--", "true"],

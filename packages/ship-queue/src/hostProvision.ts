@@ -34,10 +34,10 @@ export function resolveHostSyncPaths(marscodeRoot: string): ReadonlyArray<string
   return paths;
 }
 
-/** MarsCode CLIs whose prebuilt bundles ride in the payload for `infra/ci-host/ci-marscode-cli.sh`. */
 /** The one line an installer prints when it kept another install's CLI (ci-marscode-cli.sh). */
 const SKIPPED_INSTALL = /^[\w.-]+: warning: skipped .*$/m;
 
+/** MarsCode CLIs whose prebuilt bundles ride in the payload for `infra/ci-host/ci-marscode-cli.sh`. */
 export const PAYLOAD_CLI_BUNDLES: ReadonlyArray<string> = ["runlog", "playbook"];
 
 /** Where the post-merge sync installs MarsCode CLI bundles (`<dir>/<name>/dist/bin.mjs`). */

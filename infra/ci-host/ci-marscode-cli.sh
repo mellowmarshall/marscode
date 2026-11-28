@@ -57,8 +57,9 @@ foreign_cli() {
   elif [ -e "$bin" ] && [ ! -f "$bin" ]; then
     printf 'not a regular file'
   elif [ -f "$bin" ]; then
-    # Wrappers written before the marker name the release link's bundle.
-    if ! grep -qxF -- "$wrapper_marker" "$bin" && ! grep -qF -- "$target/dist/bin.mjs" "$bin"; then
+    # Wrappers written before the marker name the release link's bundle, plain or as printf %q wrote it.
+    if ! grep -qxF -- "$wrapper_marker" "$bin" && ! grep -qF -- "$target/dist/bin.mjs" "$bin" \
+      && ! grep -qF -- "$(printf %q "$target/dist/bin.mjs")" "$bin"; then
       printf 'a file another install wrote'
     fi
   fi

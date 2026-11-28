@@ -154,6 +154,37 @@ describe("ci-marscode-cli.sh flag-parity guard", () => {
     expect(runBin("playbook", ["version"]).status).toBe(0);
   });
 
+  it("takes a pre-marker wrapper written with printf %q as MarsCode's own", () => {
+    // A home whose path printf %q escapes, as the old installer wrote it into the wrapper.
+    home = NodePath.join(tmp, "home with space");
+    NodeFS.mkdirSync(NodePath.join(home, ".local", "bin"), { recursive: true });
+    const bundlePath = NodePath.join(
+      home,
+      ".local",
+      "lib",
+      "marscode-tools",
+      "playbook",
+      "dist",
+      "bin.mjs",
+    );
+    const quoted = NodeChildProcess.execFileSync(
+      "bash",
+      ["-c", 'printf %q "$1"', "_", bundlePath],
+      {
+        encoding: "utf8",
+      },
+    );
+    expect(quoted).toContain("\\ ");
+    NodeFS.writeFileSync(binOf("playbook"), `#!/usr/bin/env bash\nexec node ${quoted} "$@"\n`, {
+      mode: 0o755,
+    });
+    bundle("playbook", "packages/playbook/src/bin.ts");
+    const r = installer("playbook");
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).not.toContain("warning: skipped");
+    expect(NodeFS.readFileSync(binOf("playbook"), "utf8")).toContain(MARKER);
+  });
+
   it("installs where nothing is installed yet", () => {
     bundle("runlog", "packages/runlog/src/bin.ts");
     expect(installer("runlog").status).toBe(0);

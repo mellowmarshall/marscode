@@ -10,7 +10,7 @@ import { clockTicks, reapedChildTicks } from "./reapedChildCpu.ts";
 import { cannotRun, signalExitCode } from "./runlogProcess.ts";
 
 /** What a command's line is marked with when it starts as a measured line does. */
-export const SUITE_PRINTED = "(the suite printed) ";
+const SUITE_PRINTED = "(the suite printed) ";
 const MEASURED_PREFIXES = ["ci-suite:", "ci-select:"];
 /** The ASCII whitespace that Python's bytes.lstrip() removes. */
 const WHITESPACE = new Set([0x20, 0x09, 0x0a, 0x0d, 0x0b, 0x0c]);
@@ -21,7 +21,7 @@ export function validSuiteName(name: string): boolean {
 }
 
 /** The line as runlog passes it on: marked when it starts (after whitespace) as a measured line. */
-export function passThroughLine(line: Buffer): Buffer {
+function passThroughLine(line: Buffer): Buffer {
   let start = 0;
   while (start < line.length && WHITESPACE.has(line[start] ?? 0)) start += 1;
   const head = line.subarray(start, start + 16).toString("latin1");
@@ -30,7 +30,7 @@ export function passThroughLine(line: Buffer): Buffer {
     : line;
 }
 
-export interface CiSuiteIo {
+interface CiSuiteIo {
   /** runlog's stdout. */
   readonly out: (chunk: string | Uint8Array) => void;
   /** runlog's stderr. */

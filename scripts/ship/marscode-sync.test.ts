@@ -7,12 +7,15 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { parseCliArgs } from "./marscode-sync-cli.ts";
 import { acquireSyncLock, validateAndSwapAppImage } from "./marscode-sync-install.ts";
+import { parityFingerprint } from "./marscode-sync-parity.ts";
 import {
   APP_IMAGE_TARGET_ID,
   SYNC_BINARY_TARGETS,
   buildDesktopArtifactEnv,
   parseGlibcVersionFromLdd,
+  parseSyncState,
   planSync,
+  recordParitySkips,
   type SyncState,
 } from "./marscode-sync-plan.ts";
 
@@ -70,6 +73,82 @@ describe("planSync diff-driven target selection", () => {
     expect(built).toEqual(["marscode-host-guard"]);
     expect(plan.appImage).toEqual({ action: "skip", reason: "unchanged" });
     expect(plan.needsInstall).toBe(false);
+  });
+
+  it("retries every CLI with a parity probe when the probes change", () => {
+    const plan = planSync({
+      headSha: "sha-2",
+      state: syncedState("sha-1"),
+      existingBinaries: ALL_BINS,
+      appImageExists: true,
+      hasNodeModules: true,
+      jobsBehind: 0,
+      force: false,
+      skipApp: false,
+      desktopHost: { eligible: true },
+      listChangedFiles: () => ["scripts/ship/marscode-sync-parity.ts"],
+    });
+    const built = plan.binaries
+      .filter((b) => b.decision.action === "build")
+      .map((b) => b.target.id);
+    expect(built.toSorted()).toEqual(["fleet", "runlog", "surface"]);
+  });
+
+  it("retries a parity skip only when its probe fingerprint changes", () => {
+    const input = {
+      headSha: "sha-2",
+      state: { ...syncedState("sha-1"), paritySkips: { playbook: parityFingerprint("playbook") } },
+      existingBinaries: ALL_BINS,
+      appImageExists: true,
+      hasNodeModules: true,
+      jobsBehind: 0,
+      force: false,
+      skipApp: false,
+      desktopHost: { eligible: true },
+      listChangedFiles: () => [],
+    } as const;
+    const decisionOf = (fingerprint: (bin: string) => string) =>
+      planSync({ ...input, parityFingerprint: fingerprint }).binaries.find(
+        (b) => b.target.id === "playbook",
+      )?.decision;
+    expect(decisionOf(parityFingerprint)).toEqual({ action: "skip", reason: "unchanged" });
+    expect(decisionOf(() => "another probe")).toEqual({
+      action: "build",
+      reason: "parity-probe-changed",
+      sinceSha: "sha-1",
+    });
+  });
+
+  it("records a parity refusal with its fingerprint, and not a probe that did not run", () => {
+    const records = { targets: { runlog: "sha-1", playbook: "sha-1" }, paritySkips: {} };
+    const byId = (id: string) => SYNC_BINARY_TARGETS.find((t) => t.id === id)!;
+    const changed = recordParitySkips(
+      records,
+      [
+        { target: byId("playbook"), retry: false },
+        { target: byId("runlog"), retry: true },
+      ],
+      "sha-2",
+      parityFingerprint,
+    );
+    expect(changed).toBe(true);
+    expect(records).toEqual({
+      targets: { runlog: "sha-1", playbook: "sha-2" },
+      paritySkips: { playbook: parityFingerprint("playbook") },
+    });
+    expect(
+      recordParitySkips(
+        records,
+        [{ target: byId("runlog"), retry: true }],
+        "sha-3",
+        parityFingerprint,
+      ),
+    ).toBe(false);
+    expect(records.targets.runlog).toBe("sha-1");
+    // The saved state keeps the fingerprints.
+    expect(parseSyncState(JSON.stringify({ version: 1, ...records })).paritySkips).toEqual(
+      records.paritySkips,
+    );
   });
 
   it("rebuilds playbook when its workspace dependency fleet changes", () => {

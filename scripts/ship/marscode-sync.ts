@@ -22,6 +22,7 @@ import {
   stageShipQueueVersion,
   validateAndSwapAppImage,
 } from "./marscode-sync-install.ts";
+import { parityFingerprint } from "./marscode-sync-parity.ts";
 import {
   APP_IMAGE_TARGET_ID,
   SYNC_BINARY_TARGETS,
@@ -29,6 +30,7 @@ import {
   parseGlibcVersionFromLdd,
   planSync,
   prependPathDirs,
+  recordParitySkips,
   type DesktopHostStatus,
 } from "./marscode-sync-plan.ts";
 
@@ -195,6 +197,7 @@ export function runSync(options: SyncCliOptions): void {
       only: options.only,
       desktopHost: checkDesktopHost(options.appDir, toolPath),
       listChangedFiles: (fromSha) => listChangedFilesBetween(options.primary, fromSha, headSha),
+      parityFingerprint,
     });
 
     if (options.dryRun) {
@@ -222,9 +225,15 @@ export function runSync(options: SyncCliOptions): void {
     }
 
     const nextTargets: Record<string, string> = { ...state.targets };
+    const nextParitySkips: Record<string, string> = { ...state.paritySkips };
     let nextInstallSha = state.installSha;
     const persist = (): void => {
-      saveSyncState(statePath, { version: 1, installSha: nextInstallSha, targets: nextTargets });
+      saveSyncState(statePath, {
+        version: 1,
+        installSha: nextInstallSha,
+        targets: nextTargets,
+        ...(Object.keys(nextParitySkips).length > 0 ? { paritySkips: nextParitySkips } : {}),
+      });
     };
 
     ensureWarmWorktree(options.primary, syncWorktree, headSha);
@@ -272,14 +281,13 @@ export function runSync(options: SyncCliOptions): void {
               });
             }
             nextTargets[target.id] = headSha;
+            delete nextParitySkips[target.id];
             persist();
           },
         },
       );
-      // A skipped CLI is settled at this sha too: removing the other install's
-      // file makes the next sync install it (a missing binary is always built).
-      for (const target of skipped) nextTargets[target.id] = headSha;
-      if (skipped.length > 0) persist();
+      const records = { targets: nextTargets, paritySkips: nextParitySkips };
+      if (recordParitySkips(records, skipped, headSha, parityFingerprint)) persist();
     }
 
     const guardItem = plan.binaries.find((b) => b.target.kind === "guard-protocol")!;

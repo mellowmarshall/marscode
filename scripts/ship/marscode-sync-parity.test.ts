@@ -106,6 +106,8 @@ describe("marscode-sync flag-parity guard", () => {
       refusal = err;
     }
     expect(refusal).toBeInstanceOf(CliParityRefusal);
+    // A real refusal is final until the probe or the bin changes.
+    expect((refusal as CliParityRefusal).retry).toBe(false);
     const message = (refusal as Error).message;
     expect(message).toContain(`marscode-sync: warning: skipped runlog: kept ${link}`);
     expect(message.split("\n")).toHaveLength(1);
@@ -130,14 +132,65 @@ describe("marscode-sync flag-parity guard", () => {
     expect(NodeFS.readlinkSync(link)).toBe(script);
   });
 
-  it("refuses a file another install wrote when the CLI has no parity check", () => {
+  it("always installs ship-queue, which MarsCode owns, over a file another install wrote", () => {
     const shipQueue = NodePath.join(binDir, "ship-queue");
     NodeFS.writeFileSync(shipQueue, "#!/bin/sh\necho mine\n", { mode: 0o755 });
-    const wt = worktreeRunning(target("ship-queue"), currentRunlog);
-    expect(() => install(target("ship-queue"), wt)).toThrow(
-      /skipped ship-queue: kept .*ship-queue \(a file another install wrote, not installed by marscode-sync\) because the MarsCode ship-queue has no flag-parity check/,
+    const t = target("ship-queue");
+    const installed: string[] = [];
+    const warnings: string[] = [];
+    const skipped = installNodeClis(worktreeRunning(t, currentRunlog), [t], {
+      binDir,
+      libDir,
+      nodeBin: process.execPath,
+      log: (m) => logs.push(m),
+      warn: (m) => warnings.push(m),
+      // The sync stages the ship-queue version here.
+      onInstalled: (done) => installed.push(done.id),
+    });
+    expect(skipped).toEqual([]);
+    expect(warnings).toEqual([]);
+    expect(installed).toEqual(["ship-queue"]);
+    expect(NodeFS.readFileSync(shipQueue, "utf8")).toContain(WRAPPER_MARKER);
+  });
+
+  it("takes only a whole marker line as MarsCode's, as the host installer's grep -x does", () => {
+    const own = NodePath.join(binDir, "playbook");
+    NodeFS.writeFileSync(own, `#!/bin/sh\necho '${WRAPPER_MARKER}'\n`, { mode: 0o755 });
+    const t = target("playbook");
+    expect(() =>
+      install(t, worktreeRunning(t, NodePath.join(REPO, "packages/playbook/src/bin.ts"))),
+    ).toThrow(/kept .*playbook \(a file another install wrote, not installed by marscode-sync\)/);
+    expect(NodeFS.readFileSync(own, "utf8")).toBe(`#!/bin/sh\necho '${WRAPPER_MARKER}'\n`);
+  });
+
+  it("marks a skip whose probe did not finish for a retry, and leaves the old CLI", () => {
+    const { link, script } = originalStyleLink("runlog");
+    // The real runlog, whose probe command `true` hangs here past the probe's timeout.
+    const slow = NodePath.join(tmp, "slow-bin");
+    NodeFS.mkdirSync(slow);
+    NodeFS.writeFileSync(NodePath.join(slow, "true"), "#!/bin/sh\nsleep 5\n", { mode: 0o755 });
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${slow}:${savedPath ?? ""}`;
+    let refusal: unknown;
+    try {
+      atomicInstallNodeCli(worktreeRunning(target("runlog"), currentRunlog), target("runlog"), {
+        binDir,
+        libDir,
+        nodeBin: process.execPath,
+        log: (m) => logs.push(m),
+        probeTimeoutMs: 1_500,
+      });
+    } catch (err) {
+      refusal = err;
+    } finally {
+      process.env.PATH = savedPath;
+    }
+    expect(refusal).toBeInstanceOf(CliParityRefusal);
+    expect((refusal as CliParityRefusal).retry).toBe(true);
+    expect((refusal as Error).message).toMatch(
+      /its flag-parity check did not run \(.*ETIMEDOUT.*\); the next sync tries again\.$/,
     );
-    expect(NodeFS.readFileSync(shipQueue, "utf8")).toBe("#!/bin/sh\necho mine\n");
+    expect(NodeFS.readlinkSync(link)).toBe(script);
   });
 
   it("reinstalls over its own wrappers, older ones without the marker too, with no parity check", () => {
@@ -195,7 +248,7 @@ describe("marscode-sync flag-parity guard", () => {
       warn: (m) => warnings.push(m),
       onInstalled: (t) => installed.push(t.id),
     });
-    expect(skipped.map((t) => t.id)).toEqual(["playbook"]);
+    expect(skipped.map((s) => [s.target.id, s.retry])).toEqual([["playbook", false]]);
     expect(installed).toEqual(["runlog", "fleet"]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatch(

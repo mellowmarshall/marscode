@@ -19,14 +19,6 @@ export {
   slug,
   utcStamp,
 } from "./runlogPaths.ts";
-export { TAIL_BYTES, cannotRun, readLog, runCommand, signalExitCode } from "./runlogProcess.ts";
+export { TAIL_BYTES, readLog, runCommand, signalExitCode } from "./runlogProcess.ts";
 export { loadStorageRoots, logRoot, type StorageRoots } from "./runlogStorageRoots.ts";
-export {
-  SUITE_PRINTED,
-  passThroughLine,
-  runCiSuite,
-  validSuiteName,
-  type CiSuiteIo,
-} from "./ciSuite.ts";
-export { clockTicks, reapedChildTicks } from "./reapedChildCpu.ts";
 export { HELP, USAGE, parseArgs, runRunlogCli, type CliIo } from "./cli.ts";

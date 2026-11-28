@@ -2,6 +2,7 @@
 // Ownership and flag-parity guard for marscode-sync: a CLI this installer did not write (another
 // install's link or file) is replaced only by a MarsCode CLI that passes its flag-parity probe.
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
@@ -10,12 +11,18 @@ export const WRAPPER_MARKER = "# Installed by MarsCode; reinstalls replace this 
 
 export class CliParityRefusal extends Error {
   readonly binName: string;
-  constructor(binName: string, message: string) {
+  /** The probe did not run (spawn error or timeout): the next sync tries again. */
+  readonly retry: boolean;
+  constructor(binName: string, message: string, retry: boolean) {
     super(message);
     this.name = "CliParityRefusal";
     this.binName = binName;
+    this.retry = retry;
   }
 }
+
+/** CLIs MarsCode owns outright: the sync always installs them, whatever sits at their bin path. */
+const MARSCODE_OWNED = new Set(["ship-queue"]);
 
 interface ProbeRun {
   readonly status: number | null;
@@ -82,6 +89,15 @@ export const PARITY_PROBES: Readonly<Record<string, ParityProbe>> = {
   },
 };
 
+/** What a CLI's parity probe is, as a fingerprint: a recorded skip with another one is retried. */
+export function parityFingerprint(binName: string): string {
+  const probe = PARITY_PROBES[binName];
+  const text = probe
+    ? JSON.stringify([probe.what, probe.args, probe.judge.toString()])
+    : "no flag-parity probe";
+  return NodeCrypto.createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
+
 /** What sits at the bin path, when it is not a wrapper this installer wrote; null when it is ours or absent. */
 export function foreignCli(binPath: string, bundlePath: string): string | null {
   let stat: NodeFS.Stats;
@@ -107,7 +123,7 @@ export function foreignCli(binPath: string, bundlePath: string): string | null {
     return "an unreadable file";
   }
   // Wrappers written before the marker name the release link's bundle.
-  if (text.includes(WRAPPER_MARKER) || text.includes(bundlePath)) return null;
+  if (text.split("\n").includes(WRAPPER_MARKER) || text.includes(bundlePath)) return null;
   return "a file another install wrote";
 }
 
@@ -123,14 +139,20 @@ export function assertMayReplace(input: {
   readonly stagedBundle: string;
   readonly nodeBin: string;
   readonly cwd: string;
+  readonly probeTimeoutMs?: number | undefined;
 }): void {
+  if (MARSCODE_OWNED.has(input.binName)) return;
   const foreign = foreignCli(input.binPath, input.bundlePath);
   if (foreign === null) return;
-  const refuse = (why: string) =>
+  const refuse = (why: string, retry = false) =>
     new CliParityRefusal(
       input.binName,
       `marscode-sync: warning: skipped ${input.binName}: kept ${input.binPath} (${foreign}, not installed by marscode-sync) ` +
-        `because ${why}; remove it to let marscode-sync install its ${input.binName}.`,
+        `because ${why}; ` +
+        (retry
+          ? "the next sync tries again."
+          : `remove it to let marscode-sync install its ${input.binName}.`),
+      retry,
     );
   const probe = PARITY_PROBES[input.binName];
   if (!probe) {
@@ -139,11 +161,12 @@ export function assertMayReplace(input: {
   const res = NodeChildProcess.spawnSync(input.nodeBin, [input.stagedBundle, ...probe.args], {
     cwd: input.cwd,
     encoding: "utf8",
-    timeout: 60_000,
+    timeout: input.probeTimeoutMs ?? 60_000,
   });
-  const why = res.error
-    ? `it did not run: ${res.error.message}`
-    : probe.judge({ status: res.status, stdout: res.stdout ?? "" });
+  if (res.error) {
+    throw refuse(`its flag-parity check did not run (${res.error.message})`, true);
+  }
+  const why = probe.judge({ status: res.status, stdout: res.stdout ?? "" });
   if (why !== null) {
     throw refuse(
       `the MarsCode ${input.binName} fails its flag-parity check (${probe.what}: ${why})`,
