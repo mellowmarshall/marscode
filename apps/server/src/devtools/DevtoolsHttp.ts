@@ -325,7 +325,7 @@ export const makeHandler = Effect.fn("DevtoolsHttp.makeHandler")(function* (
     }
     if (!nativeFleet) return jsonResponse({ error: "Native fleet telemetry unavailable" }, 503);
     const nativeRes = yield* Effect.promise(() =>
-      handleNativeFleetRequest(nativeFleet, method, devdeckApiPath, parsedBody, session.subject),
+      handleNativeFleetRequest(nativeFleet, method, devdeckApiPath, parsedBody),
     );
     return jsonResponse(nativeRes.body, nativeRes.status);
   }

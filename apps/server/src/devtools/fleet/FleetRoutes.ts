@@ -20,8 +20,6 @@ export async function handleNativeFleetRequest(
   method: "GET" | "POST",
   devdeckApiPath: string,
   parsedBody?: Record<string, unknown>,
-  /** The authenticated session subject, recorded in the CI toggle audit. */
-  actor?: string,
 ): Promise<NativeFleetHttpResult> {
   const qIdx = devdeckApiPath.indexOf("?");
   const cleanPath = qIdx === -1 ? devdeckApiPath : devdeckApiPath.slice(0, qIdx);
@@ -66,28 +64,7 @@ export async function handleNativeFleetRequest(
     if (typeof parsedBody?.on !== "boolean") {
       return { status: 400, body: { error: 'body must be {"on": true|false}' } };
     }
-    const { confirm, confirm_version: confirmVersion, client } = parsedBody;
-    if (confirm !== undefined && typeof confirm !== "boolean") {
-      return { status: 400, body: { error: '"confirm" must be true or false' } };
-    }
-    if (confirmVersion !== undefined && typeof confirmVersion !== "string") {
-      return { status: 400, body: { error: '"confirm_version" must be a string' } };
-    }
-    const request = {
-      confirm: confirm === true,
-      confirmVersion,
-      actor: actor ?? "unknown",
-      client: typeof client === "string" ? client : "unknown",
-    };
-    // Refused before an action starts, so the client sees 409 instead of a failed action.
-    const refusal = fleet.refuseHostCi(hostCiMatch[1], parsedBody.on, request);
-    if (refusal) {
-      return {
-        status: refusal.needsConfirm ? 409 : 423,
-        body: { error: refusal.message, needs_confirm: refusal.needsConfirm === true },
-      };
-    }
-    const actionId = fleet.triggerHostCi(hostCiMatch[1], parsedBody.on, request);
+    const actionId = fleet.triggerHostCi(hostCiMatch[1], parsedBody.on);
     return { status: 202, body: { action_id: actionId } };
   }
 

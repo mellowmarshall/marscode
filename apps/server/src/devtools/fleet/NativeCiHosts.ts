@@ -10,8 +10,13 @@ import {
   resolveCiHostsPath,
 } from "@t3tools/ship-queue/ciHosts";
 import { resolveQueueRoot } from "@t3tools/ship-queue/cli";
-import { checkCiHosts, type HostExecDeps } from "@t3tools/ship-queue/hostProbe";
-import { hostOffFilePath, readHostOffState } from "@t3tools/ship-queue/hostOffMarker";
+import {
+  checkCiHosts,
+  hostOffFilePath,
+  readHostOffState,
+  setCiHostAvailability,
+  type HostExecDeps,
+} from "@t3tools/ship-queue/hostProbe";
 import { provisionCiHost } from "@t3tools/ship-queue/hostProvision";
 import { collectRepoToolRequirements } from "@t3tools/ship-queue/repoRequirements";
 import {
@@ -26,15 +31,6 @@ import {
   type ReconcileToolDriftResult,
 } from "@t3tools/ship-queue/toolDriftReconcile";
 
-import { type CiHostToggleResult, refuseUnconfirmedTurnOn, toggleCiHost } from "./CiHostToggle.ts";
-import type { CiToggleRequest } from "./CiToggleAudit.ts";
-import {
-  atomicWriteJson,
-  fileSignature,
-  mergeHostReports,
-  parseHostsReport,
-  withLiveOffState,
-} from "./CiHostsReportFile.ts";
 import { probesFromHostsReport } from "./FleetToolDriftAlerts.ts";
 import type { CiHostManifestEntry, FleetHostsPanel, FleetHostsReport } from "./FleetTypes.ts";
 
@@ -54,6 +50,59 @@ export function readCiHostsManifest(overridePath?: string): ReadonlyArray<CiHost
     ...(entry.on ? { on: entry.on } : {}),
     ...(entry.role ? { role: entry.role } : {}),
   }));
+}
+
+function atomicWriteJson(filePath: string, value: unknown): void {
+  try {
+    NodeFS.mkdirSync(NodePath.dirname(filePath), { recursive: true, mode: 0o700 });
+    const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+    NodeFS.writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 });
+    NodeFS.renameSync(tmp, filePath);
+  } catch {
+    // best-effort state cache write
+  }
+}
+
+function parseHostsReport(raw: string): FleetHostsReport | null {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || parsed.schema !== 1 || !Array.isArray(parsed.hosts)) return null;
+    return {
+      schema: 1,
+      at: typeof parsed.at === "string" ? parsed.at : new Date().toISOString(),
+      ...(typeof parsed.manifest === "string" ? { manifest: parsed.manifest } : {}),
+      hosts: parsed.hosts.filter((h): h is Record<string, unknown> =>
+        Boolean(h && typeof h === "object"),
+      ),
+      ...(Array.isArray(parsed.settings) ? { settings: parsed.settings } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function mergeHostReports(prev: FleetHostsReport, next: FleetHostsReport): FleetHostsReport {
+  const mergedHosts = [...prev.hosts];
+  for (const h of next.hosts) {
+    const name = typeof h.name === "string" ? h.name : "";
+    if (!name) continue;
+    const idx = mergedHosts.findIndex((old) => old.name === name);
+    if (idx >= 0) mergedHosts[idx] = h;
+    else mergedHosts.push(h);
+  }
+  return { ...prev, at: next.at, hosts: mergedHosts };
+}
+
+/** Changes when the file is rewritten, replaced, created or removed; one stat, no read. */
+function fileSignature(filePath: string | null): string {
+  if (!filePath) return "none";
+  try {
+    const st = NodeFS.statSync(filePath, { throwIfNoEntry: false });
+    return st ? `${st.ino}:${st.size}:${st.mtimeMs}` : "missing";
+  } catch {
+    // An untraversable queue root must not break the whole Fleet snapshot.
+    return "unreadable";
+  }
 }
 
 interface ToggleRecord {
@@ -119,9 +168,9 @@ export class NativeCiHosts {
 
   /**
    * The Fleet console keys each host's CI switch off a report row. Until a hosts check has probed
-   * a manifest host, list it with only its name so the switch still shows. Every row takes its CI
-   * state from the live `.off` marker, never from the last check. Cached until the manifest or the
-   * hosts directory (where `.off` markers are renamed in and removed) changes.
+   * a manifest host, list it with only its name and live `.off` state so the switch still shows.
+   * Cached until the manifest or the hosts directory (where `.off` markers are renamed in and
+   * removed) changes, so a panel read costs two stats instead of a read per host.
    */
   private reportWithManifestHosts(): FleetHostsReport | null {
     const manifestFile = this.manifestPath?.trim() || resolveCiHostsPath();
@@ -137,13 +186,25 @@ export class NativeCiHosts {
   private buildReportWithManifestHosts(manifestFile: string | undefined): FleetHostsReport | null {
     const reported = new Set((this.report?.hosts ?? []).map((h) => h.name));
     const unprobed = readCiHostsManifest(manifestFile).filter((h) => !reported.has(h.name));
-    if (unprobed.length === 0 && !this.report) return null;
-    const base: FleetHostsReport = this.report ?? { schema: 1, at: "", hosts: [] };
-    return withLiveOffState(
-      base,
-      this.queueRoot,
-      unprobed.map((h) => ({ name: h.name, ssh: h.ssh })),
-    );
+    if (unprobed.length === 0) return this.report;
+    const stubs = unprobed.map((h) => {
+      const off = readHostOffState(this.queueRoot, h.name);
+      return {
+        name: h.name,
+        ssh: h.ssh,
+        ci_off: off !== null,
+        ci_off_at: off?.at || null,
+        ci_off_by: off?.by || null,
+        ci_off_reason: off?.reason || null,
+      };
+    });
+    return {
+      schema: 1,
+      at: this.report?.at ?? "",
+      ...(this.report?.manifest ? { manifest: this.report.manifest } : {}),
+      hosts: [...(this.report?.hosts ?? []), ...stubs],
+      ...(this.report?.settings ? { settings: this.report.settings } : {}),
+    };
   }
 
   private knownHostNames(): ReadonlySet<string> {
@@ -226,44 +287,38 @@ export class NativeCiHosts {
     };
   }
 
-  /** The audited refusal when a turn-on lacks the confirmation its `.off` reason needs, else null. */
-  refuseUnconfirmedTurnOn(
-    host: string,
-    enabled: boolean,
-    request: CiToggleRequest,
-  ): CiHostToggleResult | null {
-    return refuseUnconfirmedTurnOn(this.queueRoot, host, enabled, request);
-  }
-
   async setCi(
     host: string,
     enabled: boolean,
     onChanged?: () => void,
-    request: CiToggleRequest = {},
   ): Promise<{ readonly ok: boolean; readonly message: string }> {
     const targetHost = host.trim();
-    const res = toggleCiHost({
+    if (!isSafeHostName(targetHost)) {
+      return { ok: false, message: `Invalid host name: ${targetHost}` };
+    }
+    const known = this.knownHostNames();
+    if (known.size > 0 && !known.has(targetHost)) {
+      return { ok: false, message: `${targetHost} is not a known CI host` };
+    }
+    const reason = "turned off in T3 Code";
+    const nowIso = new Date().toISOString();
+    const res = setCiHostAvailability({
       queueRoot: this.queueRoot,
-      manifestPath: this.manifestPath,
-      host: targetHost,
+      hostName: targetHost,
       enabled,
-      request,
-      knownHosts: this.knownHostNames(),
+      reason,
+      actor: "t3code",
+      manifestPath: this.manifestPath,
+      nowIso: () => nowIso,
     });
     if (!res.ok) return { ok: false, message: res.message };
 
-    let off: ReturnType<typeof readHostOffState> = null;
-    try {
-      off = readHostOffState(this.queueRoot, targetHost);
-    } catch {
-      off = { at: "", by: "", reason: "unreadable .off marker", version: "" };
-    }
     const rec: ToggleRecord = {
       at: Date.now(),
-      ciOff: off !== null,
-      ciOffAt: off?.at || null,
-      ciOffBy: off?.by || null,
-      ciOffReason: off?.reason || null,
+      ciOff: !enabled,
+      ciOffAt: enabled ? null : nowIso,
+      ciOffBy: enabled ? null : "t3code",
+      ciOffReason: enabled ? null : reason,
     };
     this.toggled.set(targetHost, rec);
     this.panelCache = null;
