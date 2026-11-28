@@ -7,7 +7,6 @@ This page covers only what MarsCode adds. For install steps and the base app, se
 - [Approvals that find you](#approvals-that-find-you): a glowing thread, one window for a list of commands, and a key icon for live permissions
 - [Ship queue](#ship-queue): agents submit; the queue runs CI, the playbook review, and the merge
 - [Agent-ready playbook](#agent-ready-playbook): rules your repo proves with evidence, checked on every merge
-- [Public-repo scan](#public-repo-scan): no home paths, host names, or private repo names in public code
 - [Jobs in the thread](#jobs-in-the-thread): background jobs with live health bars beside the chat
 - [Fleet console](#fleet-console): every host, job, and runaway process in one place
 - [Host guards and the Security page](#host-guards-and-the-security-page) · [Reaper](#reaper) · [Reviews](#reviews) · [Smaller additions](#smaller-additions)
@@ -57,7 +56,7 @@ Agents run `ship-queue submit` and `ship-queue watch` (`packages/ship-queue`). T
 
   ![Job details with each declared step's host, time, and exit, an overridden challenge, and the log](./docs/readme/ship-steps.webp)
 
-- **House gates before CI.** A secret scan (gitleaks, when the host has it), the [public-repo scan](#public-repo-scan), and a check that protected files carry an owner approval.
+- **House gates before CI.** A secret scan (gitleaks, when the host has it) and a check that protected files carry an owner approval.
 - **Safe merges.** The PR body must close an issue. The merge is a squash pinned to the commit that passed the gates, and the pass record is keyed by the tree hash. The post-merge sync records its exit, so a crash cannot leave it half done.
 - **No retry loops.** After two failures in a row at the same gate, the next submit must state a premise: what the agent thinks is wrong, how it tested that, and the result.
 
@@ -101,24 +100,6 @@ There are no baselines. A contract is declared, or opted out with a reason, or i
 CI refuses an undeclared change, and a declared change that did not happen. The `surface` CLI answers which routes exist and who calls them.
 
 **Owner-only changes.** `PLAYBOOK.md` changes only through `playbook amend`, with owner approval. Changes to `playbook.json`, host guards, and CI workflows need an owner grant too.
-
-</details>
-
-## Public-repo scan
-
-A playbook gate that keeps personal details out of public repositories: home paths, host names, private repository names, commit identities, and agent session IDs. Each machine keeps its own denylist of what counts as private, outside the repo, so the rules never leak with the code.
-
-<details>
-<summary>How it works</summary>
-
-`packages/hygiene` scans the tracked tree, history, commit metadata, and text that agents post to GitHub through `gh` or MCP tools.
-
-- It runs as git hooks, as a CI step, and as a ship gate, and it writes playbook evidence.
-- The denylist lives outside the repo and must be readable by its owner only.
-- A finding names the kind of leak and where it is, never the matched text.
-- Private repositories skip the gate. A repo with unknown visibility counts as public.
-- Agent attribution follows visibility: public repos get a neutral agent name only.
-- Exceptions live in `hygiene.exceptions.json`, each with a reason and an issue, and changing them needs an owner grant.
 
 </details>
 
