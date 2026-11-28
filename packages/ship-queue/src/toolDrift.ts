@@ -14,7 +14,8 @@ import {
   parseToolSpec,
   type ToolCheckState,
 } from "./ciToolVersion.ts";
-import { isHostOff, probeCiHost, readProbeFile, type HostExecDeps } from "./hostProbe.ts";
+import { probeCiHost, readProbeFile, type HostExecDeps } from "./hostProbe.ts";
+import { isHostOff } from "./hostOffMarker.ts";
 import { collectRepoToolRequirements, type RepoToolRequirement } from "./repoRequirements.ts";
 import { rootCommandOf } from "./rootGrant.ts";
 

@@ -130,7 +130,11 @@ export function FleetMachinesView({
     };
   }, [environmentId, watchedRemoteHostId]);
 
-  const handleToggleCi = async (host: MergedFleetHost, enabled: boolean) => {
+  const handleToggleCi = async (
+    host: MergedFleetHost,
+    enabled: boolean,
+    confirmVersion: string | null,
+  ) => {
     const probeName = host.probeHostName ?? host.id;
     onFeedback({
       tone: "busy",
@@ -141,6 +145,9 @@ export function FleetMachinesView({
     const res = await withBusyKey(`ci:${probeName}`, () =>
       runTrackedDevdeckAction(environmentId, `/hosts/${encodeURIComponent(probeName)}/ci`, {
         on: enabled,
+        confirm: confirmVersion !== null,
+        ...(confirmVersion !== null ? { confirm_version: confirmVersion } : {}),
+        client: "fleet-console",
       }),
     );
     if (res.ok) {
@@ -152,6 +159,7 @@ export function FleetMachinesView({
           : gt("CI disabled on {host}", { host: host.shortName }),
       });
     } else {
+      void refreshSharedDevdeck(environmentId);
       onFeedback({ tone: "error", text: res.error ?? gt("Failed to toggle CI host state") });
     }
   };
@@ -372,7 +380,7 @@ export function FleetMachinesView({
         selectedHost={selectedHost}
         busyKeys={busyKeys}
         onSelectHost={(id) => setConsoleHost(id)}
-        onToggleCi={(host, enabled) => void handleToggleCi(host, enabled)}
+        onToggleCi={(host, enabled, version) => void handleToggleCi(host, enabled, version)}
         onCheckHosts={() => void handleCheckHosts()}
         onRunStorageReport={(host) => void handleRunStorageReport(host)}
         onStartCleanupReview={(host) => void handleStartCleanupReview(host)}

@@ -5,9 +5,10 @@ import { loadCiHostsManifest } from "./ciHosts.ts";
 import { decideShipQueueDeps, listShipQueueDeps } from "./depsEngine.ts";
 import { rollbackShipQueueDepsAttempt } from "./depsRollback.ts";
 import { scanShipQueueDepsRepo } from "./depsScan.ts";
-import { checkCiHosts, setCiHostAvailability, type HostExecDeps } from "./hostProbe.ts";
+import { checkCiHosts, type HostExecDeps } from "./hostProbe.ts";
 import { provisionCiHost, syncCiHostPayload } from "./hostProvision.ts";
 import { payloadBundleCacheDir } from "./payloadBundles.ts";
+import { runHostsToggle, type CiHostGuardRunner } from "./hostsToggle.ts";
 import { buildRenovateCustomManagers, extractPinVersions, loadPinsSpec } from "./pins.ts";
 import { collectRepoToolRequirements } from "./repoRequirements.ts";
 import {
@@ -39,6 +40,8 @@ export async function runHostsSubcommand(
   args: ReadonlyArray<string>,
   io: SubcommandIo,
   hostDeps?: HostExecDeps,
+  /** Test injection for the host guard's owner-only `hosts on` rule; production runs the installed guard. */
+  ciHostGuard?: CiHostGuardRunner,
 ): Promise<number> {
   const [action, ...rest] = args;
   const manifestPath = io.env.SHIP_QUEUE_CI_HOSTS?.trim() || undefined;
@@ -173,15 +176,18 @@ export async function runHostsSubcommand(
     if (action === "off" && reasonIdx >= 0) {
       reason = rest[reasonIdx + 1] ?? "";
     }
-    const res = setCiHostAvailability({
+    return runHostsToggle({
       queueRoot: root,
-      hostName: name,
+      host: name,
       enabled: action === "on",
       reason,
       manifestPath,
+      cwd: io.cwd,
+      env: io.env,
+      stdout: io.stdout,
+      stderr: io.stderr,
+      guard: ciHostGuard,
     });
-    (res.ok ? io.stdout : io.stderr)(`${res.message}\n`);
-    return res.ok ? 0 : 1;
   }
 
   if (action === "provision") {

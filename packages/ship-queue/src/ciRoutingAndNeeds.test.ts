@@ -20,7 +20,8 @@ import {
   type FleetTelemetryProvider,
 } from "./ciRouter.ts";
 import { parseShipDeclaration } from "./declaration.ts";
-import { checkCiHosts, isHostOff, setCiHostAvailability } from "./hostProbe.ts";
+import { checkCiHosts } from "./hostProbe.ts";
+import { isHostOff, setCiHostAvailability } from "./hostOffMarker.ts";
 import { resolveHostSyncPaths, syncCiHostPayload } from "./hostProvision.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
 import { buildRootGrantRequest } from "./rootGrant.ts";

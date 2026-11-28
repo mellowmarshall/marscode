@@ -289,6 +289,17 @@ const runHandler = Effect.fn("DevtoolsHttp.test.runHandler")(function* (
   };
 });
 
+const PLAYBOOK_EVIDENCE_ENV = ["PLAYBOOK_EVIDENCE_DIR", "PLAYBOOK_EVIDENCE_JOB"] as const;
+
+/** Unsets the playbook evidence variables a CI job exports; the returned function restores them. */
+function clearPlaybookEvidenceEnv(): () => void {
+  const saved = PLAYBOOK_EVIDENCE_ENV.map((name) => [name, process.env[name]] as const);
+  for (const name of PLAYBOOK_EVIDENCE_ENV) delete process.env[name];
+  return () => {
+    for (const [name, value] of saved) if (value !== undefined) process.env[name] = value;
+  };
+}
+
 describe("GuardGrantBroker", () => {
   it("handles preapprove -> peek -> single-use check and rejects forged digests, NUL bytes, and caps", async () => {
     const dir = mkTempDir("t3-guard-broker-");
@@ -1752,6 +1763,9 @@ describe("DevtoolsHttp routes", () => {
 
   it.effect("runs /playbook/run in-process and gates the challenge and review-thread routes", () =>
     Effect.gen(function* () {
+      // A ship-queue CI run sets these for its own receipts; the fixture's receipts must not depend on them.
+      const restoreEvidenceEnv = clearPlaybookEvidenceEnv();
+      yield* Effect.addFinalizer(() => Effect.sync(restoreEvidenceEnv));
       const repoDir = NodePath.join(mkTempDir("t3-pb-run-"), "sample-repo");
       NodeFS.mkdirSync(NodePath.join(repoDir, "src"), { recursive: true });
       NodeFS.writeFileSync(

@@ -4,6 +4,7 @@ import * as NodePath from "node:path";
 import { resolveGuardSocketPath } from "@t3tools/guard-protocol/client";
 
 import { checkArgvSecrets } from "./argvGuard.ts";
+import { decideCiHostOn } from "./ciHostGuard.ts";
 import { decideCloudCli } from "./cloudCliGuard.ts";
 import { runGhSubcommand } from "./ghRun.ts";
 import { enforceDirectGuard, REFUSED_EXIT_CODE, runPreToolUseHook } from "./hook.ts";
@@ -225,6 +226,7 @@ function usageText(): string {
     "  release-check [--cwd DIR] [--] <eas-args...>",
     "  cloud-check [--cwd DIR] [--] <cmd...>",
     "  argv-check [--cwd DIR] [--] <cmd...>",
+    "  ci-host-on-check --queue-root DIR [--cwd DIR] [--] <host>",
     "  hook",
     "  override <guard> <refusal> [--cwd DIR] [--] <cmd...>",
     "  owner-check <action> [--cwd DIR] [--] [cmd...]",
@@ -394,6 +396,24 @@ export async function runHostGuardCli(argv: ReadonlyArray<string>, io: CliIo): P
       ? "fly-deploy"
       : "cloud-cli";
     return enforceVerdict(guardName, rest, cwd, decision.reason, runtime);
+  }
+
+  if (sub === "ci-host-on-check") {
+    const rootIdx = args.indexOf("--queue-root");
+    const queueRoot = rootIdx >= 0 ? (args[rootIdx + 1] ?? "") : "";
+    const others = rootIdx >= 0 ? [...args.slice(0, rootIdx), ...args.slice(rootIdx + 2)] : args;
+    const { cwd, rest } = splitCwdAndRest(others, io.cwd);
+    const host = rest[0] ?? "";
+    if (!queueRoot || !host) {
+      io.err(
+        "usage: marscode-host-guard ci-host-on-check --queue-root DIR [--cwd DIR] [--] <host>",
+      );
+      return 64;
+    }
+    const decision = decideCiHostOn({ queueRoot, host });
+    if (decision.verdict === "allow") return 0;
+    const cmd = ["ship-queue", "hosts", "on", host];
+    return enforceVerdict("ci-host-on", cmd, cwd, decision.reason, runtime);
   }
 
   if (sub === "override") {
