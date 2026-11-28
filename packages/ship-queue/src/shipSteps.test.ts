@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { overrideRequestPath } from "./challengeGate.ts";
 import { runShipQueueCli } from "./cli.ts";
-import { jobReviewPath, readJob, readLog } from "./jobStore.ts";
+import { jobReviewPath, mark, readJob, readLog } from "./jobStore.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
 import { ciOutputPath } from "./ciSteps.ts";
 import type { RemoteCommandRunner } from "./sshExec.ts";
@@ -167,6 +167,38 @@ describe("challenge gate", () => {
     expect(fx.reviews).toHaveLength(1);
     // An override applies only to a job that waits on its review.
     expect(await cli(["override", id, "--reason", "again"])).toBe(1);
+  });
+
+  it("keeps a watch following a challenged job once its log shows the override", async () => {
+    const fx = makeFixture();
+    fx.setVerdict("CHALLENGED");
+    const wt = fx.worktree("feat/98-rewatch", { "r.txt": "r\n" });
+    const id = await fx.submit(wt, "feat/98-rewatch");
+    expect(await runJob(fx.deps, id)).toBe("blocked");
+    // The moment the worker takes the override: OVERRIDDEN is logged while the job record still
+    // reads "waiting on a challenge" and no request file is left.
+    mark(fx.root, id, `OVERRIDDEN job=${id} reason=raced the watch`);
+    const watched: string[] = [];
+    let ticks = 0;
+    const exit = await watchJob({
+      root: fx.root,
+      id,
+      self: SELF,
+      clock: fx.deps.clock,
+      quietMs: 60_000,
+      write: (line) => watched.push(line),
+      waitForChange: async () => {
+        ticks += 1;
+        if (ticks > 1) throw new Error("the watch should have reached DONE");
+        await runShipQueueCli(["override", id, "--reason", "the flagged helper is test-only"], {
+          deps: fx.deps,
+          io: { stdout: () => {}, stderr: () => {}, env: {}, cwd: fx.tmp },
+        });
+        await runJob(fx.deps, id);
+      },
+    });
+    expect(exit).toBe(WATCH_EXIT.done);
+    expect(watched.join("\n")).not.toContain(`watch: job ${id} is CHALLENGED`);
   });
 
   it("lets a resubmit of the branch replace the challenged job", async () => {

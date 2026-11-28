@@ -116,6 +116,16 @@ function emitReviewIfPresent(root: string, id: string, write: (line: string) => 
  * waiting on an owner action it has not reported yet, and 4 whenever the job waits on a CHALLENGED
  * playbook review (`CHALLENGED job=`) with no override pending.
  */
+/** True when the job's last CHALLENGED marker has an OVERRIDDEN marker after it. */
+export function challengeOverriddenInLog(logText: string, id: string): boolean {
+  let overridden = false;
+  for (const line of logText.split("\n")) {
+    if (line.startsWith(`CHALLENGED job=${id} `)) overridden = false;
+    else if (line.startsWith(`OVERRIDDEN job=${id} `)) overridden = true;
+  }
+  return overridden;
+}
+
 export async function watchJob(options: WatchOptions): Promise<number> {
   const { root, id, clock, write } = options;
   if (!readJob(root, id)) throw new Error(`no such job: ${id} in ${root}`);
@@ -164,11 +174,13 @@ export async function watchJob(options: WatchOptions): Promise<number> {
         }
       }
 
-      // Every watch of a challenged job hands the decision back, until an override is pending.
+      // Every watch of a challenged job hands the decision back, until an override is pending
+      // or the log shows the challenge already overridden.
       if (
         job?.state === "waiting" &&
         job.waiting_for === "challenge" &&
-        !NodeFS.existsSync(overrideRequestPath(root, id))
+        !NodeFS.existsSync(overrideRequestPath(root, id)) &&
+        !challengeOverriddenInLog(readLog(root, id), id)
       ) {
         emitReviewIfPresent(root, id, write);
         write(

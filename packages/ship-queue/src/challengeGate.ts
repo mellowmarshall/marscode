@@ -147,12 +147,15 @@ export function takeChallengeOverride(deps: ShipQueueDeps, job: JobRecord): bool
     return false;
   }
   const reason = typeof request.reason === "string" ? markerValue(request.reason) : "";
-  NodeFS.rmSync(file, { force: true });
-  if (!reason) return false;
+  if (!reason) {
+    NodeFS.rmSync(file, { force: true });
+    return false;
+  }
   const at = typeof request.at === "string" ? request.at : deps.clock.now();
   // A request made in time counts even when the worker reads it after the window; a late one
   // never does.
   if (!insideOverrideWindow(job, at)) {
+    NodeFS.rmSync(file, { force: true });
     appendLog(deps.root, job.id, `override requested at ${at}, after the 30 s window; ignored`);
     return false;
   }
@@ -175,6 +178,9 @@ export function takeChallengeOverride(deps: ShipQueueDeps, job: JobRecord): bool
     waiting_since: undefined,
   });
   mark(deps.root, job.id, `OVERRIDDEN job=${job.id} reason=${reason}`);
+  // Only now: until the job is running again, the request file tells readers an override is
+  // pending.
+  NodeFS.rmSync(file, { force: true });
   if (job.challenged_tip) {
     NodeFS.appendFileSync(
       challengeOverrideIndexPath(deps.root),
