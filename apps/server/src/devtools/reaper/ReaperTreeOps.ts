@@ -68,11 +68,13 @@ function gitDataName(name: string, isDirectory: boolean): boolean {
   return lower === ".git" || (isDirectory && lower.endsWith(".git"));
 }
 
-/** A bare repository or mirror: `HEAD` beside `objects/` and `refs/`. */
+/**
+ * A bare repository or mirror: `HEAD` beside `objects` or `refs`. Entry types are ignored on
+ * purpose, so links or unusual layouts still count; this errs towards keeping data.
+ */
 function bareRepoLayout(children: ReadonlyArray<NodeFS.Dirent>): boolean {
-  const has = (name: string, dir: boolean) =>
-    children.some((c) => c.name === name && (!dir || c.isDirectory()));
-  return has("HEAD", false) && has("objects", true) && has("refs", true);
+  const has = (name: string) => children.some((c) => c.name === name);
+  return has("HEAD") && (has("objects") || has("refs"));
 }
 
 /**
