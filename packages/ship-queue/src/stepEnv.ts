@@ -22,6 +22,9 @@ const STEP_ENV_NAMES: ReadonlyArray<string> = [
   "GOCACHE",
   "GOMODCACHE",
   "RUSTC_WRAPPER",
+  "SCCACHE_DIR",
+  "SCCACHE_CACHE_SIZE",
+  "SCCACHE_IDLE_TIMEOUT",
   "TURBO_CACHE_DIR",
   "UV_CACHE_DIR",
 ];
@@ -31,14 +34,13 @@ const STEP_ENV_PREFIXES: ReadonlyArray<string> = [
   "LC_",
   "CARGO_",
   "RUSTUP_",
-  "SCCACHE_",
   "PNPM_",
   "npm_config_",
 ];
 
 /**
  * Words that mark a credential inside an allowed family (`CARGO_REGISTRY_TOKEN`,
- * `npm_config_//registry/:_authToken`, `SCCACHE_GCS_KEY_PATH`, and proxies such as
+ * `npm_config_//registry/:_authToken`, connection strings, and proxies such as
  * `npm_config_https_proxy`, whose URL can hold a user and password). Matched without case.
  */
 const CREDENTIAL_WORDS: ReadonlyArray<string> = [
@@ -50,6 +52,7 @@ const CREDENTIAL_WORDS: ReadonlyArray<string> = [
   "auth",
   "key",
   "proxy",
+  "connection",
 ];
 
 /**

@@ -124,7 +124,7 @@ export async function runDeclaredSteps(
   if (hook.kind === "fail") return { kind: "fail", reason: hook.reason };
   // A pass counts for the hook only when the hook ran in it (`steps_hook_tip`).
   if (
-    job.steps_tip === rebase.head &&
+    job.steps_tip === passKey(rebase) &&
     (hook.kind === "none" || job.steps_hook_tip === passKey(rebase))
   ) {
     log(`declared steps passed on ${rebase.head.slice(0, 12)} already`);
@@ -218,14 +218,18 @@ export async function runDeclaredSteps(
       }
       updateJob(deps.root, job.id, { steps_hook_tip: passKey(rebase) });
     }
-    return passed(deps, job, rebase.head);
+    return passed(deps, job, rebase);
   } finally {
     removeStepTree(deps.root, job.id);
   }
 }
 
-function passed(deps: ShipQueueDeps, job: JobRecord, head: string): StepsOutcome {
-  updateJob(deps.root, job.id, { steps_tip: head });
+function passed(
+  deps: ShipQueueDeps,
+  job: JobRecord,
+  rebase: { readonly onto: string; readonly head: string },
+): StepsOutcome {
+  updateJob(deps.root, job.id, { steps_tip: passKey(rebase) });
   return { kind: "pass" };
 }
 

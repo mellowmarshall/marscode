@@ -33,6 +33,7 @@ const DENIED: Readonly<Record<string, string>> = {
   NODE_OPTIONS: "--max-old-space-size=4096",
   npm_config_https_proxy: "http://user:pw@proxy.invalid:8080",
   CARGO_HTTP_PROXY: "http://user:pw@proxy.invalid:8080",
+  SCCACHE_AZURE_CONNECTION_STRING: "AccountKey=worker-storage-key",
 };
 
 const FORGE_NAMES = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "SSH_AUTH_SOCK"];
@@ -299,7 +300,8 @@ describe("pre-push CI", () => {
     const wt = fx.worktree("feat/119-resume", { "prepush-fail": "1\n" });
     const id = await fx.submit(wt, "feat/119-resume");
     // A pass recorded before the hook existed: steps_tip at this head, no steps_hook_tip.
-    updateJob(fx.root, id, { steps_tip: sh(wt, ["rev-parse", "HEAD"]).trim() });
+    const onto = sh(fx.primary, ["rev-parse", "origin/main"]).trim();
+    updateJob(fx.root, id, { steps_tip: `${onto} ${sh(wt, ["rev-parse", "HEAD"]).trim()}` });
 
     expect(await runJob(fx.deps, id)).toBe("ended");
     expect(readJob(fx.root, id)).toMatchObject({
