@@ -12791,5 +12791,11 @@
   "99d51127f573296b": "Another account",
   "8ec2c57414669b79": "Connect a second {tracker} workspace or user.",
   "99963c0142e17f00": "For the new {tracker} account.",
-  "6d8e4ebc889bace9": "Add account"
+  "6d8e4ebc889bace9": "Add account",
+  "aeddf4420f291989": "Agent instructions",
+  "ae18dbee5982ccc5": "system prompt orchestration guidance edit reset default agents",
+  "4e2bae10c1ec9047": "The instructions T3 adds to every agent's system prompt. Edits replace the built-in text and apply when an agent session next starts.",
+  "67d1444f1ebafc5d": "Reset agent instructions to default",
+  "6c33fafcd03b38e0": "Loading the built-in instructions…",
+  "a9f26af6134146f9": "This server did not send its built-in instructions. Update it to edit them here."
 }

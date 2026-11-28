@@ -1091,6 +1091,10 @@ const SourceControlWritingStyleSetting = Schema.Union([
   LegacySourceControlWritingStyle,
 ]);
 
+/** Holds a full replacement for T3's agent orchestration text; empty uses the server's built-in text. */
+export const AgentInstructions = TrimmedString.check(Schema.isMaxLength(32_000));
+export type AgentInstructions = typeof AgentInstructions.Type;
+
 export const BranchNamingMode = Schema.Literals(["static", "semantic", "custom"]);
 export type BranchNamingMode = typeof BranchNamingMode.Type;
 
@@ -1603,6 +1607,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   reviewGuideInstructions: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  agentInstructions: AgentInstructions.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
 
   pullRequestMergeMethod: Schema.NullOr(PullRequestMergeMethod).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -2012,6 +2017,7 @@ export const ServerSettingsPatch = Schema.Struct({
   reviewGuidesEnabled: Schema.optionalKey(Schema.Boolean),
   reviewGuideModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   reviewGuideInstructions: Schema.optionalKey(TrimmedString),
+  agentInstructions: Schema.optionalKey(AgentInstructions),
   pullRequestMergeMethod: Schema.optionalKey(Schema.NullOr(PullRequestMergeMethod)),
   observability: Schema.optionalKey(
     Schema.Struct({
@@ -2069,7 +2075,9 @@ export function requiredScopesForServerSettingsPatch(
       key === "providerInstances" ||
       key === "usageLimitSources" ||
       key === "textGenerators" ||
-      key === "secretProviders"
+      key === "secretProviders" ||
+      // Agent instructions steer every agent's actions, as much as a provider's launch command.
+      key === "agentInstructions"
     ) {
       changesProviders = true;
     } else {

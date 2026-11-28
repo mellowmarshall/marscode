@@ -1052,6 +1052,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [msg("generated thread titles prompt custom style naming rename regenerate")],
   },
   {
+    id: "agent-instructions",
+    title: msg("Agent instructions"),
+    to: "/settings/threads",
+    scope: "environment-defaults",
+    searchTerms: [msg("system prompt orchestration guidance edit reset default agents")],
+  },
+  {
     id: "app-version",
     title: msg("Version"),
     to: "/settings/about",

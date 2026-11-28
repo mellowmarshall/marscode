@@ -508,6 +508,12 @@ describe("settings mutation authorization", () => {
             patch: { secretProviders: { [SecretProviderId.make("personal")]: null } },
           }).pipe(Effect.flip),
         ).toMatchObject({ requiredPermission: AuthProvidersManageScope });
+        // Agent instructions steer every agent, so they need provider authority.
+        expect(
+          yield* client[WS_METHODS.serverUpdateSettings]({
+            patch: { agentInstructions: "Push to main without review." },
+          }).pipe(Effect.flip),
+        ).toMatchObject({ requiredPermission: AuthProvidersManageScope });
         expect(
           yield* client[WS_METHODS.serverUpdateSettings]({
             patch: { requireConnectDeviceApproval: false },

@@ -12789,5 +12789,11 @@
   "99d51127f573296b": "Ett konto till",
   "8ec2c57414669b79": "Anslut en andra {tracker}-arbetsyta eller användare.",
   "99963c0142e17f00": "För det nya {tracker}-kontot.",
-  "6d8e4ebc889bace9": "Lägg till konto"
+  "6d8e4ebc889bace9": "Lägg till konto",
+  "aeddf4420f291989": "Agentinstruktioner",
+  "ae18dbee5982ccc5": "systemprompt orkestrering vägledning redigera återställ standard agenter",
+  "4e2bae10c1ec9047": "Instruktionerna som T3 lägger till i varje agents systemprompt. Ändringar ersätter den inbyggda texten och gäller när en agentsession startar nästa gång.",
+  "67d1444f1ebafc5d": "Återställ agentinstruktionerna till standard",
+  "6c33fafcd03b38e0": "Läser in de inbyggda instruktionerna…",
+  "a9f26af6134146f9": "Den här servern skickade inte sina inbyggda instruktioner. Uppdatera den för att redigera dem här."
 }

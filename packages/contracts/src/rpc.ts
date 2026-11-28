@@ -627,6 +627,7 @@ export const WS_METHODS = {
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
   serverCheckOtlpEndpoint: "server.checkOtlpEndpoint",
   serverListTextGeneratorModels: "server.listTextGeneratorModels",
+  serverGetDefaultAgentInstructions: "server.getDefaultAgentInstructions",
   serverPrepareTriage: "server.prepareTriage",
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
@@ -1164,6 +1165,16 @@ const WsServerListTextGeneratorModelsRpc = Rpc.make(WS_METHODS.serverListTextGen
   success: ListTextGeneratorModelsResult,
   error: Schema.Union([TextGeneratorError, EnvironmentAuthorizationError]),
 });
+
+// The built-in text is about 5 KB; only the settings editor asks for it, so ServerConfig stays small.
+const WsServerGetDefaultAgentInstructionsRpc = Rpc.make(
+  WS_METHODS.serverGetDefaultAgentInstructions,
+  {
+    payload: Schema.Struct({}),
+    success: Schema.Struct({ text: Schema.String }),
+    error: EnvironmentAuthorizationError,
+  },
+);
 
 const WsServerPrepareTriageRpc = Rpc.make(WS_METHODS.serverPrepareTriage, {
   payload: ServerPrepareTriageInput,
@@ -2536,6 +2547,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRetryResourceTelemetryRpc,
   WsServerCheckOtlpEndpointRpc,
   WsServerListTextGeneratorModelsRpc,
+  WsServerGetDefaultAgentInstructionsRpc,
   WsServerPrepareTriageRpc,
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,

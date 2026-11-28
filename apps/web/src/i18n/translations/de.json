@@ -12782,5 +12782,11 @@
   "99d51127f573296b": "Weiteres Konto",
   "8ec2c57414669b79": "Verbinde einen zweiten {tracker}-Workspace oder -Nutzer.",
   "99963c0142e17f00": "Für das neue {tracker}-Konto.",
-  "6d8e4ebc889bace9": "Konto hinzufügen"
+  "6d8e4ebc889bace9": "Konto hinzufügen",
+  "aeddf4420f291989": "Agentenanweisungen",
+  "ae18dbee5982ccc5": "Systemprompt Orchestrierung Anleitung bearbeiten zurücksetzen Standard Agenten",
+  "4e2bae10c1ec9047": "Die Anweisungen, die T3 dem Systemprompt jedes Agenten hinzufügt. Änderungen ersetzen den eingebauten Text und gelten ab dem nächsten Start einer Agentensitzung.",
+  "67d1444f1ebafc5d": "Agentenanweisungen auf Standard zurücksetzen",
+  "6c33fafcd03b38e0": "Eingebaute Anweisungen werden geladen…",
+  "a9f26af6134146f9": "Dieser Server hat seine eingebauten Anweisungen nicht gesendet. Aktualisiere ihn, um sie hier zu bearbeiten."
 }

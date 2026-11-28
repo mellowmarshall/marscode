@@ -18,7 +18,11 @@ import {
   materializePiT3McpExtension,
   resolvePiLaunchArgs,
 } from "./mcpInjection.ts";
-import { PI_T3_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
+import {
+  PI_T3_MCP_EXTENSION_SOURCE,
+  T3_PI_ORCHESTRATION_INSTRUCTIONS_ENV,
+} from "./mcpExtensionSource.ts";
+import { setT3OrchestrationInstructionsOverride } from "@t3tools/provider-core/server/orchestrationInstructions";
 
 const threadId = ThreadId.make("thread-pi-t3-mcp");
 
@@ -95,6 +99,23 @@ describe("pi T3 MCP injection", () => {
       permissionOnly.env[T3_PI_MCP_EXTENSION_PATH_ENV],
       "/tmp/cache/pi-t3-mcp-extension.ts",
     );
+  });
+
+  it("hands Pi the instructions edited in settings, and nothing extra for the built-in text", () => {
+    const launch = () =>
+      buildPiRpcLaunch({
+        launchArgs: [],
+        environment: { [T3_PI_ORCHESTRATION_INSTRUCTIONS_ENV]: "inherited" },
+        mcpSession,
+        extensionPath: "/tmp/cache/pi-t3-mcp-extension.ts",
+      }).env[T3_PI_ORCHESTRATION_INSTRUCTIONS_ENV];
+    assert.isUndefined(launch());
+    setT3OrchestrationInstructionsOverride("Ask before deleting files.");
+    try {
+      assert.equal(launch(), "Ask before deleting files.");
+    } finally {
+      setT3OrchestrationInstructionsOverride("");
+    }
   });
 
   it("forces tools and user extensions off for unattended text generation", () => {

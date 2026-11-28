@@ -16,7 +16,10 @@ Ordinary coding tasks need no T3 tools.
 - Another machine: \`t3_environment_links\` lists linked ones. Pass its \`environmentId\` and that machine's \`threadId\` to T3 tools.
 - Unlinked ("delegate this to my vps"): \`t3_environment_link\` with a \`hint\` from the user's words, never a pairing code in chat. No link tools: say to enable Settings → Labs → Linked environments.
 - In your reply, mention a thread by its \`link\`, verbatim, never a plain title or bare id.
-- A login, token, PIN, pairing code or sudo password only the user can give: call \`request_secret\`, not a chat ask or a handoff. Not for access you have. Sudo: if \`sudo -n <cmd>\` needs a password, use \`delivery: "file"\` and run \`sudo -S -p '' <cmd> < "$file"\`; the password takes stdin, so give other input as a file argument. Asked only to schedule: \`schedule_task\` without running its prompt.
+- Secrets, sudo and owner approvals use T3's modals: never ask in chat or give the user a terminal command.
+  - A login, token, PIN, pairing code or sudo password only the user can give: \`request_secret\`. Not for access you have. Sudo: if \`sudo -n <cmd>\` needs a password, use \`delivery: "file"\` and run \`sudo -S -p '' <cmd> < "$file"\` yourself; the password takes stdin, so give other input as a file argument.
+  - A refusal that says "Request owner approval": re-run the exact command yourself as \`HOST_GUARD_OVERRIDE="<why, in words>" <command>\` to open the owner's approval modal. Only for owner decisions, not failures you can fix. Denied, or no modal offered: stop and say an owner override is needed.
+- Asked only to schedule: \`schedule_task\` without running its prompt.
 - Adversarial code reviews (before \`ship-queue submit\`): run \`delegate_task\` with \`role:"review"\` using \`reviewModels.shipQueueReview\` from \`orchestrator_capabilities\` (or \`ship-queue review-model\`), then pass \`--review-thread <childThreadId>\` (or \`--review <file>\`) to \`ship-queue submit\`. Completed review subagents log to Review Stats automatically with both thread IDs.
 - T3 tools may load late. Try the name once before you call it absent.`,
   `### Visuals and preview
@@ -29,6 +32,70 @@ export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
 
 ${T3_CODE_ORCHESTRATION_SECTIONS.join("\n\n")}
 `;
+
+const SECTION_MAX_BYTES = 4_000;
+const utf8Bytes = (text: string) => new TextEncoder().encode(text).byteLength;
+
+const splitByCharacters = (piece: string): ReadonlyArray<string> => {
+  const chunks: string[] = [];
+  let chunk = "";
+  let bytes = 0;
+  for (const char of piece) {
+    const size = utf8Bytes(char);
+    if (bytes + size > SECTION_MAX_BYTES) {
+      chunks.push(chunk);
+      chunk = "";
+      bytes = 0;
+    }
+    chunk += char;
+    bytes += size;
+  }
+  return [...chunks, chunk];
+};
+
+const fits = (text: string) => utf8Bytes(text) <= SECTION_MAX_BYTES;
+
+/** Greedy paragraph packing under Codex's per-entry cap; an oversized paragraph is split by lines, then characters. */
+export function splitOrchestrationSections(text: string): ReadonlyArray<string> {
+  const pieces = text
+    .split(/\n{2,}/)
+    .flatMap((paragraph) => (fits(paragraph) ? [paragraph] : paragraph.split("\n")))
+    .flatMap((piece) => (fits(piece) ? [piece] : splitByCharacters(piece)))
+    .filter((piece) => piece.trim() !== "");
+  const sections: string[] = [];
+  for (const piece of pieces) {
+    const last = sections.at(-1);
+    if (last !== undefined && fits(`${last}\n\n${piece}`)) {
+      sections[sections.length - 1] = `${last}\n\n${piece}`;
+    } else {
+      sections.push(piece);
+    }
+  }
+  return sections;
+}
+
+// Process-wide because every provider adapter reads it at session start and none holds settings.
+// The server sets it from the `agentInstructions` setting; empty restores the built-in text.
+let instructionsOverride: string | undefined;
+
+export function setT3OrchestrationInstructionsOverride(text: string): void {
+  const trimmed = text.trim();
+  instructionsOverride = trimmed === "" ? undefined : trimmed;
+}
+
+/** The orchestration text agents get now: the user's edit from settings, else the built-in text. */
+export function t3OrchestrationInstructionsText(): string {
+  return instructionsOverride ?? T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim();
+}
+
+/** `t3OrchestrationInstructionsText`, as entries that fit Codex's per-entry cap. */
+export function t3OrchestrationSections(): ReadonlyArray<string> {
+  return instructionsOverride === undefined
+    ? T3_CODE_ORCHESTRATION_SECTIONS
+    : splitOrchestrationSections(instructionsOverride);
+}
+
+const currentOrchestrationInstructions = () => `\n\n${t3OrchestrationInstructionsText()}\n`;
 
 export const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
@@ -97,7 +164,7 @@ export function t3AcpPromptWithInstructions(input: {
       ? [
           T3_CODE_BROWSER_TOOL_INSTRUCTIONS.trim(),
           ...(input.state.hasDeviceTools ? [T3_CODE_DEVICE_TOOL_INSTRUCTIONS] : []),
-          T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim(),
+          t3OrchestrationInstructionsText(),
           T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS,
         ]
       : []),
@@ -107,8 +174,8 @@ export function t3AcpPromptWithInstructions(input: {
 
 const orchestrationInstructions = (hasDeviceTools: boolean) =>
   hasDeviceTools
-    ? `${T3_CODE_ORCHESTRATION_INSTRUCTIONS}\n${T3_CODE_DEVICE_TOOL_INSTRUCTIONS}\n`
-    : T3_CODE_ORCHESTRATION_INSTRUCTIONS;
+    ? `${currentOrchestrationInstructions()}\n${T3_CODE_DEVICE_TOOL_INSTRUCTIONS}\n`
+    : currentOrchestrationInstructions();
 
 function prependT3OrchestrationInstructions(prompt: string, instructions: string): string {
   return `<t3_code_orchestration_instructions>${instructions.trim()}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;

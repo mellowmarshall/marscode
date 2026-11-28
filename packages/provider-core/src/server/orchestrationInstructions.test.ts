@@ -4,8 +4,13 @@ import {
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS,
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+  T3_CODE_ORCHESTRATION_SECTIONS,
+  setT3OrchestrationInstructionsOverride,
+  splitOrchestrationSections,
   t3AcpPromptWithInstructions,
+  t3OrchestrationInstructionsText,
   t3OrchestrationPrompt,
+  t3OrchestrationSections,
   t3OrchestrationSystemPrompt,
 } from "./orchestrationInstructions.ts";
 
@@ -96,5 +101,57 @@ describe("T3 device instructions", () => {
       "Again.",
     );
     assert.notInclude(t3AcpPromptWithInstructions({ prompt: "Hi.", state }), "## T3 Code devices");
+  });
+});
+
+describe("T3 modal guidance", () => {
+  it("routes sudo through request_secret and owner approvals through a re-run with HOST_GUARD_OVERRIDE", () => {
+    for (const rule of [
+      "never ask in chat or give the user a terminal command.",
+      "run `sudo -S -p '' <cmd> < \"$file\"` yourself",
+      're-run the exact command yourself as `HOST_GUARD_OVERRIDE="<why, in words>" <command>`',
+      "Only for owner decisions, not failures you can fix.",
+    ]) {
+      assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, rule);
+    }
+  });
+
+  it("keeps every built-in section under Codex's per-entry cap", () => {
+    for (const section of T3_CODE_ORCHESTRATION_SECTIONS) {
+      assert.isAtMost(new TextEncoder().encode(section).byteLength, 4_000);
+    }
+  });
+});
+
+describe("T3 instructions edited in settings", () => {
+  it("replace the built-in text for every provider path, and an empty edit restores it", () => {
+    setT3OrchestrationInstructionsOverride("  ## House rules\n\nAsk before deleting files.  ");
+    try {
+      assert.equal(
+        t3OrchestrationInstructionsText(),
+        "## House rules\n\nAsk before deleting files.",
+      );
+      assert.deepEqual(t3OrchestrationSections(), ["## House rules\n\nAsk before deleting files."]);
+      assert.include(t3OrchestrationSystemPrompt(true, false)!, "Ask before deleting files.");
+      assert.notInclude(t3OrchestrationSystemPrompt(true, false)!, "## T3 Code orchestration");
+      const state = { interactionMode: "default" as const, hasT3Mcp: true, hasDeviceTools: false };
+      assert.include(t3AcpPromptWithInstructions({ prompt: "Hi.", state }), "Ask before deleting");
+    } finally {
+      setT3OrchestrationInstructionsOverride("");
+    }
+    assert.equal(t3OrchestrationInstructionsText(), T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim());
+    assert.strictEqual(t3OrchestrationSections(), T3_CODE_ORCHESTRATION_SECTIONS);
+  });
+
+  it("split long text into Codex-sized entries without losing any of it", () => {
+    const paragraph = "word ".repeat(300).trim();
+    const longLine = "é".repeat(2_500);
+    const text = [paragraph, paragraph, paragraph, longLine].join("\n\n");
+    const sections = splitOrchestrationSections(text);
+    for (const section of sections) {
+      assert.isAtMost(new TextEncoder().encode(section).byteLength, 4_000);
+    }
+    assert.equal(sections.join("").replace(/\s/g, ""), text.replace(/\s/g, ""));
+    assert.isAbove(sections.length, 1);
   });
 });

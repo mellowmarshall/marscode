@@ -12782,5 +12782,11 @@
   "99d51127f573296b": "Outra conta",
   "8ec2c57414669b79": "Conecte um segundo espaço de trabalho ou usuário do {tracker}.",
   "99963c0142e17f00": "Para a nova conta do {tracker}.",
-  "6d8e4ebc889bace9": "Adicionar conta"
+  "6d8e4ebc889bace9": "Adicionar conta",
+  "aeddf4420f291989": "Instruções do agente",
+  "ae18dbee5982ccc5": "prompt do sistema orquestração orientação editar redefinir padrão agentes",
+  "4e2bae10c1ec9047": "As instruções que o T3 adiciona ao prompt do sistema de cada agente. As edições substituem o texto integrado e valem quando a próxima sessão do agente começar.",
+  "67d1444f1ebafc5d": "Redefinir as instruções do agente para o padrão",
+  "6c33fafcd03b38e0": "Carregando as instruções integradas…",
+  "a9f26af6134146f9": "Este servidor não enviou as instruções integradas. Atualize-o para editá-las aqui."
 }
