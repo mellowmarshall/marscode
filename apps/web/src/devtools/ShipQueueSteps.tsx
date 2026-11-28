@@ -7,11 +7,9 @@ import { msg } from "gt-react";
 
 import { m } from "~/i18n/messages";
 import type { ShipQueueJob } from "./devtoolsClient";
+import { parseShipJobStartMs, resolveShipJobEndMs } from "./shipJobTiming";
 
 const SAFE_GH_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
-const JOB_KEY_EPOCH_RE = /^(\d{9,11})-j/;
-// The queue writes `at=` with milliseconds (`…T19:43:56.898Z`); without them the zone is lost.
-const MARKER_AT_RE = /\bat=(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[+-]\d{2}:?\d{2}|Z)?)/;
 // Log stages a worker reaches only after STARTED (`@t3tools/ship-queue/markers`).
 const STARTED_STAGES = new Set([
   "rebase",
@@ -51,21 +49,6 @@ export function shouldHideRedundantStatusBadge(status: string): boolean {
   return status.trim().toLowerCase() === "running";
 }
 
-function parseJobStartMs(job: ShipQueueJob): number | null {
-  if (job.submitted_at) {
-    const parsed = Date.parse(job.submitted_at);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  if (job.key) {
-    const match = JOB_KEY_EPOCH_RE.exec(job.key);
-    if (match?.[1]) {
-      const sec = Number(match[1]);
-      if (Number.isFinite(sec) && sec > 0) return sec * 1000;
-    }
-  }
-  return null;
-}
-
 function formatDurationSeconds(totalSeconds: number): string {
   const secs = Math.max(0, Math.floor(totalSeconds));
   if (secs < 60) return `${secs}s`;
@@ -80,19 +63,15 @@ function formatDurationSeconds(totalSeconds: number): string {
 }
 
 export function formatShipJobElapsed(job: ShipQueueJob, nowMs: number): string | null {
-  const startMs = parseJobStartMs(job);
+  const startMs = parseShipJobStartMs(job);
   if (startMs === null) return null;
   if (isShipQueueJobLive(job)) {
     return formatDurationSeconds((nowMs - startMs) / 1000);
   }
-  const endRaw = job.ended_at ?? MARKER_AT_RE.exec(job.last_marker ?? "")?.[1];
-  if (endRaw) {
-    const endMs = Date.parse(endRaw);
-    if (Number.isFinite(endMs) && endMs >= startMs) {
-      return formatDurationSeconds((endMs - startMs) / 1000);
-    }
-  }
-  return null;
+  const endMs = resolveShipJobEndMs(job);
+  return endMs !== null && endMs >= startMs
+    ? formatDurationSeconds((endMs - startMs) / 1000)
+    : null;
 }
 
 function formatActiveCiDetail(

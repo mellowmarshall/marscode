@@ -3,11 +3,10 @@
  */
 import type { DevdeckSessionItem, ShipQueueJob } from "./devtoolsClient";
 import { isJobLive, type JobSummary } from "./jobs/jobTypes";
+import { parseShipJobStartMs, resolveShipJobEndMs } from "./shipJobTiming";
 import { isShipQueueJobLive } from "./ShipQueueSteps";
 
 const DEFAULT_BRANCHES = new Set(["main", "master", "develop", "HEAD"]);
-const JOB_KEY_EPOCH_RE = /^(\d{9,11})-j/;
-const MARKER_AT_RE = /\bat=(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:?\d{2}|Z)?)/;
 const DEFAULT_JOB_DONE_LINGER_MS = 5 * 60 * 1000;
 
 export type ThreadShipPhase = "shipping" | "deploying";
@@ -67,19 +66,11 @@ function hasSyncExit(job: ShipQueueJob): boolean {
 }
 
 function resolveJobStartedAt(job: ShipQueueJob): string | null {
-  if (job.submitted_at && Number.isFinite(Date.parse(job.submitted_at))) {
-    return job.submitted_at;
-  }
-  if (job.key) {
-    const match = JOB_KEY_EPOCH_RE.exec(job.key);
-    if (match?.[1]) {
-      const sec = Number(match[1]);
-      if (Number.isFinite(sec) && sec > 0) {
-        return new Date(sec * 1000).toISOString();
-      }
-    }
-  }
-  return null;
+  const startMs = parseShipJobStartMs(job);
+  if (startMs === null) return null;
+  return job.submitted_at && Date.parse(job.submitted_at) === startMs
+    ? job.submitted_at
+    : new Date(startMs).toISOString();
 }
 
 /**
@@ -143,29 +134,9 @@ export function shipJobKey(job: ShipQueueJob): string {
   return job.id || job.key || `${job.repo ?? "repo"}:${job.branch ?? "job"}`;
 }
 
-function parseShipJobStartMs(job: ShipQueueJob): number | null {
-  if (job.submitted_at) {
-    const parsed = Date.parse(job.submitted_at);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  if (job.key) {
-    const match = JOB_KEY_EPOCH_RE.exec(job.key);
-    if (match?.[1]) {
-      const sec = Number(match[1]);
-      if (Number.isFinite(sec) && sec > 0) return sec * 1000;
-    }
-  }
-  return null;
-}
-
+/** A finished job's end (`ended_at`, else its marker's zoned `at=`), else its start. */
 function resolveShipJobCompletedMs(job: ShipQueueJob): number | null {
-  const marker = job.last_marker ?? "";
-  const atMatch = MARKER_AT_RE.exec(marker);
-  if (atMatch?.[1]) {
-    const endMs = Date.parse(atMatch[1]);
-    if (Number.isFinite(endMs)) return endMs;
-  }
-  return parseShipJobStartMs(job);
+  return resolveShipJobEndMs(job) ?? parseShipJobStartMs(job);
 }
 
 function isShipJobCancelled(job: ShipQueueJob): boolean {
@@ -188,7 +159,7 @@ function isShipJobDone(job: ShipQueueJob): boolean {
 }
 
 function shipJobRecencyMs(job: ShipQueueJob): number {
-  return resolveShipJobCompletedMs(job) ?? parseShipJobStartMs(job) ?? 0;
+  return resolveShipJobCompletedMs(job) ?? 0;
 }
 
 /** Returns live thread ship jobs, else the latest failed job (until dismissed) or done job for 5m. */

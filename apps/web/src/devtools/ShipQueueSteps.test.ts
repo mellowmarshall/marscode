@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { aggregateFleetAlerts, isAlertFiring, mergeFleetHosts } from "./devdeckTypes";
+import type { ShipQueueJob } from "./devtoolsClient";
 import {
   buildSafePrUrl,
   deriveShipJobSteps,
@@ -859,5 +860,88 @@ describe("devdeckTypes & ThreadDevtoolsPanel helpers", () => {
       t0 + 121_000,
     );
     expect(cancelled.jobs).toEqual([]);
+  });
+
+  it("selectVisibleThreadShipJobs hides a finished job 5 minutes after its real end in any time zone", () => {
+    // Job 1112's `status --json` record (repo names neutral): done, merged, sync clean, and a DONE
+    // marker whose `at=` carries milliseconds. Away from UTC, a zone lost at the milliseconds put
+    // the end hours late and the card stayed.
+    const previousTz = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      const endMs = Date.parse("2026-11-28T08:50:37.370Z");
+      const done: ShipQueueJob = {
+        id: "1112",
+        repo: "acme-fixture/sample-repo",
+        primary: "/work/sample-repo",
+        worktree: "/work/wt-148",
+        branch: "fix/148-sample",
+        title: "fix(sample): hosts check (#148)",
+        thread_id: "thread-ship",
+        state: "done",
+        submitted_at: "2026-11-28T08:45:46.388Z",
+        key: "1795855546-j1112",
+        steps: [
+          { name: "ship_body_check", host: "local", exit: 0, ms: 468 },
+          { name: "ship_install", host: "ci-box", exit: 0, ms: 4072 },
+          { name: "ship_ci", host: "ci-box", exit: 0, ms: 56365 },
+          { name: "ship_merge", host: "local", exit: 0, ms: 3268 },
+        ],
+        push_exit: 0,
+        pr: 154,
+        merge_exit: 0,
+        sync_exit: 0,
+        ended_at: "2026-11-28T08:50:37.370Z",
+        last_marker: "DONE job=1112 pr=154 at=2026-11-28T08:50:37.370Z",
+        stage: "deployed",
+      };
+      const { ended_at: _endedAt, ...markerOnly } = done;
+      const merged: ShipQueueJob = { ...done, state: "merged", sync_exit: 1 };
+
+      for (const job of [done, markerOnly, merged]) {
+        expect(isShipQueueJobLive(job)).toBe(false);
+        const shown = selectVisibleThreadShipJobs([job], endMs + 4 * 60_000);
+        expect(shown.jobs.map((j) => j.id)).toEqual(["1112"]);
+        expect(shown.lingerUntilMs).toBe(endMs + 5 * 60_000);
+        expect(selectVisibleThreadShipJobs([job], endMs + 6 * 60_000).jobs).toEqual([]);
+        // The elapsed time stops at the end.
+        expect(formatShipJobElapsed(job, endMs + 4 * 60_000)).toBe("4m 50s");
+        expect(formatShipJobElapsed(job, endMs + 6 * 3_600_000)).toBe("4m 50s");
+      }
+
+      // A failed job that ended later in the same thread stays until dismissed.
+      const failed: ShipQueueJob = {
+        id: "1113",
+        thread_id: "thread-ship",
+        state: "failed",
+        submitted_at: "2026-11-28T08:45:53.334Z",
+        ended_at: "2026-11-28T08:51:02.455Z",
+        reason: "ci step=ship_ci exit=1",
+        last_marker: "FAILED reason=ci step=ship_ci exit=1",
+      };
+      const later = endMs + 6 * 3_600_000;
+      expect(selectVisibleThreadShipJobs([done, failed], later).jobs.map((j) => j.id)).toEqual([
+        "1113",
+      ]);
+      expect(selectVisibleThreadShipJobs([done, failed], later, new Set(["1113"])).jobs).toEqual(
+        [],
+      );
+
+      // A live job shows while it runs, with a running elapsed time.
+      const live: ShipQueueJob = {
+        id: "1114",
+        thread_id: "thread-ship",
+        state: "running",
+        submitted_at: "2026-11-28T09:00:00.000Z",
+        merge_exit: 0,
+        last_marker: "POST_MERGE job=1114",
+      };
+      const running = selectVisibleThreadShipJobs([done, failed, live], later);
+      expect(running.jobs.map((j) => j.id)).toEqual(["1114"]);
+      expect(formatShipJobElapsed(live, Date.parse("2026-11-28T09:02:05.000Z"))).toBe("2m 05s");
+    } finally {
+      if (previousTz === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTz;
+    }
   });
 });
