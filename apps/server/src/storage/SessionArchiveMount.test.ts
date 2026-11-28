@@ -96,6 +96,7 @@ describe("darwinMountIsRemote", () => {
     for (const target of [
       "/Volumes/smb-archive",
       "/Volumes/nfs-archive",
+      "/Volumes/flagged-local",
       "/Volumes/sshfs-archive",
       "/Volumes/rclone archive",
     ]) {
@@ -109,7 +110,6 @@ describe("darwinMountIsRemote", () => {
       "/Volumes/ntfs-disk",
       "/Volumes/vault",
       "/Volumes/bindfs-archive",
-      "/Volumes/flagged-local",
       "/Volumes/not-mounted",
     ]) {
       expect(darwinMountIsRemote(mountOutput, target), target).toBe(false);

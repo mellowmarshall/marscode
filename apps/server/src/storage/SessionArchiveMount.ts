@@ -86,15 +86,10 @@ export function darwinMountIsRemote(mountOutput: string, target: string): boolea
     const match = /^(.*?) on (.+) \(([^)]*)\)\s*$/.exec(line);
     if (!match || match[2] !== target) continue;
     const source = match[1] ?? "";
-    const [type = "", ...options] = (match[3] ?? "").split(",").map((part) => part.trim());
+    const type = (match[3] ?? "").split(",")[0]?.trim() ?? "";
     if (DARWIN_REMOTE_FS_TYPES.has(type)) return true;
-    if (
-      DARWIN_FUSE_FS_TYPES.has(type) &&
-      !options.includes("local") &&
-      DARWIN_FUSE_NETWORK_SOURCE.test(source)
-    ) {
-      return true;
-    }
+    // `-o local` only changes how Finder lists the volume; the source decides where data lives.
+    if (DARWIN_FUSE_FS_TYPES.has(type) && DARWIN_FUSE_NETWORK_SOURCE.test(source)) return true;
   }
   return false;
 }
