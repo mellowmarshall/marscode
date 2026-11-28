@@ -11,6 +11,9 @@ import type { ProcessRunner } from "./types.ts";
 const RENOVATE_TIMEOUT_MS = 30 * 60_000;
 const PINS_PATH = "infra/ci-host/sq_pins.json";
 
+/** The `lookup` a report carries when the pinned Renovate CLI assessed it upstream. */
+export const RENOVATE_LOOKUP = "renovate";
+
 /**
  * Drops the tool-pin updates `sq_pins.json` never offers: a new major, or a new minor of a 0.x
  * release, unless the pin sets `major`; and, for a `monthEnd` pin, any release that is not the

@@ -6,7 +6,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { DEP_REPO_NAME_RE, type DepReportRecord } from "./depsTypes.ts";
-import { renovateLookup } from "./depsRenovate.ts";
+import { RENOVATE_LOOKUP, renovateLookup } from "./depsRenovate.ts";
 import { readRegistration } from "./jobStore.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
 import { computePinDigests, validatePinsSpec } from "./pins.ts";
@@ -148,6 +148,38 @@ async function extractBlobs(
     throw new Error(`git cat-file --batch returned ${index} of ${paths.length} dependency files`);
   }
   return digests;
+}
+
+/** A repository-relative path that cannot leave the tree. */
+function isSafeRepoPath(relPath: string): boolean {
+  return (
+    relPath.length > 0 &&
+    !relPath.startsWith("/") &&
+    !relPath.split("/").some((part) => part === ".." || part === "." || part === "")
+  );
+}
+
+/** The paths (of PATHS) that are files in COMMIT. */
+async function listCommitFiles(
+  run: ProcessRunner,
+  repoDir: string,
+  commit: string,
+  paths: ReadonlyArray<string>,
+): Promise<ReadonlyArray<string>> {
+  if (paths.length === 0) return [];
+  const ls = await run({
+    command: "git",
+    args: ["-C", repoDir, "ls-tree", "-z", "--full-tree", commit, "--", ...paths],
+    cwd: repoDir,
+  });
+  if (ls.exitCode !== 0) throw new Error(ls.stderr.trim() || `git ls-tree failed at ${commit}`);
+  return ls.stdout
+    .split("\0")
+    .filter(Boolean)
+    .flatMap((entry) => {
+      const match = /^\d+ blob [0-9a-f]+\t(.+)$/s.exec(entry);
+      return match ? [match[1]!] : [];
+    });
 }
 
 const SAFE_GIT_REF_RE = /^[A-Za-z0-9._/@^{}-]+$/;
@@ -297,7 +329,7 @@ export async function readRepoDependencyFilesAtRef(input: {
     NodeFS.rmSync(listDir, { recursive: true, force: true });
   }
 
-  const trackedPaths = listing
+  let trackedPaths = listing
     .split("\0")
     .filter((p) => p.length > 0 && isTrackedDepPath(p))
     .toSorted();
@@ -324,6 +356,20 @@ export async function readRepoDependencyFilesAtRef(input: {
     const pinsRaw = pinSourceTexts["infra/ci-host/sq_pins.json"];
     if (pinsRaw !== undefined) {
       const spec = validatePinsSpec(JSON.parse(pinsRaw) as unknown, "infra/ci-host/sq_pins.json");
+      // Every file a pin declares is a dependency file too, wherever it lives: extract and digest
+      // it from the same commit, so Renovate's manager for it has the file to read. A declared
+      // file the commit lacks stays absent, and the lookup reports that pin as not assessed.
+      const declared = [...new Set(spec.pins.map((pin) => pin.file))].filter(
+        (file) => !trackedPaths.includes(file) && isSafeRepoPath(file),
+      );
+      const present = await listCommitFiles(run, input.repoDir, commit, declared);
+      if (present.length > 0) {
+        Object.assign(files, await extractBlobs(input.repoDir, commit, present, tree));
+        for (const file of present) {
+          pinSourceTexts[file] = NodeFS.readFileSync(NodePath.join(tree, file), "utf8");
+        }
+        trackedPaths = [...trackedPaths, ...present].toSorted();
+      }
       Object.assign(files, computePinDigests(pinSourceTexts, spec));
     }
     handedOver = Boolean(input.keepTree);
@@ -419,5 +465,8 @@ export async function defaultScanRepo(input: {
         }
       : {}),
     source: { kind: input.checkout ? "checkout" : "main", commit },
+    // Proof that this report asked upstream: reports without it (from the earlier, local-only
+    // scanner) are never treated as a fresh or clean assessment.
+    lookup: RENOVATE_LOOKUP,
   };
 }

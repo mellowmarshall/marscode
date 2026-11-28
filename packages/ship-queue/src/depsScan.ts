@@ -112,7 +112,10 @@ export async function scanShipQueueDepsRepo(
             : lastReport?.error || lastReport?.status === "unknown"
               ? DEP_RETRY_FAILED_S
               : DEP_RESCAN_INTERVAL_S;
-        if (input.due && lastReport && lastReport.created > now - retryAfter) {
+        // A report that never asked upstream (the earlier scanner's) is due at once; a failed scan
+        // still waits its retry interval.
+        const assessed = Boolean(lastReport?.lookup) || lastReport?.status === "unknown";
+        if (input.due && lastReport && assessed && lastReport.created > now - retryAfter) {
           return { status: "skip", reason: "scanned recently", report: lastReport };
         }
         if (current.attempt && ACTIVE_DEP_ATTEMPT_STATES.has(current.attempt.status)) {
@@ -280,6 +283,8 @@ export function evaluateDepsGate(input: {
     }
     if (
       state.report?.status === "clean" &&
+      // Only a report that asked upstream proves there is nothing to update.
+      Boolean(state.report.lookup) &&
       state.report.created > now - DEP_DAY_S &&
       filesEqual(state.report.files, input.files)
     ) {

@@ -822,6 +822,58 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
     }
   });
 
+  it("reads a pin's source file from the commit even outside the fixed dependency paths", async () => {
+    const queueRoot = mkTempDir("sq-deps-pinfile-");
+    const primary = mkTempDir("sq-deps-pinfile-repo-");
+    const repoRoot = NodePath.resolve(import.meta.dirname, "../../..");
+    const realSpec = JSON.parse(
+      NodeFS.readFileSync(NodePath.join(repoRoot, "infra", "ci-host", "sq_pins.json"), "utf8"),
+    ) as { pins: Array<{ name: string; file: string }> };
+    const flyPin = realSpec.pins.find((pin) => pin.name === "fly")!;
+    // The fly pin, declared against a file no fixed dependency path covers.
+    const spec = { ...realSpec, pins: [{ ...flyPin, file: "infra/tools/install.sh" }] };
+    const git = async (args: string[]) => {
+      const r = await nodeProcessRunner({ command: "git", args, cwd: primary });
+      if (r.exitCode !== 0) throw new Error(r.stderr);
+    };
+    await git(["init", "-b", "main"]);
+    await git(["config", "user.email", "test@example.com"]);
+    await git(["config", "user.name", "Test User"]);
+    NodeFS.writeFileSync(NodePath.join(primary, "package.json"), '{"name":"demo"}');
+    NodeFS.mkdirSync(NodePath.join(primary, "infra", "ci-host"), { recursive: true });
+    NodeFS.mkdirSync(NodePath.join(primary, "infra", "tools"), { recursive: true });
+    NodeFS.writeFileSync(
+      NodePath.join(primary, "infra", "ci-host", "sq_pins.json"),
+      JSON.stringify(spec, null, 2),
+    );
+    const flySource = NodeFS.readFileSync(NodePath.join(repoRoot, flyPin.file), "utf8");
+    NodeFS.writeFileSync(NodePath.join(primary, "infra", "tools", "install.sh"), flySource);
+    await git(["add", "-A"]);
+    await git(["commit", "-m", "init"]);
+    writeRegistration(queueRoot, "demo", {
+      primary,
+      remoteUrl: "https://example.invalid/demo.git",
+    });
+    let seen: { paths: ReadonlyArray<string>; source?: string } = { paths: [] };
+    const lookup = async (input: { tree: string; paths: ReadonlyArray<string> }) => {
+      const file = NodePath.join(input.tree, "infra", "tools", "install.sh");
+      seen = {
+        paths: input.paths,
+        ...(NodeFS.existsSync(file) ? { source: NodeFS.readFileSync(file, "utf8") } : {}),
+      };
+      return { updates: [], incomplete: [] };
+    };
+    const scan = await scanShipQueueDepsRepo(
+      { queueRoot, nowEpochSec: () => fixedNow, lookup },
+      { repo: "demo" },
+    );
+    // The lookup gets the declared file with the committed bytes, and the report digests it.
+    expect(seen.paths).toContain("infra/tools/install.sh");
+    expect(seen.source).toBe(flySource);
+    expect(Object.keys(scan.report!.files)).toContain("infra/tools/install.sh");
+    expect(scan.report!.files["pin:fly"]).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it("keeps the hold off until the owner decides, even when the first scan finds updates", async () => {
     const queueRoot = mkTempDir("sq-deps-pilot-");
     const primary = mkTempDir("sq-deps-pilot-repo-");
@@ -901,6 +953,7 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
         status: "clean",
         files: { "package.json": "clean-digest" },
         updates: [],
+        lookup: "renovate",
       };
     };
 
@@ -935,6 +988,32 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
       }),
     ).toEqual({ allowed: true, reason: "clean_report" });
 
+    // A clean report from the earlier, local-only scanner (no `lookup`: it never asked upstream)
+    // admits no job and is due at once, even when its digests match and it is minutes old.
+    const store = new SqliteDepsStore(queueRoot);
+    try {
+      const state = store.getRepoState("alpha")!;
+      const { lookup: _lookup, ...oldReport } = state.report!;
+      store.saveRepoState({ ...state, report: oldReport }, now + 130);
+    } finally {
+      store.close();
+    }
+    expect(
+      evaluateDepsGate({
+        queueRoot,
+        repo: "alpha",
+        jobId: "job-2",
+        worktree: "/tmp/alpha-wt",
+        files: { "package.json": "clean-digest" },
+        nowEpochSec: () => now + 140,
+      }).allowed,
+    ).toBe(false);
+    const rescanned = await scanShipQueueDepsRepo(
+      { queueRoot, nowEpochSec: () => now + 150, runRepoScan },
+      { repo: "alpha", due: true },
+    );
+    expect(rescanned.skipped).toBe(false);
+
     // Advancing past rescan interval (20h) triggers a fresh scan.
     now += 21 * 3600;
     const pass3 = await scanShipQueueDepsRepo(
@@ -943,7 +1022,7 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
     );
     expect(pass3.ok).toBe(true);
     expect(pass3.skipped).toBe(false);
-    expect(scans).toBe(3);
+    expect(scans).toBe(4);
   });
 });
 

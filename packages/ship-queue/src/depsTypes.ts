@@ -34,6 +34,8 @@ export interface DepReportRecord {
   readonly incomplete?: ReadonlyArray<unknown> | undefined;
   readonly source?: { readonly kind: "main" | "checkout"; readonly commit: string } | undefined;
   readonly error?: string | undefined;
+  /** How updates were assessed (`"renovate"`); absent on reports that never asked upstream. */
+  readonly lookup?: string | undefined;
 }
 
 export interface DepAttemptRecord {
