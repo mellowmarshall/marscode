@@ -5,15 +5,20 @@ import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { normalizeExceptions } from "./bypass.ts";
+import { runCheck } from "./checks.ts";
 import { loadDeclaration, parseDeclarationText, validateDeclaration } from "./declaration.ts";
+import { repoName } from "./git.ts";
+import { declarationRatchet } from "./ratchet.ts";
 import { portableRegexProblem } from "./declarationSchema.ts";
 import { readPlaybookDeclaration } from "./declarationSummary.ts";
 import { parseStrictJson } from "./strictJson.ts";
 import {
   cleanupTempDirs,
   evidenceDeclaration,
+  FIXED_TODAY,
   fixturePlaybookMd,
   makeFixtureRepo,
+  NO_BROKER_ENV,
 } from "./testing/fixtureRepo.ts";
 
 afterEach(cleanupTempDirs);
@@ -142,5 +147,111 @@ describe("declaration view", () => {
     });
     expect(view.rules.find((r) => r.section === 13)).toMatchObject({ status: "waived" });
     expect(view.rules.find((r) => r.section === 7)?.status).toBe("not-declared");
+  });
+});
+
+describe("retired playbook 7 settings", () => {
+  /** Every contract setting the playbook 7 schema declares that the playbook 8 schema refuses. */
+  const V7_SETTINGS: Readonly<Record<string, ReadonlyArray<string>>> = {
+    size: ["exempt"],
+    tools: ["python_external", "knip_env"],
+    dictionary: ["markdown", "protection"],
+    migrations: ["code", "list", "name", "protection", "scripts", "truncate"],
+    actions: [
+      "chokepoint",
+      "held_back",
+      "source",
+      "ledger",
+      "floors",
+      "walks",
+      "closure",
+      "measuredBy",
+      "tests",
+    ],
+    design: [
+      "tokens",
+      "ui",
+      "interactive",
+      "style_properties",
+      "slots",
+      "slot_calls",
+      "system",
+      "client",
+      "content_values",
+      "touch_calls",
+      "chokepoint",
+    ],
+    optimization: ["receipts", "measuredBy"],
+    docs: ["user_triggers", "admin_triggers", "demo"],
+  };
+  const evidenceOnly = () =>
+    Object.fromEntries(
+      Object.keys(V7_SETTINGS).map((c) => [c, { evidence: `.playbook/evidence/${c}.json` }]),
+    );
+  const v7Declaration = () =>
+    evidenceDeclaration(
+      Object.fromEntries(
+        Object.entries(V7_SETTINGS).map(([contract, keys]) => [
+          contract,
+          {
+            evidence: `.playbook/evidence/${contract}.json`,
+            ...Object.fromEntries(keys.map((k) => [k, `v7 ${k}`])),
+          },
+        ]),
+      ),
+    );
+
+  it("refuses each in a branch by name, and drops each from a base", () => {
+    const text = JSON.stringify(v7Declaration());
+    const head = parseDeclarationText(text);
+    for (const [contract, keys] of Object.entries(V7_SETTINGS)) {
+      for (const key of keys) {
+        expect(head.errors.some((e) => e.startsWith(`contracts.${contract}.${key}: `))).toBe(true);
+      }
+    }
+    expect(head.errors.filter((e) => e.includes("unknown key"))).toEqual([]);
+    expect(parseDeclarationText(text, { base: true }).errors).toEqual([]);
+  });
+
+  it("retires v7's object-form actions.evidence but keeps the v8 receipt path", () => {
+    const v7 = { contracts: { actions: { evidence: { run: "pnpm test:actions", tests: ["a"] } } } };
+    const head = parseDeclarationText(JSON.stringify(v7));
+    expect(head.errors.some((e) => e.startsWith("contracts.actions.evidence: the v7"))).toBe(true);
+    expect(parseDeclarationText(JSON.stringify(v7), { base: true }).errors).toEqual([]);
+    const v8 = { contracts: { actions: { evidence: ".playbook/evidence/actions.json" } } };
+    expect(
+      parseDeclarationText(JSON.stringify(v8)).errors.filter((e) => e.includes("actions.evidence")),
+    ).toEqual([]);
+  });
+
+  it("never counts removing them as a loosening", async () => {
+    const base = parseDeclarationText(JSON.stringify(v7Declaration()), { base: true }).data!;
+    expect(declarationRatchet(evidenceDeclaration(evidenceOnly()), base).problems).toEqual([]);
+
+    const repo = makeFixtureRepo();
+    repo.writeJson("playbook.json", v7Declaration());
+    const baseSha = repo.commit("a playbook 7 base");
+    repo.branch("feat/131-retire");
+    repo.writeJson("playbook.json", evidenceDeclaration(evidenceOnly()));
+    repo.commit("drop the retired settings");
+    const asked: string[] = [];
+    const report = await runCheck({
+      root: repo.root,
+      repo: repoName(repo.root),
+      contracts: ["size"],
+      bypasses: {},
+      today: FIXED_TODAY,
+      base: { sha: baseSha, name: "trunk", problem: null },
+      env: NO_BROKER_ENV,
+      override: async (reason) => {
+        asked.push(reason);
+        return false;
+      },
+    });
+    expect(asked).toEqual([]);
+    expect(report.results.find((r) => r.check === "ratchet")).toMatchObject({
+      status: "PASS",
+      summary: "playbook.json only tightens",
+    });
   });
 });

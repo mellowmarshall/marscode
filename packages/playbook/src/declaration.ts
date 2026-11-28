@@ -45,6 +45,11 @@ const NO_BASELINE =
 const EVIDENCE_ONLY =
   "playbook does not execute repo checks or scanners itself (§1): run the check in repo CI and emit a playbook-evidence/v1 receipt declared via evidence";
 
+const V7_EXCEPTIONS = "removed: declare narrow scoped exceptions in exceptions[] (§1.3)";
+const CHOKE = "renamed: declare the chokepoint as choke";
+const V7 =
+  "a playbook 7 setting playbook 8 does not read: the repo's own check reads its config and emits a playbook-evidence/v1 receipt; delete";
+
 const RETIRED_KEYS: Readonly<Record<string, string>> = {
   playbook: `${PIN} the 'playbook' key from playbook.json`,
   version: `${PIN} the 'version' key from playbook.json`,
@@ -52,6 +57,9 @@ const RETIRED_KEYS: Readonly<Record<string, string>> = {
     "removed: declare applicable sections explicitly in contracts; delete stack_overrides",
   bypass: MOVED,
 };
+
+const v7Settings = (contract: ContractName, keys: ReadonlyArray<string>) =>
+  keys.map((key) => [contract, key, V7] as const);
 
 const RETIRED_SETTING_LIST: ReadonlyArray<readonly [string, string, string]> = [
   ...CONTRACT_NAMES.map((c) => [c, "baseline", NO_BASELINE] as const),
@@ -73,6 +81,39 @@ const RETIRED_SETTING_LIST: ReadonlyArray<readonly [string, string, string]> = [
   ["migrations", "replay", EVIDENCE_ONLY],
   ["migrations", "runner", EVIDENCE_ONLY],
   ["design", "command", EVIDENCE_ONLY],
+  // Playbook 7 settings playbook 8 refuses: dropped from a base, so removing one is never a loosening.
+  ["size", "exempt", V7_EXCEPTIONS],
+  ["tools", "python_external", V7],
+  ["tools", "knip_env", V7],
+  ["dictionary", "markdown", "removed: a generated catalog is the generations contract's"],
+  ["dictionary", "protection", V7],
+  ...v7Settings("migrations", ["code", "list", "name", "protection", "scripts", "truncate"]),
+  ...v7Settings("actions", [
+    "source",
+    "ledger",
+    "held_back",
+    "floors",
+    "walks",
+    "closure",
+    "measuredBy",
+    "tests",
+  ]),
+  ["actions", "chokepoint", CHOKE],
+  ...v7Settings("design", [
+    "tokens",
+    "ui",
+    "interactive",
+    "style_properties",
+    "slots",
+    "slot_calls",
+    "system",
+    "client",
+    "content_values",
+    "touch_calls",
+  ]),
+  ["design", "chokepoint", CHOKE],
+  ...v7Settings("optimization", ["receipts", "measuredBy"]),
+  ...v7Settings("docs", ["user_triggers", "admin_triggers", "demo"]),
 ];
 
 const RETIRED_SETTINGS: ReadonlyMap<string, string> = new Map(
@@ -114,6 +155,22 @@ export function optedOut(body: unknown): boolean {
   return isRecord(body) && Object.keys(body).length === 1 && "none" in body;
 }
 
+/**
+ * Settings retired only in one shape: v7's `actions.evidence` was an object (`{ run, tests }`);
+ * v8 takes a receipt path. The object form is retired; the string form is current.
+ */
+const RETIRED_OBJECT_SETTINGS: ReadonlyMap<string, string> = new Map([
+  [
+    "actions.evidence",
+    "the v7 { run, tests } form is retired; give the path of the repo's actions receipt",
+  ],
+]);
+
+function isRetiredSetting(name: string, key: string, value: unknown): boolean {
+  const id = `${name}.${key}`;
+  return RETIRED_SETTINGS.has(id) || (RETIRED_OBJECT_SETTINGS.has(id) && isRecord(value));
+}
+
 function dropRetired(data: Record<string, unknown>): Record<string, unknown> {
   const out = Object.fromEntries(Object.entries(data).filter(([k]) => !(k in RETIRED_KEYS)));
   const contracts = out.contracts;
@@ -122,9 +179,7 @@ function dropRetired(data: Record<string, unknown>): Record<string, unknown> {
     for (const [name, body] of Object.entries(contracts)) {
       if (name in RETIRED_CONTRACTS) continue;
       cleaned[name] = isRecord(body)
-        ? Object.fromEntries(
-            Object.entries(body).filter(([k]) => !RETIRED_SETTINGS.has(`${name}.${k}`)),
-          )
+        ? Object.fromEntries(Object.entries(body).filter(([k, v]) => !isRetiredSetting(name, k, v)))
         : body;
     }
     out.contracts = cleaned;
@@ -145,8 +200,11 @@ export function validateDeclaration(data: unknown): ReadonlyArray<string> {
       for (const [name, body] of Object.entries(contracts)) {
         if (name in RETIRED_CONTRACTS) errors.push(`contracts.${name}: ${RETIRED_CONTRACTS[name]}`);
         if (!isRecord(body)) continue;
-        for (const key of Object.keys(body)) {
-          const why = RETIRED_SETTINGS.get(`${name}.${key}`);
+        for (const [key, value] of Object.entries(body)) {
+          const id = `${name}.${key}`;
+          const why =
+            RETIRED_SETTINGS.get(id) ??
+            (isRecord(value) ? RETIRED_OBJECT_SETTINGS.get(id) : undefined);
           if (why) errors.push(`contracts.${name}.${key}: ${why}`);
         }
       }
