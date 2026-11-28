@@ -110,6 +110,34 @@ describe("ship-queue log tail", () => {
     expect(redacted[1]).toBe("DONE job=5005");
   });
 
+  it("drops private key blocks whole, including one the tail opens inside of", () => {
+    const jobsRoot = makeTempDir();
+    // Built at run time so no source line looks like a key.
+    const kind = ["OPENSSH", "PRIVATE", "KEY"].join(" ");
+    const body = Array.from(
+      { length: 6 },
+      (_, i) => `  b3BlbnNzaC1rZXktdjEAAAAABG5vbmUA${i}QUFBQUFB`,
+    );
+    writeLog(jobsRoot, "5006", [
+      "POST_MERGE job=5006",
+      `  -----BEGIN ${kind}-----`,
+      ...body,
+      `  -----END ${kind}-----`,
+      "  after the key",
+      `  -----BEGIN ${kind}-----`,
+      ...body,
+    ]);
+    const tail = tailOf(jobsRoot, "5006")!.join("\n");
+    expect(tail).not.toContain("b3BlbnNzaC1rZXkt");
+    expect(tail).not.toContain("BEGIN");
+    expect(tail).toContain("  after the key");
+    expect(tail.match(/\[REDACTED PRIVATE KEY\]/g)).toHaveLength(2);
+
+    // A tail that starts inside a block: everything before its END is dropped.
+    writeLog(jobsRoot, "5007", [...body, `  -----END ${kind}-----`, "DONE job=5007"]);
+    expect(tailOf(jobsRoot, "5007")).toEqual(["  [REDACTED PRIVATE KEY]", "DONE job=5007"]);
+  });
+
   it("adds the sync reason to a done job whose post-merge sync failed", () => {
     const jobsRoot = makeTempDir();
     writeLog(jobsRoot, "5001", HOOK_EXIT_LOG);

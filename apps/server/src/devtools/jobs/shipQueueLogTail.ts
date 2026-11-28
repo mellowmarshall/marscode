@@ -22,6 +22,39 @@ interface TailCacheEntry {
 
 const tailCache = new Map<string, TailCacheEntry>();
 
+const KEY_BEGIN_RE = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
+const KEY_END_RE = /-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
+const KEY_REDACTED = "[REDACTED PRIVATE KEY]";
+
+/**
+ * Replaces each private key block with one marker line. Line redaction cannot see a key's body,
+ * so a block is dropped whole: from BEGIN to END, to the tail's end when END is missing, and from
+ * the tail's start when the tail opens inside a block (an END with no BEGIN before it).
+ */
+function redactKeyBlocks(lines: ReadonlyArray<string>): string[] {
+  const out: string[] = [];
+  const firstEnd = lines.findIndex((l) => KEY_END_RE.test(l));
+  const firstBegin = lines.findIndex((l) => KEY_BEGIN_RE.test(l));
+  let i = 0;
+  if (firstEnd !== -1 && (firstBegin === -1 || firstEnd < firstBegin)) {
+    out.push(`  ${KEY_REDACTED}`);
+    i = firstEnd + 1;
+  }
+  while (i < lines.length) {
+    const line = lines[i]!;
+    if (!KEY_BEGIN_RE.test(line)) {
+      out.push(line);
+      i += 1;
+      continue;
+    }
+    out.push(`  ${KEY_REDACTED}`);
+    let j = i;
+    while (j < lines.length && !KEY_END_RE.test(lines[j]!)) j += 1;
+    i = j + 1;
+  }
+  return out;
+}
+
 function redactTailLine(raw: string): string {
   const indented = raw.startsWith(" ") || raw.startsWith("\t");
   const body = redactLogLine(raw.trim()).slice(0, MAX_LINE_CHARS);
@@ -43,7 +76,7 @@ export function readShipJobLogTail(st: ShipJobLogStat | null): ReadonlyArray<str
   // A tail that starts mid-file starts mid-line too: drop the partial first line.
   if (offset > 0) rawLines.shift();
   while (rawLines.length > 0 && rawLines[rawLines.length - 1]!.trim() === "") rawLines.pop();
-  const lines = rawLines.slice(-TAIL_LINES).map(redactTailLine);
+  const lines = redactKeyBlocks(rawLines).slice(-TAIL_LINES).map(redactTailLine);
   if (tailCache.size > 256) tailCache.clear();
   tailCache.set(st.path, { mtimeMs: st.mtimeMs, size: st.size, lines });
   return lines;
