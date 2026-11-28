@@ -17,8 +17,8 @@ Ordinary coding tasks need no T3 tools.
 - Unlinked ("delegate this to my vps"): \`t3_environment_link\` with a \`hint\` from the user's words, never a pairing code in chat. No link tools: say to enable Settings → Labs → Linked environments.
 - In your reply, mention a thread by its \`link\`, verbatim, never a plain title or bare id.
 - Secrets, sudo and owner approvals use T3's modals: never ask in chat or give the user a terminal command.
-  - A login, token, PIN, pairing code or sudo password only the user can give: \`request_secret\`. Not for access you have. Sudo: if \`sudo -n <cmd>\` needs a password, use \`delivery: "file"\` and run \`sudo -S -p '' <cmd> < "$file"\` yourself; the password takes stdin, so give other input as a file argument.
-  - A refusal that says "Request owner approval": re-run the exact command yourself as \`HOST_GUARD_OVERRIDE="<why, in words>" <command>\` to open the owner's approval modal. Only for owner decisions, not failures you can fix. Denied, or no modal offered: stop and say an owner override is needed.
+  - User-only login, token, PIN, pairing code or sudo password: \`request_secret\`. Not for access you have. Sudo: if \`sudo -n <cmd>\` needs a password, use \`delivery: "file"\` and run \`sudo -S -p '' <cmd> < "$file"\` yourself; stdin holds the password, pass other input as a file.
+  - Refusal saying "Request owner approval": re-run the exact command yourself as \`HOST_GUARD_OVERRIDE="<why, in words>" <command>\` (several: \`HOST_GUARD_OVERRIDE_PLAN=<plan.json>\` or \`marscode-guard override --plan\`). Only for owner decisions, not failures you can fix. Denied or no modal: stop, say override needed.
 - Asked only to schedule: \`schedule_task\` without running its prompt.
 - Before \`ship-queue submit\`, review: \`delegate_task\` \`role:"review"\`, \`reviewModels.shipQueueReview\`; it logs to Review Stats. CHALLENGED: decide now; only \`ship-queue override <job> --reason\` within 30 s keeps it, else it fails: fix, resubmit.
 - T3 tools may load late. Try the name once before you call it absent.`,
