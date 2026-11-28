@@ -1084,6 +1084,68 @@ describe("BackgroundTaskBridge & JobRegistry native orchestration surfacing", ()
     expect(b?.shipJob).toMatchObject({ stage: "github" });
   });
 
+  it("gives a finished ship job its end time from ended_at, else from the zoned DONE marker", async () => {
+    // Job 1112's record shape after a merge and a clean post-merge sync (repo names neutral).
+    const root = mkTempDir("t3-sq-ended-");
+    const clock = { now: () => "2026-11-28T08:45:46.388Z" };
+    const init = {
+      repo: "acme-fixture/sample-repo",
+      primary: "/work/sample-repo",
+      worktree: "/work/wt-148",
+      branch: "fix/148-sample",
+      base_branch: "main",
+      remote: "origin",
+      title: "fix(sample): hosts check (#148)",
+      head_sha: "1".repeat(40),
+      thread_id: "thread-ship",
+    };
+    const finish = (endedAt: string | undefined) => {
+      const { id } = ShipQueueJobStore.createJob(root, init, "Closes #148\n", clock);
+      ShipQueueJobStore.updateJob(root, id, {
+        state: "done",
+        pr: 154,
+        push_exit: 0,
+        merge_exit: 0,
+        sync_exit: 0,
+        ...(endedAt ? { ended_at: endedAt } : {}),
+      });
+      for (const line of [
+        "MERGE_EXIT=0",
+        `POST_MERGE job=${id}`,
+        "SYNC_EXIT=0",
+        `DONE job=${id} pr=154 at=2026-11-28T08:50:37.370Z`,
+      ]) {
+        ShipQueueJobStore.mark(root, id, line);
+      }
+      return id;
+    };
+    const withEnd = finish("2026-11-28T08:50:37.370Z");
+    const markerOnly = finish(undefined);
+    const out: string[] = [];
+    expect(
+      await runShipQueueCli(["status", "--json"], {
+        deps: { root },
+        io: { stdout: (t) => out.push(t), env: {} },
+      }),
+    ).toBe(0);
+    const status = JSON.parse(out.join("")) as { jobs: Array<Record<string, unknown>> };
+    const jobsRoot = NodePath.join(root, "jobs");
+    const byId = new Map(
+      status.jobs.map((raw) => [
+        raw.id,
+        adaptShipQueueJob(raw, "fixture-host", 1, readShipJobLogFacts(raw, jobsRoot)),
+      ]),
+    );
+    for (const id of [withEnd, markerOnly]) {
+      expect(byId.get(id)).toMatchObject({
+        state: "done",
+        phaseLabel: "Shipping",
+        cancellable: false,
+        timing: { startedAt: "2026-11-28T08:45:46.388Z", endedAt: "2026-11-28T08:50:37.370Z" },
+      });
+    }
+  });
+
   it.effect(
     "classifies cancelled vs unknown-exit pending tasks (M1), skips remote local log tailing (M3), prevents terminal resurrection (M2), routes subagent cancel to owning app thread + cancel timeout (H2/M5), dedups nativeItemId debounce (L3), and reconnects dropped event streams (M4)",
     () =>

@@ -80,7 +80,8 @@ function ThreadDevtoolsPanelInner({
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [closingSessionId, setClosingSessionId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [lingerClockMs, setLingerClockMs] = useState(0);
+  // Starts at mount: with no live job the shared clock is stopped and its time can be old.
+  const [lingerClockMs, setLingerClockMs] = useState(() => Date.now());
   const [dismissedShipKeys, setDismissedShipKeys] = useState<ReadonlySet<string>>(
     () => new Set(dismissedShipJobKeys),
   );

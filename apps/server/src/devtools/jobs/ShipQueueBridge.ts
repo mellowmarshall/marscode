@@ -16,6 +16,8 @@ import {
 } from "./types.ts";
 
 const JOB_KEY_EPOCH_RE = /^(\d{9,11})-j/;
+// The queue writes `at=` with milliseconds and a zone (`…T08:50:37.370Z`).
+const MARKER_AT_RE = /\bat=(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[+-]\d{2}:?\d{2}|Z))/;
 
 function mapShipState(raw: Record<string, unknown>): TrackedJobState {
   const s = String(raw.state ?? raw.display_state ?? "").toLowerCase();
@@ -73,6 +75,17 @@ function resolveShipStartedAt(raw: Record<string, unknown>): string {
     if (Number.isFinite(sec) && sec > 0) return new Date(sec * 1000).toISOString();
   }
   return new Date().toISOString();
+}
+
+/** A finished job's end: the queue's `ended_at`, else the zoned `at=` of its last marker. */
+function resolveShipEndedAt(raw: Record<string, unknown>): string | undefined {
+  const marker = typeof raw.last_marker === "string" ? MARKER_AT_RE.exec(raw.last_marker)?.[1] : "";
+  for (const candidate of [raw.ended_at, marker]) {
+    if (typeof candidate !== "string" || !candidate) continue;
+    const ms = Date.parse(candidate);
+    if (Number.isFinite(ms)) return new Date(ms).toISOString();
+  }
+  return undefined;
 }
 
 function shipSummaryId(raw: Record<string, unknown>): string {
@@ -157,6 +170,7 @@ export function adaptShipQueueJob(
       ? String((raw.route as { host: string }).host).trim()
       : undefined;
   const syncReason = logFacts.syncReason;
+  const endedAt = live ? undefined : resolveShipEndedAt(raw);
   const enrichedShipJob: Record<string, unknown> =
     stage || logFacts.hasPostMerge || syncReason
       ? {
@@ -189,6 +203,7 @@ export function adaptShipQueueJob(
     },
     timing: {
       startedAt: resolveShipStartedAt(raw),
+      ...(endedAt ? { endedAt } : {}),
     },
     cancellable: live && /^[0-9]{1,16}$/.test(rawId),
     shipJob: enrichedShipJob,
