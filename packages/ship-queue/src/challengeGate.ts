@@ -108,9 +108,10 @@ export async function postOverrideComment(
 
 /**
  * Takes a pending override: the job log, the record, and the PR body all carry its reason. The
- * house stages run again, so §16 hygiene reads the body with the reason in it.
+ * house stages run again, so §16 hygiene reads the body with the reason in it before the PR
+ * phase makes it public.
  */
-export async function takeChallengeOverride(deps: ShipQueueDeps, job: JobRecord): Promise<boolean> {
+export function takeChallengeOverride(deps: ShipQueueDeps, job: JobRecord): boolean {
   const file = overrideRequestPath(deps.root, job.id);
   let request: { readonly reason?: unknown; readonly at?: unknown };
   try {
@@ -125,8 +126,8 @@ export async function takeChallengeOverride(deps: ShipQueueDeps, job: JobRecord)
   const bodyFile = jobBodyPath(deps.root, job.id);
   const body = NodeFS.readFileSync(bodyFile, "utf8").trimEnd();
   NodeFS.writeFileSync(bodyFile, `${body}\n\n${overrideBodySection(reason)}`, "utf8");
-  const next = updateJob(deps.root, job.id, {
-    challenge_override: { reason, at, patch: job.challenged_patch },
+  updateJob(deps.root, job.id, {
+    challenge_override: { reason, at, patch: job.challenged_patch, comment: Boolean(job.pr) },
     challenged_tip: undefined,
     challenged_patch: undefined,
     house_tip: undefined,
@@ -135,7 +136,6 @@ export async function takeChallengeOverride(deps: ShipQueueDeps, job: JobRecord)
     waiting_since: undefined,
   });
   mark(deps.root, job.id, `OVERRIDDEN job=${job.id} reason=${reason}`);
-  if (next.pr) await postOverrideComment(deps, next, next.pr);
   return true;
 }
 

@@ -492,4 +492,48 @@ describe("declared merge and routing waits", () => {
     expect(await runJob(failing, id2)).toBe("ended");
     expect(fx.markers(id2).at(-1)).toBe("FAILED reason=ci_host_missing_tool host=ci-1 tool=vp");
   });
+
+  it("fails a job no CI host takes within an hour, so it stops holding its repo's queue", async () => {
+    const fx = makeFixture();
+    let nowMs = Date.UTC(2026, 0, 1);
+    const deps: ShipQueueDeps = {
+      ...fx.deps,
+      clock: { now: () => new Date(nowMs).toISOString() },
+      ciPlacer: async () => ({ kind: "wait", reason: "ci_host_on_battery hosts=ci-1" }),
+    };
+    const wt = fx.worktree("feat/98-nohostlong", { "l.txt": "l\n" });
+    const id = await fx.submit(wt, "feat/98-nohostlong", deps);
+
+    expect(await runJob(deps, id)).toBe("blocked");
+    nowMs += 59 * 60_000;
+    expect(await runJob(deps, id)).toBe("blocked");
+    nowMs += 2 * 60_000;
+    expect(await runJob(deps, id)).toBe("ended");
+    expect(fx.markers(id).at(-1)).toBe(
+      "FAILED reason=ci_host_unavailable ci_host_on_battery hosts=ci-1",
+    );
+    expect(fx.ciRuns()).toBe(0);
+  });
+});
+
+describe("unanswered challenge", () => {
+  it("fails a CHALLENGED job with no fix or override within an hour", async () => {
+    const fx = makeFixture();
+    fx.setVerdict("CHALLENGED");
+    let nowMs = Date.UTC(2026, 0, 1);
+    const deps: ShipQueueDeps = { ...fx.deps, clock: { now: () => new Date(nowMs).toISOString() } };
+    const wt = fx.worktree("feat/98-silent", { "s.txt": "s\n" });
+    const id = await fx.submit(wt, "feat/98-silent", deps);
+
+    expect(await runJob(deps, id)).toBe("blocked");
+    nowMs += 59 * 60_000;
+    expect(await runJob(deps, id)).toBe("blocked");
+    nowMs += 2 * 60_000;
+    expect(await runJob(deps, id)).toBe("ended");
+    expect(readJob(fx.root, id)).toMatchObject({ state: "failed" });
+    expect(fx.markers(id).at(-1)).toBe(
+      "FAILED reason=challenge_unanswered: no fix or override within an hour",
+    );
+    expect(fx.prs.size).toBe(0);
+  });
 });

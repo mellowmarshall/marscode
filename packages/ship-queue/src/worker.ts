@@ -3,6 +3,7 @@ import {
   challengeGate,
   challengeUnanswered,
   isParkedOnChallenge,
+  postOverrideComment,
   takeChallengeOverride,
 } from "./challengeGate.ts";
 import { cleanupMergedJob } from "./cleanup.ts";
@@ -225,7 +226,7 @@ export async function runJob(deps: ShipQueueDeps, id: string): Promise<JobStep> 
     appendLog(deps.root, id, `owner approval landed at ${deps.clock.now()}; resuming`);
   } else if (isParkedOnChallenge(job)) {
     // Like an owner approval, the agent's override (not a re-armed watch) resumes the job.
-    if (!(await takeChallengeOverride(deps, job))) {
+    if (!takeChallengeOverride(deps, job)) {
       if (!challengeUnanswered(deps, job)) return "blocked";
       return stop("challenge_unanswered: no fix or override within an hour");
     }
@@ -299,6 +300,8 @@ export async function runJob(deps: ShipQueueDeps, id: string): Promise<JobStep> 
 
   const pr = await pullRequestPhase(deps, requireJob(deps.root, id));
   if (!pr.ok) return stop(pr.reason);
+  const overridden = requireJob(deps.root, id);
+  if (overridden.challenge_override?.comment) await postOverrideComment(deps, overridden, pr.value);
   await postReviewComment(deps, requireJob(deps.root, id), pr.value, rebase.head);
   if (cancelled()) return "ended";
 

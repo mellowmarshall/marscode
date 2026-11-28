@@ -23,6 +23,8 @@ import type { JobRecord, ProcessResult, ShipQueueDeps, StepTiming } from "./type
 const HEARTBEAT_MS = 60_000;
 /** How often a job no CI host can take asks routing again; each ask logs, so its watch stays live. */
 const CI_WAIT_RETRY_MS = 60_000;
+/** A job no CI host takes within this stops holding its repo's queue. */
+const CI_WAIT_LIMIT_MS = 60 * 60_000;
 
 /** Where the playbook challenge reads the job's CI results (`playbook challenge`'s `jobCiOutput`). */
 export const ciOutputPath = (root: string, id: string) =>
@@ -119,7 +121,9 @@ async function placeCi(
   };
   if (!remoteAllowed || !deps.ciPlacer) return fallback;
   const lastTry = job.ci_wait && job.ci_wait.tip === tip ? Date.parse(job.ci_wait.at) : Number.NaN;
-  if (Number.isFinite(lastTry) && Date.now() - lastTry < CI_WAIT_RETRY_MS) return null;
+  if (Number.isFinite(lastTry) && Date.parse(deps.clock.now()) - lastTry < CI_WAIT_RETRY_MS) {
+    return null;
+  }
   return deps.ciPlacer({ jobId: job.id, decl, activeLeases: activeLeases(deps.root, job.id) });
 }
 
@@ -143,11 +147,16 @@ export async function runCiSteps(input: {
   if (!placement) return { kind: "wait" };
   if (placement.kind === "fail") return { kind: "fail", reason: placement.reason };
   if (placement.kind === "wait") {
+    const now = deps.clock.now();
+    const since = job.ci_wait?.since ?? now;
+    if (Date.parse(now) - Date.parse(since) >= CI_WAIT_LIMIT_MS) {
+      return { kind: "fail", reason: `ci_host_unavailable ${placement.reason}` };
+    }
     log(
       `waiting for a CI host: ${placement.reason}; routing asks again in ${CI_WAIT_RETRY_MS / 1000}s`,
     );
     updateJob(deps.root, job.id, {
-      ci_wait: { reason: placement.reason, at: new Date().toISOString(), tip: input.ctx.tipSha },
+      ci_wait: { reason: placement.reason, at: now, since, tip: input.ctx.tipSha },
     });
     return { kind: "wait" };
   }

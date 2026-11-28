@@ -24,6 +24,8 @@ export interface ChallengeOverride {
   readonly at: string;
   /** `git patch-id` of the challenged change: the override covers that change and no other. */
   readonly patch?: string | undefined;
+  /** The PR was open before the override, so the PR phase posts the reason as a comment. */
+  readonly comment?: boolean | undefined;
 }
 
 /** `jobs/<id>/job.json`. Field names follow the legacy queue so `ship-queue status --json` stays wire-compatible. */
@@ -61,7 +63,12 @@ export interface JobRecord {
   readonly ci_lease?: { readonly host: string; readonly routed_at: string } | undefined;
   /** Why no CI host can take the job yet, and when routing last tried. */
   readonly ci_wait?:
-    | { readonly reason: string; readonly at: string; readonly tip?: string | undefined }
+    | {
+        readonly reason: string;
+        readonly at: string;
+        readonly since?: string | undefined;
+        readonly tip?: string | undefined;
+      }
     | undefined;
   /** The head (and its patch-id) whose playbook review stopped the job, while it waits on the agent. */
   readonly challenged_tip?: string | undefined;
