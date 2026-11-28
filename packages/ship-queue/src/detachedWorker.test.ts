@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { runShipQueueCli } from "./cli.ts";
 import { readJob, readLog } from "./jobStore.ts";
 import { workerLockPath } from "./processLocks.ts";
+import { withoutAppImageLibraries } from "./workerLauncher.ts";
 
 const CLI = NodePath.join(import.meta.dirname, "cli.ts");
 const cleanups: Array<() => void> = [];
@@ -188,5 +189,22 @@ describe("detached worker", () => {
     // The worker releases its claim once the queue is empty, and wrote no failure of its own.
     await gone(workerLockPath(root));
     expect(NodeFS.existsSync(NodePath.join(root, "worker.log"))).toBe(false);
+  });
+});
+
+describe("worker environment", () => {
+  it("drops the library paths of the AppImage MarsCode runs from, keeping the rest", () => {
+    expect(
+      withoutAppImageLibraries({
+        PATH: "/usr/bin",
+        LD_LIBRARY_PATH: "/tmp/.mount_MarsCoOBCFJe/usr/lib:/opt/cuda/lib64",
+      }),
+    ).toEqual({ PATH: "/usr/bin", LD_LIBRARY_PATH: "/opt/cuda/lib64" });
+    expect(
+      withoutAppImageLibraries({
+        PATH: "/usr/bin",
+        LD_LIBRARY_PATH: "/tmp/.mount_MarsCoX/usr/lib",
+      }),
+    ).toEqual({ PATH: "/usr/bin" });
   });
 });

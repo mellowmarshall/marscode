@@ -56,6 +56,26 @@ function onPath(binary: string, env: Readonly<Record<string, string | undefined>
   return null;
 }
 
+/** An AppImage's runtime mount (`/tmp/.mount_<name><id>`): it goes away when that app exits. */
+const APPIMAGE_MOUNT_RE = /^\/tmp\/\.mount_[^/]+(\/|$)/;
+
+/**
+ * The caller's env minus the library paths of the AppImage it runs inside. The worker outlives
+ * MarsCode; once a restart unmounts the old image, a worker still naming that mount in
+ * LD_LIBRARY_PATH fails the host guards' worker check, and every git command it runs is refused.
+ */
+export function withoutAppImageLibraries(
+  env: Readonly<Record<string, string | undefined>>,
+): Record<string, string | undefined> {
+  const out = { ...env };
+  const kept = (env.LD_LIBRARY_PATH ?? "")
+    .split(":")
+    .filter((seg) => seg !== "" && !APPIMAGE_MOUNT_RE.test(seg));
+  if (kept.length > 0) out.LD_LIBRARY_PATH = kept.join(":");
+  else delete out.LD_LIBRARY_PATH;
+  return out;
+}
+
 /**
  * A transient `systemd-run --user --scope` moves the worker out of the caller's cgroup, so a
  * desktop or service manager stopping MarsCode's unit cannot take the worker with it.
@@ -164,7 +184,7 @@ export function launchDetachedWorker(input: LaunchInput): LaunchResult {
 
   const node = input.nodePath ?? process.execPath;
   const env: Record<string, string | undefined> = {
-    ...input.env,
+    ...withoutAppImageLibraries(input.env),
     SHIP_QUEUE_ROOT: input.root,
     SHIP_QUEUE_WORKER_VERSION: target.version,
     SHIP_QUEUE_WORKER_ENTRY: target.entryPath,
