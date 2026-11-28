@@ -127,19 +127,11 @@ describe("review stats store", () => {
       );
     challenge(1, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     challenge(2, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-    const job = NodePath.join(dir, "jobs", "7");
-    NodeFS.mkdirSync(job, { recursive: true });
+    // The queue's override index sits beside its jobs directory.
+    NodeFS.mkdirSync(NodePath.join(dir, "jobs"), { recursive: true });
     NodeFS.writeFileSync(
-      NodePath.join(job, "job.json"),
-      JSON.stringify({
-        repo: "owner_sample-repo",
-        branch: "feat/x",
-        challenge_override: {
-          reason: "test-only helper",
-          at: "2026-11-02T00:01:00Z",
-          tip: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        },
-      }),
+      NodePath.join(dir, "challenge-overrides.jsonl"),
+      `${JSON.stringify({ repo: "owner_sample-repo", tip: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", job: "7", at: "2026-11-02T00:01:00Z" })}\n`,
     );
     const records = collectReviewRecords({
       playbookStateDir: NodePath.join(dir, "pb"),

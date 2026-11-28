@@ -126,45 +126,51 @@ function repoName(repo: string): string {
   return (repo.split(/[_/]/).at(-1) ?? repo).toLowerCase();
 }
 
-/** `repo\0tip` keys of challenges a ship job overrode (`challenge_override.tip`, full SHA). */
+/**
+ * `repo\0tip` keys of challenges the queue overrode, from its override index
+ * (`<queue root>/challenge-overrides.jsonl`, beside the jobs directory): one file, not every job.
+ */
 function readOverriddenTips(shipJobsDir: string): ReadonlySet<string> {
-  const keys = new Set<string>();
-  for (const entry of listDir(shipJobsDir)) {
-    if (!entry.isDirectory()) continue;
-    const key = readOverrideKey(NodePath.join(shipJobsDir, entry.name, "job.json"));
-    if (key) keys.add(key);
+  const indexPath = NodePath.join(NodePath.dirname(shipJobsDir), "challenge-overrides.jsonl");
+  let stamp: string;
+  try {
+    const st = NodeFS.statSync(indexPath);
+    stamp = `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return new Set();
   }
+  const hit = overrideIndexCache.get(indexPath);
+  if (hit?.stamp === stamp) return hit.keys;
+  const keys = new Set<string>();
+  let text = "";
+  try {
+    text = NodeFS.readFileSync(indexPath, "utf8");
+  } catch {
+    return keys;
+  }
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const row = JSON.parse(line) as { readonly repo?: unknown; readonly tip?: unknown };
+      if (
+        typeof row.repo === "string" &&
+        typeof row.tip === "string" &&
+        /^[0-9a-f]{40,64}$/i.test(row.tip)
+      ) {
+        keys.add(`${repoName(row.repo)}\0${row.tip.toLowerCase()}`);
+      }
+    } catch {
+      // A torn line adds nothing.
+    }
+  }
+  overrideIndexCache.set(indexPath, { stamp, keys });
   return keys;
 }
 
-const overrideKeyCache = new Map<string, { readonly stamp: string; readonly key: string | null }>();
-
-function readOverrideKey(jobFile: string): string | null {
-  let stamp: string;
-  try {
-    const st = NodeFS.statSync(jobFile);
-    stamp = `${st.mtimeMs}:${st.size}`;
-  } catch {
-    return null;
-  }
-  const hit = overrideKeyCache.get(jobFile);
-  if (hit?.stamp === stamp) return hit.key;
-  let key: string | null = null;
-  try {
-    const job = JSON.parse(NodeFS.readFileSync(jobFile, "utf8")) as {
-      readonly repo?: unknown;
-      readonly challenge_override?: { readonly tip?: unknown };
-    };
-    const tip = job.challenge_override?.tip;
-    if (typeof tip === "string" && /^[0-9a-f]{40,64}$/i.test(tip) && typeof job.repo === "string") {
-      key = `${repoName(job.repo)}\0${tip.toLowerCase()}`;
-    }
-  } catch {
-    key = null;
-  }
-  overrideKeyCache.set(jobFile, { stamp, key });
-  return key;
-}
+const overrideIndexCache = new Map<
+  string,
+  { readonly stamp: string; readonly keys: ReadonlySet<string> }
+>();
 
 function listDir(dir: string): ReadonlyArray<NodeFS.Dirent> {
   try {

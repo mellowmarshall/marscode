@@ -350,6 +350,60 @@ describe("declared merge and routing waits", () => {
 });
 
 describe("unanswered challenge", () => {
+  it("honors an override made inside 30 s even when the worker reads it later", async () => {
+    const fx = makeFixture();
+    fx.setVerdict("CHALLENGED");
+    let nowMs = Date.UTC(2026, 0, 1);
+    const deps: ShipQueueDeps = { ...fx.deps, clock: { now: () => new Date(nowMs).toISOString() } };
+    const wt = fx.worktree("feat/98-timely", { "t.txt": "t\n" });
+    const id = await fx.submit(wt, "feat/98-timely", deps);
+    expect(await runJob(deps, id)).toBe("blocked");
+    nowMs += 29_000;
+    const cli = (argv: ReadonlyArray<string>) =>
+      runShipQueueCli(argv, {
+        deps,
+        io: { stdout: () => {}, stderr: () => {}, env: {}, cwd: fx.tmp },
+      });
+    expect(await cli(["override", id, "--reason", "made in time"])).toBe(0);
+    // The worker's next tick lands after the window: the timely request still counts.
+    nowMs += 3_000;
+    expect(await runJob(deps, id)).toBe("ended");
+    expect(readJob(fx.root, id)).toMatchObject({ state: "done" });
+    expect(fx.merged).toEqual([1]);
+    expect(
+      NodeFS.readFileSync(NodePath.join(fx.root, "challenge-overrides.jsonl"), "utf8"),
+    ).toContain(`"job":"${id}"`);
+  });
+
+  it("refuses an override made after 30 s, even before the worker fails the job", async () => {
+    const fx = makeFixture();
+    fx.setVerdict("CHALLENGED");
+    let nowMs = Date.UTC(2026, 0, 1);
+    const deps: ShipQueueDeps = { ...fx.deps, clock: { now: () => new Date(nowMs).toISOString() } };
+    const wt = fx.worktree("feat/98-late", { "l.txt": "l\n" });
+    const id = await fx.submit(wt, "feat/98-late", deps);
+    expect(await runJob(deps, id)).toBe("blocked");
+    nowMs += 31_000;
+    // The job still waits (no worker tick yet), but the window is over.
+    expect(readJob(fx.root, id)).toMatchObject({ state: "waiting", waiting_for: "challenge" });
+    const out: string[] = [];
+    expect(
+      await runShipQueueCli(["override", id, "--reason", "too late"], {
+        deps,
+        io: { stdout: (t) => out.push(t), stderr: (t) => out.push(t), env: {}, cwd: fx.tmp },
+      }),
+    ).toBe(1);
+    expect(out.join("")).toContain("override window is over");
+    // A request file written behind the CLI's back is not honored either.
+    NodeFS.writeFileSync(
+      overrideRequestPath(fx.root, id),
+      `${JSON.stringify({ reason: "forged late", at: new Date(nowMs).toISOString() })}\n`,
+    );
+    expect(await runJob(deps, id)).toBe("ended");
+    expect(fx.markers(id).at(-1)).toBe("FAILED reason=challenged");
+    expect(fx.merged).toEqual([]);
+  });
+
   it("fails a CHALLENGED job with no override within 30 s, and the repo's next job starts", async () => {
     const fx = makeFixture();
     fx.setVerdict("CHALLENGED");

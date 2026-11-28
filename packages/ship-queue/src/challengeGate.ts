@@ -54,6 +54,12 @@ export function requestChallengeOverride(
   }
   const reason = markerValue(rawReason).slice(0, MAX_REASON_CHARS);
   if (!reason) return { ok: false, message: "an override needs a written --reason" };
+  if (!insideOverrideWindow(job, clock.now())) {
+    return {
+      ok: false,
+      message: `job ${id}: the 30 s override window is over; it fails as challenged. Fix the findings and resubmit`,
+    };
+  }
   NodeFS.writeFileSync(
     overrideRequestPath(root, id),
     `${JSON.stringify({ reason, at: clock.now() })}\n`,
@@ -79,6 +85,17 @@ export function overrideBodySection(reason: string): string {
 
 /** How long a CHALLENGED job holds its repo's turn for `ship-queue override`; then it fails. */
 export const CHALLENGE_WAIT_MS = 30_000;
+
+/** True when AT (ISO) falls inside the job's override window (from its CHALLENGED mark). */
+function insideOverrideWindow(job: JobRecord, at: string): boolean {
+  const since = job.waiting_since ? Date.parse(job.waiting_since) : Number.NaN;
+  const when = Date.parse(at);
+  return Number.isFinite(since) && Number.isFinite(when) && when - since < CHALLENGE_WAIT_MS;
+}
+
+/** Overrides the queue accepted, one JSON line each: Review Stats read this, not every job. */
+export const challengeOverrideIndexPath = (root: string) =>
+  NodePath.join(root, "challenge-overrides.jsonl");
 
 /** `git patch-id` of the job's change on its base: what an override covers, across rebases. */
 async function changePatchId(deps: ShipQueueDeps, job: JobRecord, onto: string, tip: string) {
@@ -133,6 +150,12 @@ export function takeChallengeOverride(deps: ShipQueueDeps, job: JobRecord): bool
   NodeFS.rmSync(file, { force: true });
   if (!reason) return false;
   const at = typeof request.at === "string" ? request.at : deps.clock.now();
+  // A request made in time counts even when the worker reads it after the window; a late one
+  // never does.
+  if (!insideOverrideWindow(job, at)) {
+    appendLog(deps.root, job.id, `override requested at ${at}, after the 30 s window; ignored`);
+    return false;
+  }
   const bodyFile = jobBodyPath(deps.root, job.id);
   const body = NodeFS.readFileSync(bodyFile, "utf8").trimEnd();
   NodeFS.writeFileSync(bodyFile, `${body}\n\n${overrideBodySection(reason)}`, "utf8");
@@ -152,6 +175,12 @@ export function takeChallengeOverride(deps: ShipQueueDeps, job: JobRecord): bool
     waiting_since: undefined,
   });
   mark(deps.root, job.id, `OVERRIDDEN job=${job.id} reason=${reason}`);
+  if (job.challenged_tip) {
+    NodeFS.appendFileSync(
+      challengeOverrideIndexPath(deps.root),
+      `${JSON.stringify({ repo: job.repo, tip: job.challenged_tip, job: job.id, at })}\n`,
+    );
+  }
   return true;
 }
 
