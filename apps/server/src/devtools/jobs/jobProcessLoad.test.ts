@@ -366,3 +366,68 @@ describe("JobRegistry process load", () => {
     }),
   );
 });
+
+describe("JobRegistry process load start ticks", () => {
+  it.effect("takes root start ticks from the cerno scan, with no read per process table", () =>
+    Effect.gen(function* () {
+      const snapDir = mkTempDir("t3-load-snap-");
+      const workDir = mkTempDir("t3-load-work-");
+      writeSnapshot(snapDir, { cwd: workDir, command: "vp test run", log_path: "run.log" });
+      let now = FIXED_NOW_MS;
+      let liveTicks = START_TICKS;
+      const tickReads: number[] = [];
+      const registry = makeJobRegistry({
+        enableShipBridge: false,
+        cernoBridge: {
+          snapshotDirs: [snapDir],
+          platform: "linux",
+          localHostname: "host-a",
+          ciHostsPath: null,
+          expectedUid: null,
+          pollIntervalMs: 60_000,
+          nowMs: () => now,
+          isPidAlive: (pid) => pid === ROOT_PID,
+          readProcStartTicks: async (pid) => {
+            tickReads.push(pid);
+            return pid === ROOT_PID ? liveTicks : null;
+          },
+          isCernoProcess: async () => true,
+          resolveThreadId: async () => "thread-load-ticks",
+          isWorkspaceAllowed: async (p) => p.startsWith(workDir),
+        },
+      });
+      yield* Effect.addFinalizer(() => Effect.promise(() => registry.dispose()));
+      const cernoId = `cerno:${ROOT_PID}:${START_TICKS}`;
+      const loadOf = () =>
+        Effect.promise(() => registry.listJobs({ includeCmdline: false })).pipe(
+          Effect.map((jobs) => jobs.find((j) => j.id === cernoId)?.load),
+        );
+
+      yield* Effect.promise(() => registry.listJobs({ refresh: true }));
+      const readsAfterScan = tickReads.length;
+      expect(readsAfterScan).toBeGreaterThan(0);
+
+      for (let i = 0; i < 3; i += 1) {
+        yield* Effect.promise(() => registry.applyProcessTable(jobTable(80, 300)));
+      }
+      expect(tickReads.length).toBe(readsAfterScan);
+      expect(yield* loadOf()).toEqual({ cpuPct: 173, memBytes: 758 * MiB, processCount: 4 });
+
+      // Not polling and the scan is older than two poll intervals: one rescan, then lookups.
+      now += 121_000;
+      yield* Effect.promise(() => registry.applyProcessTable(jobTable(40, 200)));
+      const readsAfterRescan = tickReads.length;
+      // One snapshot, so the scan reads its start ticks once.
+      expect(readsAfterRescan - readsAfterScan).toBe(1);
+      yield* Effect.promise(() => registry.applyProcessTable(jobTable(40, 200)));
+      expect(tickReads.length).toBe(readsAfterRescan);
+      expect(yield* loadOf()).toEqual({ cpuPct: 93, memBytes: 558 * MiB, processCount: 4 });
+
+      // The PID is reused: the next scan reads new ticks and the old root lends no load.
+      liveTicks = START_TICKS + 1;
+      yield* Effect.promise(() => registry.listJobs({ refresh: true }));
+      yield* Effect.promise(() => registry.applyProcessTable(jobTable(80, 300)));
+      expect(yield* loadOf()).toBeUndefined();
+    }),
+  );
+});

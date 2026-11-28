@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { decideShipQueueDeps, listShipQueueDeps } from "@t3tools/ship-queue/depsEngine";
 import { SqliteDepsStore } from "@t3tools/ship-queue/depsStore";
+import { setCiHostAvailability } from "@t3tools/ship-queue/hostProbe";
 import type { ProcessRunner } from "@t3tools/ship-queue/types";
 
 import { NativeCiHosts, readCiHostsManifest } from "./NativeCiHosts.ts";
@@ -143,6 +144,54 @@ describe("NativeCiHosts direct @t3tools/ship-queue integration (zero shell-out)"
     expect(off).toMatchObject({ ci_off: true, ci_off_by: "t3code" });
 
     expect((await ciHosts.setCi("host-b", true)).ok).toBe(true);
+    expect(ciHosts.getPanel().report?.hosts.find((h) => h.name === "host-b")?.ci_off).toBe(false);
+  });
+
+  it("caches the manifest host panel until the manifest or a host's .off marker changes", () => {
+    const dir = mkTempDir("t3-native-cihosts-cache-");
+    const queueRoot = NodePath.join(dir, "sq");
+    const manifestPath = NodePath.join(dir, "ci-hosts.json");
+    const writeManifest = (names: ReadonlyArray<string>) =>
+      NodeFS.writeFileSync(
+        manifestPath,
+        JSON.stringify({ schema: 1, hosts: names.map((name) => ({ name, ssh: null })) }),
+      );
+    writeManifest(["host-a", "host-b"]);
+    const ciHosts = new NativeCiHosts({
+      stateFile: NodePath.join(dir, "hosts-check.json"),
+      queueRoot,
+      manifestPath,
+    });
+
+    const first = ciHosts.getPanel().report;
+    // Unchanged sources: the same report object, so no manifest or per-host .off read happened.
+    expect(ciHosts.getPanel().report).toBe(first);
+    expect(ciHosts.getPanel().report).toBe(first);
+
+    // Another process turns host-b off through ship-queue; the hosts directory changes.
+    const off = setCiHostAvailability({
+      queueRoot,
+      hostName: "host-b",
+      enabled: false,
+      reason: "maintenance",
+      actor: "other-agent",
+      manifestPath,
+    });
+    expect(off.ok).toBe(true);
+    const afterOff = ciHosts.getPanel().report;
+    expect(afterOff).not.toBe(first);
+    expect(afterOff?.hosts.find((h) => h.name === "host-b")).toMatchObject({
+      ci_off: true,
+      ci_off_by: "other-agent",
+      ci_off_reason: "maintenance",
+    });
+    expect(ciHosts.getPanel().report).toBe(afterOff);
+
+    writeManifest(["host-a", "host-b", "host-c"]);
+    const afterManifest = ciHosts.getPanel().report;
+    expect(afterManifest?.hosts.map((h) => h.name)).toEqual(["host-a", "host-b", "host-c"]);
+
+    expect(setCiHostAvailability({ queueRoot, hostName: "host-b", enabled: true }).ok).toBe(true);
     expect(ciHosts.getPanel().report?.hosts.find((h) => h.name === "host-b")?.ci_off).toBe(false);
   });
 

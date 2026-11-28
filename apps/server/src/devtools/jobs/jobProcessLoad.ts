@@ -87,12 +87,13 @@ export function cernoIdStartTicks(id: string): number | null {
 /**
  * Keeps targets whose root PID still has the start ticks it was tracked with, so a reused PID
  * never lends its load to an old job. Where ticks cannot be read (not Linux) both sides are null.
+ * `startTicksFor` is a lookup into ticks the process scan already read, not a fresh read.
  */
 export async function keepUnreusedRoots(
   targets: ReadonlyArray<JobLoadTarget>,
-  readStartTicks: (pid: number) => Promise<number | null>,
+  startTicksFor: (pid: number) => number | null | Promise<number | null>,
 ): Promise<ReadonlyArray<JobLoadTarget>> {
-  const current = await Promise.all(targets.map((t) => readStartTicks(t.rootPid)));
+  const current = await Promise.all(targets.map((t) => startTicksFor(t.rootPid)));
   return targets.filter((t, i) => current[i] === t.rootStartTicks);
 }
 
