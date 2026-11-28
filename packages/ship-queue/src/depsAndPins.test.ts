@@ -773,6 +773,55 @@ describe("dependency hold decide: pre-approval validation, idempotency, rollback
     expect(rejected.ok).toBe(true);
   });
 
+  it("never reports clean, and leaves no extracted files, when the committed pin file is empty or malformed", async () => {
+    const queueRoot = mkTempDir("sq-deps-badpins-");
+    // Extracted trees land under this TMPDIR, so leftovers can be counted.
+    const tmp = mkTempDir("sq-deps-badpins-tmp-");
+    const savedTmp = process.env.TMPDIR;
+    process.env.TMPDIR = tmp;
+    try {
+      for (const [repo, pinsText] of [
+        ["empty", ""],
+        ["broken", '{"schema": 1, "pins": ['],
+      ] as const) {
+        const primary = mkTempDir(`sq-deps-badpins-${repo}-`);
+        const git = async (args: string[]) => {
+          const r = await nodeProcessRunner({ command: "git", args, cwd: primary });
+          if (r.exitCode !== 0) throw new Error(r.stderr);
+        };
+        await git(["init", "-b", "main"]);
+        await git(["config", "user.email", "test@example.com"]);
+        await git(["config", "user.name", "Test User"]);
+        NodeFS.writeFileSync(NodePath.join(primary, "package.json"), '{"name":"demo"}');
+        NodeFS.mkdirSync(NodePath.join(primary, "infra", "ci-host"), { recursive: true });
+        NodeFS.writeFileSync(NodePath.join(primary, "infra", "ci-host", "sq_pins.json"), pinsText);
+        await git(["add", "-A"]);
+        await git(["commit", "-m", "init"]);
+        writeRegistration(queueRoot, repo, {
+          primary,
+          remoteUrl: `https://example.invalid/${repo}.git`,
+        });
+        // The lookup would find nothing; only the pin file can keep the report from being clean.
+        const scan = await scanShipQueueDepsRepo(
+          {
+            queueRoot,
+            nowEpochSec: () => fixedNow,
+            lookup: async () => ({ updates: [], incomplete: [] }),
+          },
+          { repo },
+        );
+        expect(scan.report?.status, repo).not.toBe("clean");
+        expect(
+          NodeFS.readdirSync(tmp).filter((name) => name.startsWith("sq-deps-tree-")),
+          repo,
+        ).toEqual([]);
+      }
+    } finally {
+      if (savedTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = savedTmp;
+    }
+  });
+
   it("keeps the hold off until the owner decides, even when the first scan finds updates", async () => {
     const queueRoot = mkTempDir("sq-deps-pilot-");
     const primary = mkTempDir("sq-deps-pilot-repo-");

@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Hardened git manifest/lockfile reader, report digest builder, and default dependency scanner.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -54,46 +55,99 @@ const DEP_PATHSPECS: ReadonlyArray<string> = [
   ":(exclude,glob)**/vendor/**",
 ];
 
-/** Paths per extraction process: a bounded argument list, a few processes per scan. */
-const EXTRACT_BATCH_PATHS = 200;
-
 /**
- * Writes each path's blob at COMMIT into DIR (one file per path, written by git itself), so no
- * blob passes through this process's memory or the runner's output.
+ * Streams each path's blob at COMMIT from one `git cat-file --batch` process into its own file
+ * under DIR, hashing it on the way: one git query for all paths, and memory bounded by a read
+ * chunk, never by a file. Returns each path's SHA-256.
  */
 async function extractBlobs(
-  run: ProcessRunner,
   repoDir: string,
   commit: string,
   paths: ReadonlyArray<string>,
   dir: string,
-): Promise<void> {
-  for (let at = 0; at < paths.length; at += EXTRACT_BATCH_PATHS) {
-    const batch = paths.slice(at, at + EXTRACT_BATCH_PATHS);
-    const res = await run({
-      command: "bash",
-      args: [
-        "-c",
-        'set -euo pipefail; r=$1; c=$2; d=$3; shift 3; for p in "$@"; do mkdir -p "$d/$(dirname "$p")"; git -C "$r" cat-file blob "$c:$p" > "$d/$p"; done',
-        "--",
-        repoDir,
-        commit,
-        dir,
-        ...batch,
-      ],
-      cwd: repoDir,
-    });
-    if (res.exitCode !== 0) {
-      throw new Error(res.stderr.trim() || `git cat-file blob failed at ${commit}`);
-    }
-  }
-}
+): Promise<Record<string, string>> {
+  const digests: Record<string, string> = {};
+  const child = NodeChildProcess.spawn("git", ["-C", repoDir, "cat-file", "--batch"], {
+    cwd: repoDir,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr = (stderr + chunk.toString("utf8")).slice(-2000);
+  });
+  const exited = new Promise<number>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => resolve(code ?? 1));
+  });
+  child.stdin.end(paths.map((relPath) => `${commit}:${relPath}`).join("\n") + "\n");
 
-/** SHA-256 of a file, read as a stream (memory stays bounded for any file size). */
-async function sha256File(file: string): Promise<string> {
-  const hash = NodeCrypto.createHash("sha256");
-  for await (const chunk of NodeFS.createReadStream(file)) hash.update(chunk as Buffer);
-  return hash.digest("hex");
+  let index = 0;
+  let header = Buffer.alloc(0);
+  let remaining = -1; // bytes of the current blob still to come; -1 while reading a header
+  let fd = -1;
+  let hash: NodeCrypto.Hash | undefined;
+  const finishBlob = () => {
+    NodeFS.closeSync(fd);
+    fd = -1;
+    digests[paths[index]!] = hash!.digest("hex");
+    index += 1;
+  };
+  try {
+    for await (const piece of child.stdout) {
+      let chunk = piece as Buffer;
+      while (chunk.length > 0) {
+        if (remaining < 0) {
+          const eol = chunk.indexOf(0x0a);
+          if (eol < 0) {
+            header = Buffer.concat([header, chunk]);
+            chunk = Buffer.alloc(0);
+            continue;
+          }
+          const line = Buffer.concat([header, chunk.subarray(0, eol)]).toString("utf8");
+          header = Buffer.alloc(0);
+          chunk = chunk.subarray(eol + 1);
+          const relPath = paths[index];
+          const match = /^[0-9a-f]+ blob (\d+)$/.exec(line);
+          if (relPath === undefined || !match) {
+            throw new Error(
+              `git cat-file --batch could not read ${relPath ?? "past the last path"}: ${line}`,
+            );
+          }
+          const target = NodePath.join(dir, relPath);
+          NodeFS.mkdirSync(NodePath.dirname(target), { recursive: true });
+          fd = NodeFS.openSync(target, "w");
+          hash = NodeCrypto.createHash("sha256");
+          remaining = Number(match[1]);
+        }
+        if (remaining > 0) {
+          const take = Math.min(remaining, chunk.length);
+          const part = chunk.subarray(0, take);
+          NodeFS.writeSync(fd, part);
+          hash!.update(part);
+          remaining -= take;
+          chunk = chunk.subarray(take);
+        }
+        // After a blob's bytes, git writes one newline before the next header.
+        if (remaining === 0 && chunk.length > 0) {
+          if (chunk[0] !== 0x0a) throw new Error("git cat-file --batch output is malformed");
+          chunk = chunk.subarray(1);
+          finishBlob();
+          remaining = -1;
+        }
+      }
+    }
+    // The last blob's newline may have arrived alone at the end of a chunk boundary.
+    if (remaining === 0 && fd >= 0) finishBlob();
+  } finally {
+    if (fd >= 0) NodeFS.closeSync(fd);
+    if (child.exitCode === null) child.kill();
+  }
+  const code = await exited;
+  if (code !== 0) throw new Error(stderr.trim() || `git cat-file --batch exited ${code}`);
+  if (index !== paths.length) {
+    throw new Error(`git cat-file --batch returned ${index} of ${paths.length} dependency files`);
+  }
+  return digests;
 }
 
 const SAFE_GIT_REF_RE = /^[A-Za-z0-9._/@^{}-]+$/;
@@ -245,36 +299,36 @@ export async function readRepoDependencyFilesAtRef(input: {
   if (trackedPaths.length === 0) return { commit, files, paths: trackedPaths };
 
   // Blobs go straight to files and are hashed as streams, so a scan's memory stays bounded
-  // however large or many the dependency files are.
+  // however large or many the dependency files are. The tree is removed on any failure, and
+  // otherwise unless the caller takes it (keepTree).
   const tree = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "sq-deps-tree-"));
+  let handedOver = false;
   try {
-    await extractBlobs(run, input.repoDir, commit, trackedPaths, tree);
+    Object.assign(files, await extractBlobs(input.repoDir, commit, trackedPaths, tree));
     for (const relPath of trackedPaths) {
-      files[relPath] = await sha256File(NodePath.join(tree, relPath));
       // The pin sources are three small fixed files.
       if (DEP_EXACT_PATHS.has(relPath)) {
         pinSourceTexts[relPath] = NodeFS.readFileSync(NodePath.join(tree, relPath), "utf8");
       }
     }
-  } catch (error) {
-    NodeFS.rmSync(tree, { recursive: true, force: true });
-    throw error;
+    // A committed pin file is always validated, even an empty one: a pin file that does not
+    // parse fails the scan instead of silently dropping every tool pin from the lookup.
+    const pinsRaw = pinSourceTexts["infra/ci-host/sq_pins.json"];
+    if (pinsRaw !== undefined) {
+      const spec = validatePinsSpec(JSON.parse(pinsRaw) as unknown, "infra/ci-host/sq_pins.json");
+      Object.assign(files, computePinDigests(pinSourceTexts, spec));
+    }
+    handedOver = Boolean(input.keepTree);
+    return {
+      commit,
+      files,
+      paths: trackedPaths,
+      ...(input.keepTree ? { tree } : {}),
+      ...(pinsRaw !== undefined ? { pinsText: pinsRaw } : {}),
+    };
+  } finally {
+    if (!handedOver) NodeFS.rmSync(tree, { recursive: true, force: true });
   }
-  if (!input.keepTree) NodeFS.rmSync(tree, { recursive: true, force: true });
-
-  const pinsRaw = pinSourceTexts["infra/ci-host/sq_pins.json"];
-  if (pinsRaw) {
-    const spec = validatePinsSpec(JSON.parse(pinsRaw) as unknown, "infra/ci-host/sq_pins.json");
-    Object.assign(files, computePinDigests(pinSourceTexts, spec));
-  }
-
-  return {
-    commit,
-    files,
-    paths: trackedPaths,
-    ...(input.keepTree ? { tree } : {}),
-    ...(pinsRaw ? { pinsText: pinsRaw } : {}),
-  };
 }
 
 /** Default `readCurrentFiles` reader for `decideShipQueueDeps` backed by registered repo primary checkouts. */

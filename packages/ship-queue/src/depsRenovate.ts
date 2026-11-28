@@ -291,9 +291,10 @@ export async function renovateLookup(input: {
   try {
     const tree = input.tree;
 
-    const pins = input.pinsText
-      ? validatePinsSpec(JSON.parse(input.pinsText), PINS_PATH)
-      : undefined;
+    const pins =
+      input.pinsText !== undefined
+        ? validatePinsSpec(JSON.parse(input.pinsText), PINS_PATH)
+        : undefined;
     const customManagers = pins ? buildRenovateCustomManagers(pins) : [];
     const config = {
       platform: "local",
