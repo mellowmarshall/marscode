@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Canonical ci-hosts.json loader, schema validator, and toolchain version evaluator.
 import * as NodeFS from "node:fs";
+import { DEFAULT_REMOTE_DATA_ROOT } from "./dataRootPolicy.ts";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
@@ -190,7 +191,7 @@ export function extractCiHostEntries(raw: unknown): ReadonlyArray<CiHostEntry> {
     const ssh = typeof rec.ssh === "string" && rec.ssh.trim() ? rec.ssh.trim() : null;
     if (ssh !== null && !isValidSshAlias(ssh)) continue;
     const role = typeof rec.role === "string" && rec.role.trim() ? rec.role.trim() : "ci";
-    const defaultDataRoot = ssh === null ? "/data/Dev" : "~/Dev-data";
+    const defaultDataRoot = ssh === null ? "/data/Dev" : DEFAULT_REMOTE_DATA_ROOT;
     const data_root =
       typeof rec.data_root === "string" && rec.data_root.trim()
         ? rec.data_root.trim()
@@ -296,7 +297,7 @@ export function validateCiHostsManifest(
 
     let dataRoot: string;
     if (!("data_root" in h)) {
-      dataRoot = h.ssh === null ? "/data/Dev" : "~/Dev-data";
+      dataRoot = h.ssh === null ? "/data/Dev" : DEFAULT_REMOTE_DATA_ROOT;
       warnings.push(
         `WARNING: ci host ${name} declares no data_root; it is taken as ${dataRoot}; declare it in ${sourceLabel}`,
       );
