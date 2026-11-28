@@ -23,6 +23,9 @@ import {
   stageWorkerVersion,
 } from "./workerVersion.ts";
 
+/** Tool states `hosts check` does not list per host: present, optional, or not for this platform. */
+const QUIET_TOOL_STATES: ReadonlySet<string> = new Set(["ok", "optional", "not-for-host"]);
+
 export interface SubcommandIo {
   readonly stdout: (text: string) => void;
   readonly stderr: (text: string) => void;
@@ -44,6 +47,11 @@ export async function runHostsSubcommand(
   if (!action || action === "--help" || action === "-h") {
     io.stdout(usage);
     return 0;
+  }
+
+  // Manifest warnings (e.g. a host-local toolchain that hides the tracked catalog) reach the operator.
+  for (const warning of loadCiHostsManifest({ overridePath: manifestPath }).warnings) {
+    io.stderr(`ship-queue hosts: warning: ${warning}\n`);
   }
 
   if (action === "check") {
@@ -83,6 +91,11 @@ export async function runHostsSubcommand(
         io.stdout(
           `${h.name} (${h.ssh ?? "this host"}): ${h.reached ? "reached" : "UNREACHABLE"}${h.ci_off ? " [OFF]" : ""}\n`,
         );
+        for (const tool of h.tools.filter((t) => !QUIET_TOOL_STATES.has(t.state))) {
+          io.stdout(
+            `  ${tool.state}: ${tool.name} ${tool.range} (has ${tool.version ?? "none"})\n`,
+          );
+        }
       }
       if (driftReport) io.stdout(formatToolDriftReport(driftReport));
     }

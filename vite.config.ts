@@ -183,6 +183,8 @@ export default defineConfig({
       "infra/task-cache/vendor/**",
       // Generator templates `surface init` copies byte-for-byte into other repos.
       "packages/surface/templates/**",
+      // Renovate's regex managers (sq_pins.json) match each tool on one line.
+      "infra/ci-host/ci-hosts.json",
       // Macroscope requires one glob per line; Markdown formatting corrupts it.
       ".macroscope/ignore.md",
       ".alchemy",

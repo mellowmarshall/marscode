@@ -9,6 +9,7 @@ import {
   type CiHostsManifest,
   type ResolveCiHostsPathOptions,
 } from "./ciHosts.ts";
+import { applyToolCatalog } from "./ciHostsCatalog.ts";
 import { parseShipDeclaration, type ShipDeclaration } from "./declaration.ts";
 import { validatePinsSpec, type PinsSpec } from "./pins.ts";
 
@@ -320,7 +321,8 @@ export function createCiHostsReloader(
         return { ...prevResult, changed: true };
       }
 
-      const validated = validateCiHostsManifest(raw, resolvedPath);
+      const merged = applyToolCatalog(raw);
+      const validated = validateCiHostsManifest(merged.raw, resolvedPath);
       prevResult = {
         ok: validated.ok,
         ...(validated.manifest ? { manifest: validated.manifest } : {}),
@@ -328,7 +330,7 @@ export function createCiHostsReloader(
         digest: read.fingerprint.sha256,
         generation,
         errors: validated.errors,
-        warnings: validated.warnings,
+        warnings: [...merged.warnings, ...validated.warnings],
       };
       return { ...prevResult, changed: true };
     },

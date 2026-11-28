@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { VERSION_RANGE_RE } from "./ciToolVersion.ts";
+import { applyToolCatalog } from "./ciHostsCatalog.ts";
 import { validateRootCommand } from "./rootGrant.ts";
 
 const TOOL_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/;
@@ -483,5 +484,11 @@ export function loadCiHostsManifest(
       warnings: [],
     };
   }
-  return { ...validateCiHostsManifest(raw, filePath), path: filePath };
+  const merged = applyToolCatalog(raw);
+  const validated = validateCiHostsManifest(merged.raw, filePath);
+  return {
+    ...validated,
+    warnings: [...merged.warnings, ...validated.warnings],
+    path: filePath,
+  };
 }

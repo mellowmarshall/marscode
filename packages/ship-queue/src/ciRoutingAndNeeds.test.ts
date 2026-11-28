@@ -384,10 +384,26 @@ describe("host probe, availability, and MarsCode payload sync", () => {
     await run(["add", "infra/ci-host/ci-vp.sh"]);
     await run(["commit", "-m", "init"]);
 
+    // Prebuilt CLI bundles ride along at packages/<name>/dist/bin.mjs; a missing one refuses the sync.
+    const cliBundles = mkTempDir("sq-clibundles-");
+    NodeFS.mkdirSync(NodePath.join(cliBundles, "runlog", "dist"), { recursive: true });
+    NodeFS.writeFileSync(NodePath.join(cliBundles, "runlog", "dist", "bin.mjs"), "// runlog\n");
+    const partial = await syncCiHostPayload({
+      host: { name: "ci-host-1", ssh: "ci-host-1.example", role: "ci", data_root: "~/data" },
+      marscodeRoot: fakeRepo,
+      bundleDir: cliBundles,
+      deps: { runLocal: nodeProcessRunner },
+    });
+    expect(partial.ok).toBe(false);
+    expect(partial.error).toContain("missing CLI bundle(s) playbook");
+    NodeFS.mkdirSync(NodePath.join(cliBundles, "playbook", "dist"), { recursive: true });
+    NodeFS.writeFileSync(NodePath.join(cliBundles, "playbook", "dist", "bin.mjs"), "// playbook\n");
+
     let receivedStdin = "";
     const synced = await syncCiHostPayload({
       host: { name: "ci-host-1", ssh: "ci-host-1.example", role: "ci", data_root: "~/data" },
       marscodeRoot: fakeRepo,
+      bundleDir: cliBundles,
       deps: {
         runLocal: nodeProcessRunner,
         runRemote: async (_alias, _script, opts) => {
@@ -397,8 +413,24 @@ describe("host probe, availability, and MarsCode payload sync", () => {
       },
     });
     expect(synced.ok).toBe(true);
-    expect(synced.paths).toEqual(["infra/ci-host"]);
-    expect(receivedStdin.length).toBeGreaterThan(20);
+    expect(synced.paths).toEqual([
+      "infra/ci-host",
+      "packages/runlog/dist/bin.mjs",
+      "packages/playbook/dist/bin.mjs",
+    ]);
+    const shipped = await nodeProcessRunner({
+      command: "bash",
+      args: ["-c", "base64 -d | tar -t"],
+      cwd: fakeRepo,
+      stdin: receivedStdin,
+    });
+    expect(shipped.stdout.split("\n").filter(Boolean)).toEqual(
+      expect.arrayContaining([
+        "infra/ci-host/ci-vp.sh",
+        "packages/runlog/dist/bin.mjs",
+        "packages/playbook/dist/bin.mjs",
+      ]),
+    );
 
     // Rejects option-like sourceRef before calling git archive.
     const badRef = await syncCiHostPayload({

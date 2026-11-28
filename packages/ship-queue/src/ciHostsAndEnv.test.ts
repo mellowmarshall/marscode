@@ -12,7 +12,9 @@ import {
   readCiHostEntries,
   resolveCiHostsPath,
   validateCiHostsManifest,
+  type CiToolEntry,
 } from "./ciHosts.ts";
+import { applyToolCatalog, TOOL_CATALOG_SOURCE, trackedToolCatalog } from "./ciHostsCatalog.ts";
 import {
   compareVersions,
   computeHostLacks,
@@ -28,7 +30,12 @@ import {
   validateRootCommand,
 } from "./rootGrant.ts";
 import { buildLocalStepEnv, buildRemoteStepScript } from "./stepRunner.ts";
-import { buildToolchainEnv, buildToolchainPath, buildToolchainShellSetup } from "./toolchainEnv.ts";
+import {
+  buildToolchainEnv,
+  buildToolchainPath,
+  buildToolchainShellSetup,
+  TOOLCHAIN_ENV_TOOLS,
+} from "./toolchainEnv.ts";
 
 const tempDirs: string[] = [];
 
@@ -78,19 +85,58 @@ describe("canonical ci-hosts.json loader and validator", () => {
     expect(resolveCiHostsPath({ homeDir: home, env: {} })).toBe(legacyLib);
   });
 
-  it("validates the committed infra/ci-host/ci-hosts.example.json manifest cleanly", () => {
-    const examplePath = NodePath.resolve(
+  it("validates the tracked catalog merged into the hosts-only local template", () => {
+    const templatePath = NodePath.resolve(
       import.meta.dirname,
-      "../../../infra/ci-host/ci-hosts.example.json",
+      "../../../infra/ci-host/ci-hosts.local.example.json",
     );
-    const loaded = loadCiHostsManifest({ overridePath: examplePath });
-    expect(loaded.ok).toBe(true);
+    const loaded = loadCiHostsManifest({ overridePath: templatePath });
     expect(loaded.errors).toEqual([]);
+    expect(loaded.warnings).toEqual([]);
+    expect(loaded.ok).toBe(true);
     expect(loaded.manifest?.hosts.map((h) => h.name)).toEqual(["local", "ci-host-1"]);
-    expect(loaded.manifest?.toolchain.vp?.probe).toBe("vp --version");
-    expect(loaded.manifest?.toolchain.vp?.install).toContain("ci-vp.sh");
-    expect(loaded.manifest?.toolchain.sccache?.probe).toBe("sccache --version");
-    expect(loaded.manifest?.toolchain.sccache?.install).toContain("ci-sccache.sh");
+    expect(Object.keys(loaded.manifest?.toolchain ?? {})).toEqual(
+      Object.keys((trackedToolCatalog() as { toolchain: object }).toolchain),
+    );
+    expect(loaded.manifest?.guards?.install).toContain("host-guards/scripts/install.sh");
+  });
+
+  it("keeps a legacy manifest's own toolchain but warns that the catalog is not applied", () => {
+    const merged = applyToolCatalog({ schema: 1, hosts: [], toolchain: {} });
+    expect(merged.catalogApplied).toBe(false);
+    expect(merged.warnings.join(" ")).toContain("not applied");
+    const hostsOnly = applyToolCatalog({ schema: 1, hosts: [] });
+    expect(hostsOnly.catalogApplied).toBe(true);
+    expect(hostsOnly.warnings).toEqual([]);
+  });
+
+  it("declares, as required and installable, every tool the step environment wires", () => {
+    const toolchain = (trackedToolCatalog() as { toolchain: Record<string, CiToolEntry> })
+      .toolchain;
+    for (const tool of TOOLCHAIN_ENV_TOOLS) {
+      expect(toolchain[tool], tool).toBeDefined();
+      expect(toolchain[tool]?.optional, tool).not.toBe(true);
+      expect(toolchain[tool]?.install, tool).toBeTruthy();
+    }
+  });
+
+  it("names only payload installers that exist, with no placeholder checksums", () => {
+    const repoRoot = NodePath.resolve(import.meta.dirname, "../../..");
+    const text = NodeFS.readFileSync(NodePath.join(repoRoot, TOOL_CATALOG_SOURCE), "utf8");
+    expect(text).not.toMatch(/=0{64}\b/);
+    expect(text).not.toContain("$CI_DEVTOOLS");
+    expect(text).not.toMatch(/\/devtools\//);
+    // Probes run without CI_HOST_PAYLOAD, so they name the synced payload by its literal path.
+    for (const m of text.matchAll(/ship-queue-ci\/marscode-ci-host\/([A-Za-z0-9._/-]+)/g)) {
+      expect(NodeFS.existsSync(NodePath.join(repoRoot, m[1] ?? "")), m[1]).toBe(true);
+    }
+    const referenced = new Set(
+      [...text.matchAll(/\$CI_HOST_PAYLOAD\/([A-Za-z0-9._/-]+)/g)].map((m) => m[1] ?? ""),
+    );
+    expect(referenced.size).toBeGreaterThan(5);
+    for (const rel of referenced) {
+      expect(NodeFS.existsSync(NodePath.join(repoRoot, rel)), rel).toBe(true);
+    }
   });
 
   it("rejects malformed hosts, bad SSH aliases, unsafe data_root, and invalid versions", () => {
