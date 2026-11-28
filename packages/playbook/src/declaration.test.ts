@@ -213,6 +213,17 @@ describe("retired playbook 7 settings", () => {
     expect(parseDeclarationText(text, { base: true }).errors).toEqual([]);
   });
 
+  it("retires v7's object-form actions.evidence but keeps the v8 receipt path", () => {
+    const v7 = { contracts: { actions: { evidence: { run: "pnpm test:actions", tests: ["a"] } } } };
+    const head = parseDeclarationText(JSON.stringify(v7));
+    expect(head.errors.some((e) => e.startsWith("contracts.actions.evidence: the v7"))).toBe(true);
+    expect(parseDeclarationText(JSON.stringify(v7), { base: true }).errors).toEqual([]);
+    const v8 = { contracts: { actions: { evidence: ".playbook/evidence/actions.json" } } };
+    expect(
+      parseDeclarationText(JSON.stringify(v8)).errors.filter((e) => e.includes("actions.evidence")),
+    ).toEqual([]);
+  });
+
   it("never counts removing them as a loosening", async () => {
     const base = parseDeclarationText(JSON.stringify(v7Declaration()), { base: true }).data!;
     expect(declarationRatchet(evidenceDeclaration(evidenceOnly()), base).problems).toEqual([]);

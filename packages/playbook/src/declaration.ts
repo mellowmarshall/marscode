@@ -155,6 +155,22 @@ export function optedOut(body: unknown): boolean {
   return isRecord(body) && Object.keys(body).length === 1 && "none" in body;
 }
 
+/**
+ * Settings retired only in one shape: v7's `actions.evidence` was an object (`{ run, tests }`);
+ * v8 takes a receipt path. The object form is retired; the string form is current.
+ */
+const RETIRED_OBJECT_SETTINGS: ReadonlyMap<string, string> = new Map([
+  [
+    "actions.evidence",
+    "the v7 { run, tests } form is retired; give the path of the repo's actions receipt",
+  ],
+]);
+
+function isRetiredSetting(name: string, key: string, value: unknown): boolean {
+  const id = `${name}.${key}`;
+  return RETIRED_SETTINGS.has(id) || (RETIRED_OBJECT_SETTINGS.has(id) && isRecord(value));
+}
+
 function dropRetired(data: Record<string, unknown>): Record<string, unknown> {
   const out = Object.fromEntries(Object.entries(data).filter(([k]) => !(k in RETIRED_KEYS)));
   const contracts = out.contracts;
@@ -163,9 +179,7 @@ function dropRetired(data: Record<string, unknown>): Record<string, unknown> {
     for (const [name, body] of Object.entries(contracts)) {
       if (name in RETIRED_CONTRACTS) continue;
       cleaned[name] = isRecord(body)
-        ? Object.fromEntries(
-            Object.entries(body).filter(([k]) => !RETIRED_SETTINGS.has(`${name}.${k}`)),
-          )
+        ? Object.fromEntries(Object.entries(body).filter(([k, v]) => !isRetiredSetting(name, k, v)))
         : body;
     }
     out.contracts = cleaned;
@@ -186,8 +200,11 @@ export function validateDeclaration(data: unknown): ReadonlyArray<string> {
       for (const [name, body] of Object.entries(contracts)) {
         if (name in RETIRED_CONTRACTS) errors.push(`contracts.${name}: ${RETIRED_CONTRACTS[name]}`);
         if (!isRecord(body)) continue;
-        for (const key of Object.keys(body)) {
-          const why = RETIRED_SETTINGS.get(`${name}.${key}`);
+        for (const [key, value] of Object.entries(body)) {
+          const id = `${name}.${key}`;
+          const why =
+            RETIRED_SETTINGS.get(id) ??
+            (isRecord(value) ? RETIRED_OBJECT_SETTINGS.get(id) : undefined);
           if (why) errors.push(`contracts.${name}.${key}: ${why}`);
         }
       }
