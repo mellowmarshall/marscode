@@ -82,6 +82,7 @@ export class CernoProcessBridge {
 
   private readonly jobs = new Map<string, CernoJobRecord>();
   private readonly threadIdCache = new Map<string, string | null>();
+  private observedTicks: ReadonlyMap<number, number | null> = new Map();
   private timer: ReturnType<typeof setInterval> | null = null;
   private inflightRefresh: Promise<void> | null = null;
   private lastRefreshAtMs = 0;
@@ -172,9 +173,22 @@ export class CernoProcessBridge {
     }));
   }
 
-  /** The process start time in clock ticks, through the same reader the bridge tracks jobs with. */
-  readStartTicks(pid: number): Promise<number | null> {
-    return this.readProcStartTicksFn(pid);
+  /**
+   * Start ticks the latest scan read for a live cerno PID; null when that scan did not see it or
+   * is older than two poll intervals, so a PID reused since then never matches its old ticks.
+   */
+  observedStartTicks(pid: number): number | null {
+    if (this.nowMs() - this.lastRefreshAtMs > this.observedTicksMaxAgeMs()) return null;
+    return this.observedTicks.get(pid) ?? null;
+  }
+
+  /** Rescans only when not polling (no subscriber), so observed start ticks stay usable. */
+  ensureObservedTicksFresh(): Promise<void> {
+    return this.ensureFresh(this.observedTicksMaxAgeMs());
+  }
+
+  private observedTicksMaxAgeMs(): number {
+    return this.pollIntervalMs * 2;
   }
 
   getSummary(id: string): JobSummary | undefined {
@@ -236,6 +250,7 @@ export class CernoProcessBridge {
     const fleetHosts = loadFleetHosts(this.localHostname, this.ciHostsPath);
     const seenIds = new Set<string>();
     const changedIds: string[] = [];
+    const observedTicks = new Map<number, number | null>();
     let filesRead = 0;
 
     for (const dir of this.snapshotDirs) {
@@ -274,6 +289,7 @@ export class CernoProcessBridge {
         const id = startTicks !== null ? `cerno:${snap.pid}:${startTicks}` : `cerno:${snap.pid}`;
         if (seenIds.has(id)) continue;
         seenIds.add(id);
+        observedTicks.set(snap.pid, actualTicks);
 
         const canonicalLogPath = await resolveCanonicalLogPath(snap.log_path, snap.cwd);
         const threadId = await this.lookupThreadId(snap.pid, startTicks);
@@ -311,7 +327,9 @@ export class CernoProcessBridge {
       changedIds.push(rec.id);
     }
     const removedIds = this.pruneCompleted();
-    this.lastRefreshAtMs = now;
+    this.observedTicks = observedTicks;
+    // Stamp the end of the scan: a slow scan must not read as stale right after it finishes.
+    this.lastRefreshAtMs = this.nowMs();
     if (!this.disposed && (changedIds.length > 0 || removedIds.length > 0)) {
       this.onChanged?.(changedIds, removedIds);
     }

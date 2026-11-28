@@ -33,6 +33,9 @@ export interface BgMatchEntry {
   readonly logPath?: string | undefined;
 }
 
+const MIN_COMMAND_MATCH_LEN = 6;
+const MAX_COMMAND_MATCH_LEN = 64;
+
 function normalizeInnerCommand(raw: string): string {
   let text = raw.replace(/\s+/gu, " ").trim();
   while (/^(?:cd|rm\s+-f|mkdir\s+-p)\s+[^&;]+&&\s*/u.test(text)) {
@@ -53,50 +56,60 @@ function tryRealpathSync(p: string): string {
   }
 }
 
-function isPathInsideOrEqual(childPath: string, parentPath: string): boolean {
-  const realChild = tryRealpathSync(childPath);
-  const realParent = tryRealpathSync(parentPath);
+type RealpathFn = (p: string) => string;
+
+function isPathInsideOrEqual(childPath: string, parentPath: string, realpath: RealpathFn): boolean {
+  const realChild = realpath(childPath);
+  const realParent = realpath(parentPath);
   return realChild === realParent || realChild.startsWith(realParent + NodePath.sep);
 }
 
-export function cernoMatchesBackgroundJob(
-  cerno: {
-    readonly threadId?: string | undefined;
-    readonly cwd?: string | undefined;
-    readonly command: string;
-    readonly logPath?: string | undefined;
-  },
-  bg: {
-    readonly threadId?: string | undefined;
-    readonly worktreePath?: string | undefined;
-    readonly command?: string | undefined;
-    readonly logPath?: string | undefined;
-  },
-): boolean {
+interface CernoMatchSide {
+  readonly threadId?: string | undefined;
+  readonly cwd?: string | undefined;
+  readonly command: string;
+  readonly logPath?: string | undefined;
+}
+
+interface BgMatchSide {
+  readonly threadId?: string | undefined;
+  readonly worktreePath?: string | undefined;
+  readonly command?: string | undefined;
+  readonly logPath?: string | undefined;
+}
+
+function cernoAbsLogPath(cerno: CernoMatchSide): string | null {
+  if (!cerno.logPath) return null;
+  if (NodePath.isAbsolute(cerno.logPath)) return cerno.logPath;
+  return cerno.cwd && NodePath.isAbsolute(cerno.cwd)
+    ? NodePath.resolve(cerno.cwd, cerno.logPath)
+    : null;
+}
+
+function bgRawLogPath(bg: BgMatchSide): string | null {
+  return (
+    bg.logPath ?? (bg.command ? extractCommandLogPath(bg.command, bg.worktreePath ?? null) : null)
+  );
+}
+
+function matchesWith(cerno: CernoMatchSide, bg: BgMatchSide, realpath: RealpathFn): boolean {
   if (cerno.threadId && bg.threadId && cerno.threadId !== bg.threadId) return false;
   if (cerno.threadId && !bg.threadId) return false;
 
-  const cernoAbsLog = cerno.logPath
-    ? NodePath.isAbsolute(cerno.logPath)
-      ? cerno.logPath
-      : cerno.cwd && NodePath.isAbsolute(cerno.cwd)
-        ? NodePath.resolve(cerno.cwd, cerno.logPath)
-        : null
-    : null;
-  const bgRawLog =
-    bg.logPath ?? (bg.command ? extractCommandLogPath(bg.command, bg.worktreePath ?? null) : null);
+  const cernoAbsLog = cernoAbsLogPath(cerno);
+  const bgRawLog = bgRawLogPath(bg);
   const bgSubdirLog =
     !bg.logPath &&
     bg.command &&
     cerno.cwd &&
     bg.worktreePath &&
-    isPathInsideOrEqual(cerno.cwd, bg.worktreePath)
+    isPathInsideOrEqual(cerno.cwd, bg.worktreePath, realpath)
       ? extractCommandLogPath(bg.command, cerno.cwd)
       : null;
   if (
     cernoAbsLog &&
-    ((bgRawLog && tryRealpathSync(cernoAbsLog) === tryRealpathSync(bgRawLog)) ||
-      (bgSubdirLog && tryRealpathSync(cernoAbsLog) === tryRealpathSync(bgSubdirLog)))
+    ((bgRawLog && realpath(cernoAbsLog) === realpath(bgRawLog)) ||
+      (bgSubdirLog && realpath(cernoAbsLog) === realpath(bgSubdirLog)))
   ) {
     return true;
   }
@@ -104,9 +117,113 @@ export function cernoMatchesBackgroundJob(
   if (!cerno.threadId || !bg.threadId || !bg.command) return false;
   const normCerno = normalizeInnerCommand(cerno.command);
   const normBg = normalizeInnerCommand(bg.command);
-  if (normCerno.length < 6 || normBg.length < 6) return false;
-  const cmpLen = Math.min(64, normCerno.length, normBg.length);
+  if (normCerno.length < MIN_COMMAND_MATCH_LEN || normBg.length < MIN_COMMAND_MATCH_LEN) {
+    return false;
+  }
+  const cmpLen = Math.min(MAX_COMMAND_MATCH_LEN, normCerno.length, normBg.length);
   return normCerno.slice(0, cmpLen) === normBg.slice(0, cmpLen);
+}
+
+export function cernoMatchesBackgroundJob(cerno: CernoMatchSide, bg: BgMatchSide): boolean {
+  return matchesWith(cerno, bg, tryRealpathSync);
+}
+
+/** The real path itself and every ancestor that `isPathInsideOrEqual` treats as a parent. */
+function insideOrEqualKeys(realPath: string): ReadonlyArray<string> {
+  const keys = [realPath];
+  let dir = realPath;
+  for (;;) {
+    const up = NodePath.dirname(dir);
+    // `root + sep` never prefixes a child, so the filesystem root contains only itself.
+    if (up === dir || NodePath.dirname(up) === up) break;
+    keys.push(up);
+    dir = up;
+  }
+  return keys;
+}
+
+type Collect = (list: ReadonlyArray<number> | undefined) => void;
+
+export interface CernoCandidateIndex {
+  /** The first live candidate, in list order, that `cernoMatchesBackgroundJob` accepts. */
+  find(bg: BgMatchSide): CernoJobMatchCandidate | undefined;
+}
+
+/**
+ * Indexes live cerno candidates once per process table by log path, cwd and command prefix,
+ * so matching a background job is a lookup. Path resolution is cached for the index's life.
+ */
+export function indexCernoCandidates(
+  candidates: ReadonlyArray<CernoJobMatchCandidate>,
+  realpathFn: RealpathFn = tryRealpathSync,
+): CernoCandidateIndex {
+  const resolved = new Map<string, string>();
+  const realpath = (p: string): string => {
+    let real = resolved.get(p);
+    if (real === undefined) {
+      real = realpathFn(p);
+      resolved.set(p, real);
+    }
+    return real;
+  };
+  const live: CernoJobMatchCandidate[] = [];
+  const byLog = new Map<string, number[]>();
+  const byCwd = new Map<string, number[]>();
+  const byPrefix = new Map<string, number[]>();
+  const byExact = new Map<string, number[]>();
+  const add = (map: Map<string, number[]>, key: string, i: number) => {
+    const list = map.get(key);
+    if (list) list.push(i);
+    else map.set(key, [i]);
+  };
+  const indexCommand = (threadId: string, command: string, i: number) => {
+    const norm = normalizeInnerCommand(command);
+    if (norm.length < MIN_COMMAND_MATCH_LEN) return;
+    const capped = Math.min(MAX_COMMAND_MATCH_LEN, norm.length);
+    for (let len = MIN_COMMAND_MATCH_LEN; len <= capped; len += 1) {
+      add(byPrefix, `${threadId}\0${norm.slice(0, len)}`, i);
+    }
+    if (norm.length < MAX_COMMAND_MATCH_LEN) add(byExact, `${threadId}\0${norm}`, i);
+  };
+  // A candidate at least as long as the job matches on the job's capped command; a shorter one
+  // matches when its whole command is a prefix of the job's.
+  const collectCommand = (threadId: string, command: string, collect: Collect) => {
+    const norm = normalizeInnerCommand(command);
+    if (norm.length < MIN_COMMAND_MATCH_LEN) return;
+    const capped = Math.min(MAX_COMMAND_MATCH_LEN, norm.length);
+    collect(byPrefix.get(`${threadId}\0${norm.slice(0, capped)}`));
+    for (let len = MIN_COMMAND_MATCH_LEN; len < capped; len += 1) {
+      collect(byExact.get(`${threadId}\0${norm.slice(0, len)}`));
+    }
+  };
+
+  for (const c of candidates) {
+    if (isTerminalJobState(c.state) || !c.pidStats?.alive) continue;
+    const i = live.push(c) - 1;
+    const absLog = cernoAbsLogPath(c);
+    if (absLog) add(byLog, realpath(absLog), i);
+    if (c.cwd) for (const key of insideOrEqualKeys(realpath(c.cwd))) add(byCwd, key, i);
+    if (c.threadId) indexCommand(c.threadId, c.command, i);
+  }
+
+  return {
+    find(bg) {
+      const hits = new Set<number>();
+      const collect: Collect = (list) => {
+        for (const i of list ?? []) hits.add(i);
+      };
+      const rawLog = bgRawLogPath(bg);
+      if (rawLog) collect(byLog.get(realpath(rawLog)));
+      if (!bg.logPath && bg.command && bg.worktreePath) {
+        collect(byCwd.get(realpath(bg.worktreePath)));
+      }
+      if (bg.threadId && bg.command) collectCommand(bg.threadId, bg.command, collect);
+      for (const i of [...hits].toSorted((a, b) => a - b)) {
+        if (matchesWith(live[i]!, bg, realpath)) return live[i];
+      }
+      return undefined;
+    },
+  };
 }
 
 export interface CernoVisibilityCallbacks {
@@ -239,13 +356,11 @@ export class CernoVisibilityCoordinator {
   /** Root PID of the live cerno process matched to a live background job, from the match cache. */
   liveCernoRootForBg(
     bgId: string,
-    candidates: ReadonlyArray<CernoJobMatchCandidate>,
+    candidates: CernoCandidateIndex,
   ): { readonly pid: number; readonly startTicks: number | null } | undefined {
     const bg = this.bgMatchCache.get(bgId);
     if (!bg || isTerminalJobState(bg.state)) return undefined;
-    const matched = candidates.find(
-      (c) => !isTerminalJobState(c.state) && c.pidStats?.alive && cernoMatchesBackgroundJob(c, bg),
-    );
+    const matched = candidates.find(bg);
     return matched?.pidStats
       ? { pid: matched.pidStats.pid, startTicks: cernoIdStartTicks(matched.id) }
       : undefined;

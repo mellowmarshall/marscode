@@ -19,7 +19,7 @@ import { findBranchRestoreSource } from "../../workspace/restoreMissingWorktree.
 import { cancelShipQueueJob } from "../ShipQueueEventStream.ts";
 import { BackgroundTaskBridge, type BackgroundTaskBridgeOptions } from "./BackgroundTaskBridge.ts";
 import type { CommandExecutionTurnItem } from "./BackgroundTaskLifecycle.ts";
-import { CernoVisibilityCoordinator } from "./cernoJobMatcher.ts";
+import { CernoVisibilityCoordinator, indexCernoCandidates } from "./cernoJobMatcher.ts";
 import { CernoProcessBridge, type CernoProcessBridgeOptions } from "./CernoProcessBridge.ts";
 import { JobEventBroadcaster } from "./JobEventStream.ts";
 import {
@@ -346,7 +346,11 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
 
     async applyProcessTable(rows) {
       if (!cernoBridge) return;
-      const candidates = cernoBridge.listMatchCandidates();
+      const seq = ++processTableSeq;
+      await cernoBridge.ensureObservedTicksFresh();
+      // A newer table supersedes this one while the cerno scan ran.
+      if (seq !== processTableSeq) return;
+      const candidates = indexCernoCandidates(cernoBridge.listMatchCandidates());
       const targets = collectJobLoadTargets({
         localHostname: cernoHostname,
         cernoSummaries: readVisibleCernoSummaries(true),
@@ -355,9 +359,7 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
         ),
         rootForBackgroundJob: (id) => visibility?.liveCernoRootForBg(id, candidates),
       });
-      const seq = ++processTableSeq;
-      const live = await keepUnreusedRoots(targets, (pid) => cernoBridge.readStartTicks(pid));
-      // A newer table supersedes this one while its start ticks were being read.
+      const live = await keepUnreusedRoots(targets, (pid) => cernoBridge.observedStartTicks(pid));
       if (seq !== processTableSeq) return;
       // Non-urgent: load deltas ride the broadcaster's 1 s coalescing window.
       for (const id of loads.apply(rows, live)) broadcaster.markDirty(id, false);

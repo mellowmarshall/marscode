@@ -7,10 +7,12 @@ import {
   isSafeHostName,
   loadCiHostsManifest,
   readCiHostEntries,
+  resolveCiHostsPath,
 } from "@t3tools/ship-queue/ciHosts";
 import { resolveQueueRoot } from "@t3tools/ship-queue/cli";
 import {
   checkCiHosts,
+  hostOffFilePath,
   readHostOffState,
   setCiHostAvailability,
   type HostExecDeps,
@@ -91,6 +93,13 @@ function mergeHostReports(prev: FleetHostsReport, next: FleetHostsReport): Fleet
   return { ...prev, at: next.at, hosts: mergedHosts };
 }
 
+/** Changes when the file is rewritten, replaced, created or removed; one stat, no read. */
+function fileSignature(filePath: string | null): string {
+  if (!filePath) return "none";
+  const st = NodeFS.statSync(filePath, { throwIfNoEntry: false });
+  return st ? `${st.ino}:${st.size}:${st.mtimeMs}` : "missing";
+}
+
 interface ToggleRecord {
   readonly at: number;
   readonly ciOff: boolean;
@@ -112,6 +121,11 @@ export class NativeCiHosts {
   private running = "";
   private lastError = "";
   private toggled = new Map<string, ToggleRecord>();
+  private panelCache: {
+    readonly key: string;
+    readonly source: FleetHostsReport | null;
+    readonly report: FleetHostsReport | null;
+  } | null = null;
 
   constructor(options?: {
     readonly stateFile?: string | undefined;
@@ -150,10 +164,23 @@ export class NativeCiHosts {
   /**
    * The Fleet console keys each host's CI switch off a report row. Until a hosts check has probed
    * a manifest host, list it with only its name and live `.off` state so the switch still shows.
+   * Cached until the manifest or the hosts directory (where `.off` markers are renamed in and
+   * removed) changes, so a panel read costs two stats instead of a read per host.
    */
   private reportWithManifestHosts(): FleetHostsReport | null {
+    const manifestFile = this.manifestPath?.trim() || resolveCiHostsPath();
+    const hostsDir = NodePath.dirname(hostOffFilePath(this.queueRoot, "_"));
+    const key = `${manifestFile ?? ""}|${fileSignature(manifestFile)}|${fileSignature(hostsDir)}`;
+    const cached = this.panelCache;
+    if (cached && cached.key === key && cached.source === this.report) return cached.report;
+    const report = this.buildReportWithManifestHosts(manifestFile ?? undefined);
+    this.panelCache = { key, source: this.report, report };
+    return report;
+  }
+
+  private buildReportWithManifestHosts(manifestFile: string | undefined): FleetHostsReport | null {
     const reported = new Set((this.report?.hosts ?? []).map((h) => h.name));
-    const unprobed = readCiHostsManifest(this.manifestPath).filter((h) => !reported.has(h.name));
+    const unprobed = readCiHostsManifest(manifestFile).filter((h) => !reported.has(h.name));
     if (unprobed.length === 0) return this.report;
     const stubs = unprobed.map((h) => {
       const off = readHostOffState(this.queueRoot, h.name);
@@ -289,6 +316,7 @@ export class NativeCiHosts {
       ciOffReason: enabled ? null : reason,
     };
     this.toggled.set(targetHost, rec);
+    this.panelCache = null;
     if (this.report) {
       this.report = this.applyToggles(this.report, 0);
       atomicWriteJson(this.stateFile, this.report);
