@@ -70,7 +70,14 @@ if [ -z "$NODE_BIN" ]; then
   printf 'install-guards.sh: node is required on PATH\n' >&2
   exit 1
 fi
-NODE_BIN="$(readlink -f "$NODE_BIN")"
+# The real node binary, as node itself reports it. `node` on PATH can be a link to a multi-call
+# launcher that acts as node only under that name; the link's target does not run a script.
+NODE_REAL="$("$NODE_BIN" -p 'process.execPath' 2>/dev/null || true)"
+if [ -n "$NODE_REAL" ] && [ -x "$NODE_REAL" ]; then
+  NODE_BIN="$NODE_REAL"
+else
+  NODE_BIN="$(readlink -f "$NODE_BIN")"
+fi
 
 MODULES=(
   bundleInspect.ts
