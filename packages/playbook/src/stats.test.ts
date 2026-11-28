@@ -53,11 +53,11 @@ describe("review text parsing", () => {
     expect(parseAdversarialReviewCounts("Findings: 2 high, 1 low\n- [high] ignored").total).toBe(3);
   });
 
-  it("reads verdicts and actors from structured JSON or markdown", () => {
+  it("reads verdicts from JSON or markdown, actors from JSON only", () => {
     const md = parseStructuredReviewText(
       "Reviewer: claude-opus-5-5\nVerdict: REQUEST CHANGES\n- [high] x",
     );
-    expect(md).toMatchObject({ verdict: "fail", reviewer: { family: "Opus" } });
+    expect(md).toMatchObject({ verdict: "fail", reviewer: { model: "unknown" } });
     const json = parseStructuredReviewText(
       JSON.stringify({
         reviewer: { model: "gpt-6-astra", effort: "medium" },

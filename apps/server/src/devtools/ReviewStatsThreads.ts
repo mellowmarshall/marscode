@@ -134,8 +134,7 @@ export function buildSubmitterLookupFromRows(
 }
 
 export function classifyFromThreadInfo(info: ThreadSubmitterInfo): ClassifiedModel {
-  const classified = classifyModel(info.model, info.provider);
-  return info.effort && !classified.effort ? { ...classified, effort: info.effort } : classified;
+  return classifyModel(info.model, info.provider, info.effort);
 }
 
 export function isDelegatedReviewSubagent(prompt: string | null | undefined): boolean {
@@ -186,11 +185,9 @@ export function buildRecordFromDelegatedReview(
     "";
   const revEffort = extractEffortFromOptions(ms?.options) || childInfo?.effort || "";
 
-  let reviewer: ClassifiedModel = parsedText.reviewer;
-  if (revModel) {
-    const classified = classifyModel(revModel, revProvider || undefined);
-    reviewer = revEffort && !classified.effort ? { ...classified, effort: revEffort } : classified;
-  }
+  const reviewer = revModel
+    ? classifyModel(revModel, revProvider || undefined, revEffort)
+    : parsedText.reviewer;
 
   const submitter = parentInfo ? classifyFromThreadInfo(parentInfo) : parsedText.submitter;
   const worktree = (row.worktree?.trim() || parentInfo?.worktreePath || "").trim();

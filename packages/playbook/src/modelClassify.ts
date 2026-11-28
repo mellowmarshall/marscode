@@ -1,8 +1,10 @@
 /**
- * Review actor classification: a model name (with an optional effort suffix
- * or provider prefix) to its family, lab and provider. Shared by the review
- * stats, the challenger's records and the server's review-model routing.
+ * Review actor classification: a model name, normalized by modelIdentity.ts,
+ * to its family, lab and provider. Shared by the review stats, the
+ * challenger's records and the server's review-model routing.
  */
+import { normalizeEffort, normalizeModelIdentity } from "./modelIdentity.ts";
+
 export interface ClassifiedModel {
   readonly model: string;
   readonly effort: string;
@@ -37,57 +39,20 @@ export function normalizeProviderId(raw: unknown): string {
   return PROVIDER_ALIASES[trimmed.toLowerCase()] ?? trimmed;
 }
 
-const EFFORT_SUFFIX_RE = /\s*\((minimal|low|medium|high|xhigh|max|ultrathink)\)\s*$/i;
-
+/**
+ * RAW_MODEL's canonical identity (see modelIdentity.ts) and its family, lab and
+ * provider. An effort in the model text wins over RAW_EFFORT, a structured field.
+ */
 export function classifyModel(
   rawModel: string | null | undefined,
   rawProvider?: string | null,
+  rawEffort?: string | null,
 ): ClassifiedModel {
-  let text = String(rawModel ?? "").trim();
-  let effort = "";
-  const m = EFFORT_SUFFIX_RE.exec(text);
-  if (m?.[1]) {
-    effort = m[1].toLowerCase();
-    text = text.slice(0, m.index).trim();
-  }
-  let providerHint = rawProvider ?? "";
-  const low = text.toLowerCase();
-  const prefixMap: ReadonlyArray<readonly [string, string]> = [
-    ["codex ", "codex"],
-    ["claude ", "claudeAgent"],
-    ["anthropic ", "claudeAgent"],
-    ["openai ", "codex"],
-    ["gemini ", "antigravity"],
-    ["antigravity ", "antigravity"],
-    ["grok ", "grok"],
-    ["muse ", "muse"],
-  ];
-  for (const [prefix, prov] of prefixMap) {
-    if (
-      low.startsWith(prefix) &&
-      !low.startsWith("claude-") &&
-      !low.startsWith("gemini-") &&
-      !low.startsWith("grok-") &&
-      !low.startsWith("muse-")
-    ) {
-      if (!providerHint) providerHint = prov;
-      text = text.slice(prefix.length).trim();
-      break;
-    }
-  }
-  if (!effort) {
-    const tl = text.toLowerCase();
-    for (const tok of ["ultrathink", "xhigh", "minimal", "medium", "high", "low", "max"]) {
-      if (tl.endsWith(` ${tok}`)) {
-        effort = tok;
-        text = text.slice(0, -(tok.length + 1)).trim();
-        break;
-      }
-    }
-  }
-
+  const identity = normalizeModelIdentity(rawModel);
+  const effort = identity.model === "unknown" ? "" : identity.effort || normalizeEffort(rawEffort);
+  const providerHint = rawProvider || identity.providerHint;
   const provider = normalizeProviderId(providerHint);
-  const model = text || "unknown";
+  const model = identity.model;
   const ml = model.toLowerCase();
 
   if (ml === "owner-bypass" || ml === "bypass") {
