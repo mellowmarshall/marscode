@@ -91,6 +91,7 @@ export async function runHostsSubcommand(
         io.stdout(
           `${h.name} (${h.ssh ?? "this host"}): ${h.reached ? "reached" : "UNREACHABLE"}${h.ci_off ? " [OFF]" : ""}\n`,
         );
+        for (const row of h.drift) io.stdout(`  ${row.state}: ${row.text}\n`);
         for (const tool of h.tools.filter((t) => !QUIET_TOOL_STATES.has(t.state))) {
           io.stdout(
             `  ${tool.state}: ${tool.name} ${tool.range} (has ${tool.version ?? "none"})\n`,

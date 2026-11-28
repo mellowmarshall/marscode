@@ -6,7 +6,7 @@
       "name": "local",
       "ssh": null,
       "role": "ci",
-      "data_root": "~/Dev-data",
+      "data_root": "/srv/ci",
       "note": "local queue host"
     },
     {
@@ -14,7 +14,7 @@
       "ssh": "ci-host-1.example",
       "role": "ci",
       "priority": 1,
-      "data_root": "~/Dev-data",
+      "data_root": "/srv/ci",
       "note": "example remote CI host"
     }
   ]

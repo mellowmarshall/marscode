@@ -13,6 +13,7 @@ import {
   type CiHostEntry,
   type CiHostsManifest,
 } from "./ciHosts.ts";
+import { dataRootUnderHome, dataRootUnderHomeNote } from "./dataRootPolicy.ts";
 import { evaluateToolState, type ToolCheckState } from "./ciToolVersion.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
 import { buildRootGrantRequest, planToolProvides } from "./rootGrant.ts";
@@ -53,6 +54,8 @@ export interface HostCheckEntry {
   readonly tools: ReadonlyArray<HostCheckToolRow>;
   readonly drift: ReadonlyArray<HostCheckDriftRow>;
   readonly notes: ReadonlyArray<string>;
+  /** The host's data root is under a home directory (see dataRootPolicy.ts). */
+  readonly data_root_under_home: boolean;
   readonly grants: {
     readonly host: string;
     readonly grant: ReadonlyArray<string>;
@@ -311,6 +314,12 @@ export async function checkCiHosts(input: {
 
   for (const host of hostsToCheck) {
     const off = readHostOffState(input.queueRoot, host.name);
+    // Moving a data root out of /home needs root, so the Fleet card shows it as a needs-root row.
+    const homeRoot = dataRootUnderHome(host.data_root);
+    const drift: HostCheckDriftRow[] = homeRoot
+      ? [{ text: dataRootUnderHomeNote(host.data_root), state: "needs-root" }]
+      : [];
+    if (homeRoot) hasDrift = true;
     const probe = await probeCiHost({
       queueRoot: input.queueRoot,
       manifest,
@@ -329,8 +338,9 @@ export async function checkCiHosts(input: {
         platform: null,
         arch: null,
         tools: [],
-        drift: [],
+        drift,
         notes: [],
+        data_root_under_home: homeRoot,
         grants: null,
         no_grant: [],
         grant_error: "",
@@ -405,8 +415,9 @@ export async function checkCiHosts(input: {
       platform,
       arch: probe.__arch ? normalizeArch(probe.__arch) : null,
       tools,
-      drift: [],
+      drift,
       notes: [],
+      data_root_under_home: homeRoot,
       grants,
       no_grant: noGrant,
       grant_error: grantError,

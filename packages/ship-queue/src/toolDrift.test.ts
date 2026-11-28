@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import type { CiHostsManifest } from "./ciHosts.ts";
 import { runHostsSubcommand } from "./cliSubcommands.ts";
+import { dataRootUnderHome } from "./dataRootPolicy.ts";
 import { setCiHostAvailability, writeProbeFile, type HostExecDeps } from "./hostProbe.ts";
 import { writeRegistration } from "./jobStore.ts";
 import { collectRepoToolRequirements } from "./repoRequirements.ts";
@@ -35,10 +36,10 @@ afterEach(() => {
 const FOUR_HOST_MANIFEST: CiHostsManifest = {
   schema: 1,
   hosts: [
-    { name: "ci-x86-1", ssh: null, role: "ci", data_root: "~/data" },
-    { name: "ci-x86-2", ssh: "ci-x86-2", role: "ci", data_root: "~/data", sudo: true },
-    { name: "ci-x86-3", ssh: "ci-x86-3", role: "ci", data_root: "~/data" },
-    { name: "ci-arm-1", ssh: "ci-arm-1", role: "ci", data_root: "~/data" },
+    { name: "ci-x86-1", ssh: null, role: "ci", data_root: "/srv/ci" },
+    { name: "ci-x86-2", ssh: "ci-x86-2", role: "ci", data_root: "/srv/ci", sudo: true },
+    { name: "ci-x86-3", ssh: "ci-x86-3", role: "ci", data_root: "/srv/ci" },
+    { name: "ci-arm-1", ssh: "ci-arm-1", role: "ci", data_root: "/srv/ci" },
   ],
   toolchain: {
     git: { version: ">=2.0", probe: "git --version", install: null, base: true },
@@ -299,6 +300,64 @@ describe("eligible-host tool drift detection and single-host stranding", () => {
     expect(pass3.after?.hasSingleHostStranding).toBe(false);
     expect(pass3.after?.repos[0]?.satisfyingHosts).toEqual(["ci-x86-1", "ci-x86-3"]);
     expect(readToolDriftReconcileState(queueRoot).hosts["ci-x86-3"]?.consecutiveFailures).toBe(0);
+  });
+
+  it("fails `hosts check` for a host whose data root is under a home directory", async () => {
+    const tmp = mkTempDir("sq-dataroot-");
+    const queueRoot = NodePath.join(tmp, "queue");
+    const manifestPath = NodePath.join(tmp, "ci-hosts.json");
+    // The check reads the declared data_root, not the probed $HOME.
+    const healthy = {
+      __os: "linux",
+      __arch: "x86_64",
+      __home: "/home/ci",
+      git: "2.45.0",
+      vp: "0.1.18",
+      docker: "26.0.0",
+    };
+    const fake = makeFakeHostEnv({
+      "ci-x86-1": healthy,
+      "ci-x86-2": healthy,
+      "ci-x86-3": healthy,
+      "ci-arm-1": { ...healthy, __arch: "aarch64" },
+    });
+    const check = async (manifest: CiHostsManifest) => {
+      NodeFS.writeFileSync(manifestPath, JSON.stringify(manifest));
+      const out: string[] = [];
+      const code = await runHostsSubcommand(
+        queueRoot,
+        ["check"],
+        {
+          stdout: (t) => out.push(t),
+          stderr: (t) => out.push(t),
+          env: { SHIP_QUEUE_CI_HOSTS: manifestPath },
+          cwd: tmp,
+        },
+        fake.deps,
+      );
+      return { code, out: out.join("") };
+    };
+    const clean = await check(FOUR_HOST_MANIFEST);
+    expect(clean.out).not.toContain("data_root under a home directory");
+    const homed = await check({
+      ...FOUR_HOST_MANIFEST,
+      hosts: FOUR_HOST_MANIFEST.hosts.map((h) =>
+        h.name === "ci-x86-3" ? { ...h, data_root: "~/Dev-data" } : h,
+      ),
+    });
+    expect(homed.code).toBe(1);
+    expect(homed.out).toContain(
+      "ci-x86-3 (ci-x86-3): reached\n  needs-root: data_root under a home directory: ~/Dev-data",
+    );
+    expect(dataRootUnderHome("/home/ci/data")).toBe(true);
+    expect(dataRootUnderHome("/Users/ci/data")).toBe(true);
+    expect(dataRootUnderHome("//home/ci")).toBe(true);
+    expect(dataRootUnderHome("/root/ci")).toBe(true);
+    expect(dataRootUnderHome("/var/home/ci")).toBe(true);
+    expect(dataRootUnderHome("/users/ci")).toBe(true);
+    expect(dataRootUnderHome("/home2/ci")).toBe(false);
+    expect(dataRootUnderHome("/srv/ci")).toBe(false);
+    expect(dataRootUnderHome("/data/Dev")).toBe(false);
   });
 
   it("wires `ship-queue hosts drift [--json] [--reconcile]` and `hosts check --drift` CLI subcommands", async () => {
