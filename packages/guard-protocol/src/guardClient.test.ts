@@ -520,12 +520,27 @@ describe("guard-protocol Unix socket client & CLI", () => {
     );
     NodeFS.symlinkSync(launcher, NodePath.join(toolDir, "node"));
     const installer = NodePath.join(PKG_DIR, "scripts", "install-guards.sh");
+    const preload = NodePath.join(root, "preload.cjs");
+    const preloadRan = NodePath.join(root, "preload-ran");
+    NodeFS.writeFileSync(
+      preload,
+      `require("node:fs").writeFileSync(${JSON.stringify(preloadRan)}, "x");\n`,
+    );
     const res = NodeChildProcess.spawnSync(
       "bash",
       [installer, "--bin-dir", binDir, "--lib-dir", libDir],
-      { encoding: "utf8", env: { ...process.env, PATH: `${toolDir}:/usr/bin:/bin` } },
+      {
+        encoding: "utf8",
+        // An inherited preload must not run in the installer's node probe.
+        env: {
+          ...process.env,
+          PATH: `${toolDir}:/usr/bin:/bin`,
+          NODE_OPTIONS: `--require ${preload}`,
+        },
+      },
     );
     expect(res.status, res.stderr).toBe(0);
+    expect(NodeFS.existsSync(preloadRan)).toBe(false);
     // The installed wrapper runs the real node binary, not the launcher.
     const wrapper = NodeFS.readFileSync(NodePath.join(binDir, "marscode-guard"), "utf8");
     expect(wrapper).toContain(process.execPath);
