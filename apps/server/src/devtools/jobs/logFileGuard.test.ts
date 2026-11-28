@@ -33,4 +33,54 @@ describe("redactLogLine known token shapes", () => {
       expect(redactLogLine(text)).toBe(text);
     }
   });
+
+  const b64 = `${fill("dXNlcjpwYXNz", 2)}==`;
+  // [scheme, header value, what it reads as once redacted]: the scheme name stays, nothing after it.
+  const SCHEMES: ReadonlyArray<readonly [string, string, string]> = [
+    ["Basic", `Basic ${b64}`, "Basic [REDACTED]"],
+    ["Bearer", `Bearer ${fill("opaque", 4)}`, "Bearer [REDACTED]"],
+    ["Token", `Token ${fill("tk9", 6)}`, "Token [REDACTED]"],
+    [
+      "Digest",
+      `Digest username="ops", realm="queue", nonce="${fill("n0", 8)}", response="${fill("r1", 16)}"`,
+      "Digest [REDACTED]",
+    ],
+    [
+      "another scheme",
+      `AWS4-HMAC-SHA256 Credential=${fill("C2", 8)}, Signature=${fill("s3", 16)}`,
+      "AWS4-HMAC-SHA256 [REDACTED]",
+    ],
+    ["no scheme", fill("rawcredential", 2), "[REDACTED]"],
+  ];
+  // The credential parts of a value: everything long enough to matter, except the scheme name.
+  const secretParts = (value: string, shown: string) =>
+    value.split(/[\s,="]+/).filter((part) => part.length >= 8 && !shown.includes(part));
+
+  it.each(SCHEMES)(
+    "redacts every %s credential of a quoted curl header",
+    (_scheme, value, shown) => {
+      const redacted = redactLogLine(
+        `curl -sS -H 'Authorization: ${value}' https://example.test/x`,
+      );
+      expect(redacted).toBe(`curl -sS -H 'Authorization: ${shown}' https://example.test/x`);
+      const escaped = value.replaceAll('"', '\\"');
+      expect(redactLogLine(`curl -H "Authorization: ${escaped}" https://example.test/x`)).toBe(
+        `curl -H "Authorization: ${shown}" https://example.test/x`,
+      );
+    },
+  );
+
+  it.each(SCHEMES)("redacts every %s credential of a bare header line", (_scheme, value, shown) => {
+    const redacted = redactLogLine(`  Proxy-Authorization: ${value}`);
+    for (const part of secretParts(value, shown)) expect(redacted).not.toContain(part);
+    expect(redacted).toContain(`Proxy-Authorization: ${shown}`);
+  });
+
+  it.each(SCHEMES)("redacts every %s credential of a JSON header", (_scheme, value, shown) => {
+    const json = JSON.stringify({ authorization: value, accept: "text/plain" });
+    const redacted = redactLogLine(json);
+    for (const part of secretParts(value, shown)) expect(redacted).not.toContain(part);
+    expect(redacted).toContain(`"authorization":"${shown}"`);
+    expect(redacted).toContain('"accept":"text/plain"');
+  });
 });

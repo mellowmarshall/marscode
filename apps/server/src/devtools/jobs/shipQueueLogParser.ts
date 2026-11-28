@@ -3,7 +3,7 @@ import * as NodeFS from "node:fs";
 
 import { SHIP_QUEUE_STAGE_AFTER, SHIP_QUEUE_STAGE_MARKERS } from "@t3tools/ship-queue/markers";
 
-import { openShipJobLog, statShipJobLog } from "./shipQueueJobLogFile.ts";
+import { openShipJobLog, type ShipJobLogStat } from "./shipQueueJobLogFile.ts";
 const STAGE_LOG_CHUNK_BYTES = 256 * 1024;
 const MAX_INCREMENTAL_SCAN_BYTES = 32 * 1024 * 1024;
 
@@ -55,8 +55,8 @@ export function parseDevdeckStageFromLogText(logText: string): string {
   return parseDevdeckLogStageInfo(logText).stage;
 }
 
-export function readShipJobLogInfo(jobsRootDir: string, jobId: string): DevdeckLogStageInfo {
-  const st = statShipJobLog(jobsRootDir, jobId);
+/** Stage info of a log `statShipJobLog` found; reads only what was appended since the last call. */
+export function readShipJobLogInfo(st: ShipJobLogStat | null): DevdeckLogStageInfo {
   if (!st) return { stage: "", hasPostMerge: false };
   const logPath = st.path;
   try {

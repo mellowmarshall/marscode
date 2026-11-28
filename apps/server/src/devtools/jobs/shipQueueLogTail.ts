@@ -1,8 +1,6 @@
-// @effect-diagnostics nodeBuiltinImport:off - Bounded, redacted tail of a ship-queue job log, and the post-merge sync failure reason it records.
-import * as NodeFS from "node:fs";
-
+/** Bounded, redacted tail of a ship-queue job log, and the post-merge sync failure reason it records. */
 import { redactLogLine } from "./logFileGuard.ts";
-import { openShipJobLog, statShipJobLog } from "./shipQueueJobLogFile.ts";
+import { readShipJobLogRange, type ShipJobLogStat } from "./shipQueueJobLogFile.ts";
 import { sanitizeJobText } from "./types.ts";
 
 const TAIL_BYTES = 64 * 1024;
@@ -31,40 +29,24 @@ function redactTailLine(raw: string): string {
 }
 
 /**
- * The last lines of `jobs/<id>/log`, redacted, with output kept indented under its column-0 markers.
- * `null` when the job has no readable log.
+ * The last lines of a log `statShipJobLog` found, redacted, with output kept indented under its
+ * column-0 markers. `null` when there is no log or it fails the open-time identity checks.
  */
-export function readShipJobLogTail(
-  jobsRootDir: string,
-  jobId: string,
-): ReadonlyArray<string> | null {
-  const st = statShipJobLog(jobsRootDir, jobId);
+export function readShipJobLogTail(st: ShipJobLogStat | null): ReadonlyArray<string> | null {
   if (!st) return null;
-  const logPath = st.path;
-  try {
-    const cached = tailCache.get(logPath);
-    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.lines;
-    const offset = Math.max(0, st.size - TAIL_BYTES);
-    const buf = Buffer.alloc(st.size - offset);
-    const fd = openShipJobLog(st);
-    if (fd === null) return null;
-    let read = 0;
-    try {
-      read = NodeFS.readSync(fd, buf, 0, buf.length, offset);
-    } finally {
-      NodeFS.closeSync(fd);
-    }
-    const rawLines = buf.subarray(0, read).toString("utf8").split(/\r?\n/);
-    // A tail that starts mid-file starts mid-line too: drop the partial first line.
-    if (offset > 0) rawLines.shift();
-    while (rawLines.length > 0 && rawLines[rawLines.length - 1]!.trim() === "") rawLines.pop();
-    const lines = rawLines.slice(-TAIL_LINES).map(redactTailLine);
-    if (tailCache.size > 256) tailCache.clear();
-    tailCache.set(logPath, { mtimeMs: st.mtimeMs, size: st.size, lines });
-    return lines;
-  } catch {
-    return null;
-  }
+  const cached = tailCache.get(st.path);
+  if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.lines;
+  const offset = Math.max(0, st.size - TAIL_BYTES);
+  const bytes = readShipJobLogRange(st, offset);
+  if (bytes === null) return null;
+  const rawLines = bytes.toString("utf8").split(/\r?\n/);
+  // A tail that starts mid-file starts mid-line too: drop the partial first line.
+  if (offset > 0) rawLines.shift();
+  while (rawLines.length > 0 && rawLines[rawLines.length - 1]!.trim() === "") rawLines.pop();
+  const lines = rawLines.slice(-TAIL_LINES).map(redactTailLine);
+  if (tailCache.size > 256) tailCache.clear();
+  tailCache.set(st.path, { mtimeMs: st.mtimeMs, size: st.size, lines });
+  return lines;
 }
 
 /**
