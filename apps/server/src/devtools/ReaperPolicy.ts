@@ -1,11 +1,9 @@
-// @effect-diagnostics nodeBuiltinImport:off - Read/write ~/.config/reaper/policy.toml with allow-listed cleanup paths, hard-protected T3 history roots, and storage review prompt builder.
+// @effect-diagnostics nodeBuiltinImport:off - Read/write ~/.config/reaper/policy.toml with allow-listed cleanup paths, hard-protected T3 history roots, and storage review input checks.
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-
-import type { StorageManifest } from "./StorageManifest.ts";
 
 export interface ReaperPolicyRule {
   readonly path: string;
@@ -283,7 +281,7 @@ function checkAllowedReaperPath(canonicalPath: string, canonicalHome: string): s
   return `Refusing cleanup rule outside allowed roots (/tmp/*, /var/tmp/*, ~/.cache/*, /data/*/*, ~/Dev/*/*): ${canonicalPath}`;
 }
 
-function validateReaperPolicyRules(
+export function validateReaperPolicyRules(
   rules: ReadonlyArray<ReaperPolicyRule>,
   protectedHistoryRoots: ReadonlyArray<string>,
   homeDir: string = NodeOS.homedir(),
@@ -449,40 +447,4 @@ export async function writeReaperPolicy(
 
 export function nextStorageReviewRequestId(): string {
   return `storage-review:${NodeCrypto.randomUUID()}`;
-}
-
-export function buildStorageCleanupReviewPrompt(input: {
-  readonly host: string;
-  readonly mounts?: ReadonlyArray<StorageReviewMountInput>;
-  readonly manifest?: StorageManifest | null;
-}): string {
-  const mountSummary =
-    input.mounts && input.mounts.length > 0
-      ? input.mounts.map((m) => `- \`${m.mount}\`: ${m.usedPct.toFixed(1)}% used`).join("\n")
-      : "- Run `df -h` and inspect `/` and `/data` (or `/Users` on macOS).";
-  const protectedList = (input.manifest?.entries ?? [])
-    .filter((e) => e.trust === "history")
-    .map((e) => `- \`${e.path}\` (${e.provider})`)
-    .slice(0, 12)
-    .join("\n");
-
-  return [
-    `Audit disk usage on host **${input.host}** and produce a structured cleanup report before deleting anything.`,
-    "",
-    "Current mount pressure:",
-    mountSummary,
-    "",
-    "Instructions:",
-    "1. Inspect the largest directories and build/cache/worktree/artifact consumers on this machine (use SSH if inspecting a remote fleet host).",
-    "2. Classify every notable consumer into exactly one bucket:",
-    "   - **`garbage`**: dead caches, stale tmp/build artifacts, orphaned worktrees, old logs safe to delete immediately.",
-    "   - **`safe`**: reproducible artifacts/models/venvs that can be cleaned with minimal rebuild cost (or added as an `[[approved]]` rule in `~/.config/reaper/policy.toml`).",
-    "   - **`check`**: large datasets, checkpoints, or active project artifacts that need owner confirmation first.",
-    "   - **`preserve`**: active repos, T3 Code history/conversations, databases, credentials, and backups (NEVER delete).",
-    "3. Present a concise Markdown table with Path, Size, Bucket (`garbage` / `safe` / `check` / `preserve`), and Reason, plus proposed `~/.config/reaper/policy.toml` rules for recurring waste.",
-    "4. Do NOT delete anything until I confirm (except clearly safe dry-run commands).",
-    ...(protectedList
-      ? ["", "Hard-protected T3 history roots (always `preserve`):", protectedList]
-      : []),
-  ].join("\n");
 }

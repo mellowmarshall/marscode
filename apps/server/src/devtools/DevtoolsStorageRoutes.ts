@@ -1,7 +1,14 @@
 // Native ReaperService and storage HTTP routes for `/api/devtools/*`.
-import { CommandId, MessageId, type ModelSelection, ThreadId } from "@t3tools/contracts";
+import {
+  CommandId,
+  MessageId,
+  type ModelSelection,
+  ReaperProposalDecision,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
@@ -13,8 +20,12 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as StorageCleanup from "../storageCleanup.ts";
 import { jsonResponse, readJsonBody } from "./DevtoolsHttpContext.ts";
 import * as ReaperPolicy from "./ReaperPolicy.ts";
+import * as ReaperProposals from "./reaper/ReaperProposals.ts";
+import * as ReaperReviewPrompt from "./reaper/ReaperReviewPrompt.ts";
 import * as Reaper from "./reaper/ReaperService.ts";
 import * as StorageManifest from "./StorageManifest.ts";
+
+const decodeProposalDecision = Schema.decodeUnknownOption(ReaperProposalDecision);
 
 export const handleStorageAndToolRoute = Effect.fn("DevtoolsStorageRoutes.handle")(
   function* (input: { readonly method: "GET" | "POST"; readonly subPath: string }) {
@@ -42,6 +53,37 @@ export const handleStorageAndToolRoute = Effect.fn("DevtoolsStorageRoutes.handle
         data = yield* reaper.value.run({ cargoOnly: parsed.value.cargoOnly === true });
       }
       return jsonResponse({ ok: true, exitCode: 0, data }, 200);
+    }
+
+    if (
+      (method === "GET" && subPath === "/reaper/proposals") ||
+      (method === "POST" && subPath === "/reaper/proposals/decide")
+    ) {
+      const proposals = yield* Effect.serviceOption(ReaperProposals.ReaperProposals);
+      if (Option.isNone(proposals)) return jsonResponse({ error: "Reaper unavailable" }, 503);
+      if (method === "GET") {
+        return yield* proposals.value.list.pipe(
+          Effect.map((list) => jsonResponse({ proposals: list }, 200)),
+          Effect.catchTags({
+            ReaperProposalStoreError: (e) =>
+              Effect.succeed(jsonResponse({ error: e.message }, 500)),
+          }),
+        );
+      }
+      const parsed = yield* readJsonBody;
+      if (!parsed.ok) return jsonResponse({ error: parsed.error }, parsed.status);
+      const decision = decodeProposalDecision(parsed.value);
+      if (Option.isNone(decision)) return jsonResponse({ error: "Invalid decision" }, 400);
+      return yield* proposals.value.decide(decision.value).pipe(
+        Effect.map((list) => jsonResponse({ proposals: list }, 200)),
+        Effect.catchTags({
+          ReaperProposalNotFoundError: (e) =>
+            Effect.succeed(jsonResponse({ error: e.message }, 404)),
+          ReaperProposalRefusedError: (e) =>
+            Effect.succeed(jsonResponse({ error: e.message }, 400)),
+          ReaperProposalStoreError: (e) => Effect.succeed(jsonResponse({ error: e.message }, 500)),
+        }),
+      );
     }
 
     if (subPath === "/reaper/policy" && (method === "GET" || method === "POST")) {
@@ -145,8 +187,9 @@ export const handleStorageAndToolRoute = Effect.fn("DevtoolsStorageRoutes.handle
                 ...(m.avail_bytes !== undefined ? { availBytes: m.avail_bytes } : {}),
               }))
             : undefined);
-        const prompt = ReaperPolicy.buildStorageCleanupReviewPrompt({
+        const prompt = ReaperReviewPrompt.buildStorageCleanupReviewPrompt({
           host: targetHost,
+          isLocalHost: targetHost.toLowerCase() === manifest.host.toLowerCase(),
           ...(bodyMounts ? { mounts: bodyMounts } : {}),
           manifest,
         });
