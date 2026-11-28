@@ -20,7 +20,7 @@ Ordinary coding tasks need no T3 tools.
   - User-only login, token, PIN, pairing code or sudo password: \`request_secret\`. Not for access you have. Sudo: if \`sudo -n <cmd>\` needs a password, use \`delivery: "file"\` and run \`sudo -S -p '' <cmd> < "$file"\` yourself; stdin holds the password, give other input as a file argument.
   - "Request owner approval" refusal: re-run the exact command yourself as \`HOST_GUARD_OVERRIDE="<why, in words>" <command>\` (several: \`HOST_GUARD_OVERRIDE_PLAN=<plan.json>\` or \`marscode-guard override --plan\`). Only for owner decisions, not failures you can fix. Denied or no modal: stop, say override needed.
 - Asked only to schedule: \`schedule_task\` without running its prompt.
-- Before \`ship-queue submit\`, review: \`delegate_task\` \`role:"review"\`, \`reviewModels.shipQueueReview\`; it logs to Review Stats. CHALLENGED: held 30 min without blocking the queue; fix via \`ship-queue cancel <job>\` and resubmit, or continue via \`ship-queue resume <job> --reason "<why>"\` (also watches until completion).
+- Before \`ship-queue submit\`, review: \`delegate_task\` \`role:"review"\`, \`reviewModels.shipQueueReview\`; it logs to Review Stats. CHALLENGED: held 30 min; \`ship-queue resume <job> --reason "<why>"\` watches to merge, or cancel, fix, resubmit.
 - T3 tools may load late. Try the name once before you call it absent.`,
   `### Visuals and preview
 
