@@ -19,6 +19,7 @@ import {
   collectJobLoadTargets,
   indexProcessTable,
   JobProcessLoadTracker,
+  keepUnreusedRoots,
   shouldPublishJobLoad,
   type ProcessTableRow,
 } from "./jobProcessLoad.ts";
@@ -110,7 +111,7 @@ describe("job process load", () => {
     const targets = collectJobLoadTargets({
       localHostname: "host-a",
       cernoSummaries: [
-        summary({ id: "cerno:1", pidStats: { pid: 11, alive: true } }),
+        summary({ id: "cerno:11:500", pidStats: { pid: 11, alive: true } }),
         summary({ id: "cerno:2", pidStats: { pid: 12, alive: true }, binding: { host: "b" } }),
         summary({ id: "cerno:3", pidStats: { pid: 13, alive: false }, state: "done" }),
       ],
@@ -119,19 +120,39 @@ describe("job process load", () => {
         summary({ id: "bg:unmatched" }),
         summary({ id: "bg:ended", state: "exited" }),
       ],
-      rootPidForBackgroundJob: (id) => (id === "bg:unmatched" ? undefined : 21),
+      rootForBackgroundJob: (id) =>
+        id === "bg:unmatched" ? undefined : { pid: 21, startTicks: 600 },
     });
     expect(targets).toEqual([
-      { id: "cerno:1", rootPid: 11 },
-      { id: "bg:matched", rootPid: 21 },
+      { id: "cerno:11:500", rootPid: 11, rootStartTicks: 500 },
+      { id: "bg:matched", rootPid: 21, rootStartTicks: 600 },
     ]);
+  });
+
+  it("never counts a root PID that a new process reused", async () => {
+    const targets = [
+      { id: "cerno:11:500", rootPid: 11, rootStartTicks: 500 },
+      { id: "cerno:12:700", rootPid: 12, rootStartTicks: 700 },
+      { id: "cerno:13:800", rootPid: 13, rootStartTicks: 800 },
+      { id: "cerno:14", rootPid: 14, rootStartTicks: null },
+    ];
+    const ticksNow = new Map([
+      [11, 500],
+      [12, 701],
+      [14, 900],
+    ]);
+    const live = await keepUnreusedRoots(targets, async (pid) => ticksNow.get(pid) ?? null);
+    expect(live.map((t) => t.id)).toEqual(["cerno:11:500"]);
+    // Where start ticks cannot be read at all (not Linux), both sides are null and the job stays.
+    const unreadable = await keepUnreusedRoots([targets[3]!], async () => null);
+    expect(unreadable.map((t) => t.id)).toEqual(["cerno:14"]);
   });
 
   it("keeps the published value through small changes, drops vanished and stale loads", () => {
     let now = FIXED_NOW_MS;
     const tracker = new JobProcessLoadTracker(() => now);
     const job = summary({ id: "cerno:1" });
-    const target = [{ id: "cerno:1", rootPid: ROOT_PID }];
+    const target = [{ id: "cerno:1", rootPid: ROOT_PID, rootStartTicks: null }];
 
     expect(tracker.attach(job).load).toBeUndefined();
     expect(tracker.apply(jobTable(80, 300), target)).toEqual(["cerno:1"]);
@@ -263,7 +284,7 @@ describe("JobRegistry process load", () => {
       expect(before?.load).toBeUndefined();
       yield* Effect.promise(() => vi.waitFor(() => expect(chunks.join("")).toContain("snapshot")));
 
-      registry.applyProcessTable(jobTable(80, 300));
+      yield* Effect.promise(() => registry.applyProcessTable(jobTable(80, 300)));
       const expectedLoad = { cpuPct: 173, memBytes: 758 * MiB, processCount: 4 };
       const [after] = yield* Effect.promise(() => registry.listJobs({ includeCmdline: false }));
       expect(after?.load).toEqual(expectedLoad);
@@ -276,7 +297,7 @@ describe("JobRegistry process load", () => {
         ),
       );
 
-      registry.applyProcessTable(jobTable(81, 310));
+      yield* Effect.promise(() => registry.applyProcessTable(jobTable(81, 310)));
       const [steady] = yield* Effect.promise(() => registry.listJobs());
       expect(steady?.load).toEqual(expectedLoad);
       expect(steady?.revision).toBe(after?.revision);
@@ -338,7 +359,7 @@ describe("JobRegistry process load", () => {
         }),
       );
 
-      registry.applyProcessTable(jobTable(40, 200));
+      yield* Effect.promise(() => registry.applyProcessTable(jobTable(40, 200)));
       const [job] = yield* Effect.promise(() => registry.listJobs({ threadId }));
       expect(job?.id).toBe(bgId);
       expect(job?.load).toEqual({ cpuPct: 93, memBytes: 558 * MiB, processCount: 4 });

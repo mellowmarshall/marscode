@@ -331,9 +331,13 @@ export function FleetJobsAndProcsPanel({
           </span>
           <Tooltip>
             <TooltipTrigger render={<span />}>
-              <T>CPU</T>
+              <T>Avg CPU</T>
             </TooltipTrigger>
-            <TooltipPopup side="top">{gt("Share of the host's CPU")}</TooltipPopup>
+            <TooltipPopup side="top">
+              {gt(
+                "Average share of the host's CPU over each process's lifetime, not its use right now",
+              )}
+            </TooltipPopup>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger render={<span />}>

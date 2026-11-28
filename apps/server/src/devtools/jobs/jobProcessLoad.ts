@@ -74,6 +74,26 @@ export function shouldPublishJobLoad(
 export interface JobLoadTarget {
   readonly id: string;
   readonly rootPid: number;
+  /** The root's start time in clock ticks when it was tracked; null when unknown. */
+  readonly rootStartTicks: number | null;
+}
+
+/** Start ticks from a cerno job id (`cerno:<pid>:<ticks>`); null when the id has none. */
+export function cernoIdStartTicks(id: string): number | null {
+  const ticks = Number(id.split(":")[2]);
+  return Number.isSafeInteger(ticks) && ticks >= 0 ? ticks : null;
+}
+
+/**
+ * Keeps targets whose root PID still has the start ticks it was tracked with, so a reused PID
+ * never lends its load to an old job. Where ticks cannot be read (not Linux) both sides are null.
+ */
+export async function keepUnreusedRoots(
+  targets: ReadonlyArray<JobLoadTarget>,
+  readStartTicks: (pid: number) => Promise<number | null>,
+): Promise<ReadonlyArray<JobLoadTarget>> {
+  const current = await Promise.all(targets.map((t) => readStartTicks(t.rootPid)));
+  return targets.filter((t, i) => current[i] === t.rootStartTicks);
 }
 
 /** Live local jobs with a known root PID: visible cerno jobs, and background jobs matched to one. */
@@ -81,18 +101,22 @@ export function collectJobLoadTargets(input: {
   readonly localHostname: string;
   readonly cernoSummaries: ReadonlyArray<JobSummary>;
   readonly backgroundSummaries: ReadonlyArray<JobSummary>;
-  readonly rootPidForBackgroundJob: (id: string) => number | undefined;
+  readonly rootForBackgroundJob: (
+    id: string,
+  ) => { readonly pid: number; readonly startTicks: number | null } | undefined;
 }): ReadonlyArray<JobLoadTarget> {
   const isLiveLocal = (s: JobSummary) =>
     !isTerminalJobState(s.state) && s.binding.host === input.localHostname;
   const out: JobLoadTarget[] = [];
   for (const s of input.cernoSummaries) {
-    if (isLiveLocal(s) && s.pidStats?.alive) out.push({ id: s.id, rootPid: s.pidStats.pid });
+    if (isLiveLocal(s) && s.pidStats?.alive) {
+      out.push({ id: s.id, rootPid: s.pidStats.pid, rootStartTicks: cernoIdStartTicks(s.id) });
+    }
   }
   for (const s of input.backgroundSummaries) {
     if (!isLiveLocal(s)) continue;
-    const rootPid = s.pidStats?.alive ? s.pidStats.pid : input.rootPidForBackgroundJob(s.id);
-    if (rootPid !== undefined) out.push({ id: s.id, rootPid });
+    const root = input.rootForBackgroundJob(s.id);
+    if (root) out.push({ id: s.id, rootPid: root.pid, rootStartTicks: root.startTicks });
   }
   return out;
 }

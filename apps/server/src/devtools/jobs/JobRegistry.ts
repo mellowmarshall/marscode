@@ -25,6 +25,7 @@ import { JobEventBroadcaster } from "./JobEventStream.ts";
 import {
   collectJobLoadTargets,
   JobProcessLoadTracker,
+  keepUnreusedRoots,
   type ProcessTableRow,
 } from "./jobProcessLoad.ts";
 import { stripJobSummaryCmdline } from "./managedJobHelpers.ts";
@@ -73,7 +74,8 @@ export interface JobRegistryService {
   ): ReadableStream<Uint8Array>;
   setDefaultStallMinutes(minutes: number): void;
   /** Feeds the host process table sampled by the Fleet sessions scan into live job loads. */
-  applyProcessTable(rows: ReadonlyArray<ProcessTableRow>): void;
+  /** Settles once the table's loads are applied; callers may ignore it. */
+  applyProcessTable(rows: ReadonlyArray<ProcessTableRow>): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -83,6 +85,7 @@ export class JobRegistry extends Context.Service<JobRegistry, JobRegistryService
 
 export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistryService {
   const loads = new JobProcessLoadTracker(() => Date.now());
+  let processTableSeq = 0;
   const formatSummaryForScope = (summary: JobSummary, includeCmdline: boolean): JobSummary => {
     const withLoad = loads.attach(summary);
     return includeCmdline ? withLoad : stripJobSummaryCmdline(withLoad);
@@ -341,18 +344,23 @@ export function makeJobRegistry(options: JobRegistryOptions = {}): JobRegistrySe
       backgroundBridge?.setDefaultStallMinutes(minutes);
     },
 
-    applyProcessTable(rows) {
-      const candidates = cernoBridge?.listMatchCandidates() ?? [];
+    async applyProcessTable(rows) {
+      if (!cernoBridge) return;
+      const candidates = cernoBridge.listMatchCandidates();
       const targets = collectJobLoadTargets({
         localHostname: cernoHostname,
         cernoSummaries: readVisibleCernoSummaries(true),
         backgroundSummaries: (backgroundBridge?.listSummaries() ?? []).filter(
           (s) => !visibility?.suppressedBgIds.has(s.id),
         ),
-        rootPidForBackgroundJob: (id) => visibility?.liveCernoPidForBg(id, candidates),
+        rootForBackgroundJob: (id) => visibility?.liveCernoRootForBg(id, candidates),
       });
+      const seq = ++processTableSeq;
+      const live = await keepUnreusedRoots(targets, (pid) => cernoBridge.readStartTicks(pid));
+      // A newer table supersedes this one while its start ticks were being read.
+      if (seq !== processTableSeq) return;
       // Non-urgent: load deltas ride the broadcaster's 1 s coalescing window.
-      for (const id of loads.apply(rows, targets)) broadcaster.markDirty(id, false);
+      for (const id of loads.apply(rows, live)) broadcaster.markDirty(id, false);
     },
 
     async dispose() {

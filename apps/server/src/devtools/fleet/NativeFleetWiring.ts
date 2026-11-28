@@ -96,7 +96,7 @@ export const makeNativeFleetFromContext = Effect.fn("NativeFleet.makeFromContext
           : undefined,
       readWorktrees,
       onProcessTable: Option.isSome(jobRegistryOpt)
-        ? (rows) => jobRegistryOpt.value.applyProcessTable(rows)
+        ? (rows) => void jobRegistryOpt.value.applyProcessTable(rows)
         : undefined,
       listPeerLinks: Option.isSome(peerLinksOpt)
         ? () =>

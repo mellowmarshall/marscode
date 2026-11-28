@@ -172,6 +172,11 @@ export class CernoProcessBridge {
     }));
   }
 
+  /** The process start time in clock ticks, through the same reader the bridge tracks jobs with. */
+  readStartTicks(pid: number): Promise<number | null> {
+    return this.readProcStartTicksFn(pid);
+  }
+
   getSummary(id: string): JobSummary | undefined {
     const rec = this.jobs.get(id);
     return rec ? buildCernoSummary(rec) : undefined;
