@@ -44,7 +44,7 @@ const READ_ONLY_ACTIVE_RUNS_SH = [
   "    raise SystemExit(0)",
   "conn = None",
   "try:",
-  '    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2.0)',
+  '    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=0.5)',
   "    row = conn.execute(",
   '        "SELECT count(*) FROM orchestration_v2_projection_runs "',
   "        \"WHERE status IN ('queued','preparing','starting','running','waiting')\"",
@@ -74,7 +74,10 @@ const READ_ONLY_ACTIVE_RUNS_SH = [
   "fi",
 ].join("\n");
 
-/** Probes whether a linux-x64 host already has `<version>` staged for exact commit `<headSha>`. */
+/**
+ * Probes whether a linux-x64 host already has `<version>` staged for exact commit `<headSha>`,
+ * either in the live version directory or in the immutable per-SHA ready directory.
+ */
 export function buildLinuxStageProbeScript(input: {
   readonly version: string;
   readonly headSha: string;
@@ -87,8 +90,13 @@ export function buildLinuxStageProbeScript(input: {
   return [
     "set -eu",
     `T3_HOME=${remotePathExpr(input.t3Home)}`,
-    `TARGET="$T3_HOME/runtime/versions"/${qVer}`,
-    `if [ -x "$TARGET/t3" ] && [ "$(cat "$TARGET/.install-complete" 2>/dev/null || true)" = ${qVer} ] && [ "$(cat "$TARGET/.marscode-sha" 2>/dev/null || true)" = ${qSha} ]; then`,
+    'VERSIONS_DIR="$T3_HOME/runtime/versions"',
+    `TARGET="$VERSIONS_DIR"/${qVer}`,
+    `READY="$VERSIONS_DIR/.marscode-ready-"${qSha}`,
+    "is_staged() {",
+    `  [ -x "$1/t3" ] && [ "$(cat "$1/.install-complete" 2>/dev/null || true)" = ${qVer} ] && [ "$(cat "$1/.marscode-sha" 2>/dev/null || true)" = ${qSha} ]`,
+    "}",
+    'if is_staged "$TARGET" || is_staged "$READY"; then',
     '  printf "STAGED\\n"',
     "else",
     '  printf "NEED_STAGE\\n"',
@@ -97,9 +105,9 @@ export function buildLinuxStageProbeScript(input: {
 }
 
 /**
- * Builds the remote POSIX shell script that atomically unpacks an uploaded tarball into
- * `$T3_HOME/runtime/versions/<version>` pinned to `<headSha>`, checks read-only SQLite active
- * runs, and activates via `t3 update <version> --yes --allow-downgrade` only when idle.
+ * Builds the remote POSIX shell script that unpacks an uploaded tarball into an immutable per-SHA
+ * ready directory, checks read-only SQLite active runs BEFORE touching `$TARGET_DIR`, and only
+ * swaps into `$TARGET_DIR` + activates via `t3 update <version> --yes --allow-downgrade` when idle.
  */
 export function buildLinuxActivateScript(input: {
   readonly version: string;
@@ -122,9 +130,9 @@ export function buildLinuxActivateScript(input: {
         '"$STAGING/t3" --version >/dev/null',
         `printf '%s\\n' ${qVer} > "$STAGING/.install-complete"`,
         `printf '%s\\n' ${qSha} > "$STAGING/.marscode-sha"`,
-        'rm -rf "$TARGET_DIR"',
-        'mv "$STAGING" "$TARGET_DIR"',
-        'rm -rf "$TARGET_DIR/${STAGING##*/}" "$ARCHIVE"',
+        'rm -rf "$READY_DIR"',
+        'mv "$STAGING" "$READY_DIR"',
+        'rm -rf "$READY_DIR/${STAGING##*/}" "$ARCHIVE"',
         "trap - EXIT HUP INT TERM",
       ].join("\n")
     : "";
@@ -134,12 +142,23 @@ export function buildLinuxActivateScript(input: {
     `T3_HOME=${t3HomeExpr}`,
     'VERSIONS_DIR="$T3_HOME/runtime/versions"',
     `TARGET_DIR="$VERSIONS_DIR"/${qVer}`,
+    `READY_DIR="$VERSIONS_DIR/.marscode-ready-"${qSha}`,
+    "is_staged() {",
+    `  [ -x "$1/t3" ] && [ "$(cat "$1/.install-complete" 2>/dev/null || true)" = ${qVer} ] && [ "$(cat "$1/.marscode-sha" 2>/dev/null || true)" = ${qSha} ]`,
+    "}",
     unpackBlock,
-    `if [ ! -x "$TARGET_DIR/t3" ] || [ "$(cat "$TARGET_DIR/.install-complete" 2>/dev/null || true)" != ${qVer} ] || [ "$(cat "$TARGET_DIR/.marscode-sha" 2>/dev/null || true)" != ${qSha} ]; then`,
+    'if ! is_staged "$READY_DIR" && ! is_staged "$TARGET_DIR"; then',
     '  printf "MISSING_STAGE\\n"',
     "  exit 2",
     "fi",
     READ_ONLY_ACTIVE_RUNS_SH,
+    // Only move the new build into the live version path after confirming zero active runs.
+    'if ! is_staged "$TARGET_DIR"; then',
+    '  rm -rf "$TARGET_DIR"',
+    '  mv "$READY_DIR" "$TARGET_DIR"',
+    "else",
+    '  rm -rf "$READY_DIR"',
+    "fi",
     'export T3CODE_HOME="$T3_HOME"',
     'export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"',
     `"$TARGET_DIR/t3" update ${qVer} --yes --allow-downgrade`,
@@ -162,8 +181,9 @@ export function buildLinuxActivateScript(input: {
 
 /**
  * Builds the remote POSIX shell script run over `ssh host sh -s` on a macOS ARM64 host to update
- * its warm worktree, build `--platform mac --target dir --arch arm64` logged to disk, check active
- * runs read-only, quit gracefully when running and idle, atomically swap the `.app`, and relaunch.
+ * its warm worktree under strict `sh -eu`, verify HEAD matches `<headSha>`, build the `.app`
+ * bundle logged to disk, check active runs read-only, quit gracefully without self-matching `ps`,
+ * swap `/Applications/<App>.app` safely across interruption, and relaunch if it was running.
  */
 export function buildMacDeployScript(input: {
   readonly headSha: string;
@@ -201,6 +221,7 @@ export function buildMacDeployScript(input: {
     'REOPEN_MARKER="$DATA_ROOT/.reopen-app"',
     'LOCK_DIR="$DATA_ROOT/.sync.lock"',
     'APP_STAGE=""',
+    'APP_OLD=""',
     'mkdir -p "$DATA_ROOT" "$STAGED_ROOT"',
     "acquire_lock() {",
     '  if mkdir "$LOCK_DIR" 2>/dev/null; then',
@@ -225,17 +246,28 @@ export function buildMacDeployScript(input: {
     "  fi",
     "  return 1",
     "}",
+    "cleanup() {",
+    '  if [ -n "${APP_OLD:-}" ] && [ -e "$APP_OLD" ] && [ ! -e "$APP_PATH" ]; then',
+    '    mv "$APP_OLD" "$APP_PATH" 2>/dev/null || true',
+    "  fi",
+    '  if [ -n "${APP_STAGE:-}" ] && [ -e "$APP_STAGE" ]; then',
+    '    rm -rf "$APP_STAGE" 2>/dev/null || true',
+    "  fi",
+    '  rm -rf "$LOCK_DIR" 2>/dev/null || true',
+    "}",
     "if ! acquire_lock; then",
     '  printf "DEFERRED sync_locked\\n"',
     "  exit 0",
     "fi",
-    'trap \'rm -rf "${APP_STAGE:-}" "$LOCK_DIR"\' EXIT HUP INT TERM',
+    "trap cleanup EXIT HUP INT TERM",
     'if [ ! -d "$REPO/.git" ]; then',
     '  printf "MISSING_REPO %s\\n" "$REPO" >&2',
     "  exit 2",
     "fi",
     'if [ ! -d "$STAGED_DIR/app.bundle" ]; then',
-    "  (",
+    // Run the build in a child `sh -eu` so `if !` never suppresses `set -e` inside the build steps.
+    "  if ! sh -eu -c '",
+    '    REPO="$1"; WORKTREE="$2"; HEAD_SHA="$3"; VERSION="$4"',
     '    git -C "$REPO" fetch --quiet origin main',
     '    if [ ! -e "$WORKTREE/.git" ]; then',
     '      git -C "$REPO" worktree add --detach "$WORKTREE" "$HEAD_SHA"',
@@ -244,13 +276,18 @@ export function buildMacDeployScript(input: {
     '      git -C "$WORKTREE" clean -fd --quiet',
     '      git -C "$WORKTREE" checkout --detach --quiet "$HEAD_SHA"',
     "    fi",
+    '    ACTUAL_SHA="$(git -C "$WORKTREE" rev-parse HEAD)"',
+    '    [ "$ACTUAL_SHA" = "$HEAD_SHA" ] || { printf "SHA_MISMATCH expected=%s actual=%s\\n" "$HEAD_SHA" "$ACTUAL_SHA" >&2; exit 1; }',
     '    cd "$WORKTREE"',
     "    export VP_GIT_HOOKS=0",
     "    unset CARGO_TARGET_DIR T3CODE_DESKTOP_OUTPUT_DIR T3CODE_DESKTOP_MOCK_UPDATES || true",
     '    command -v vp >/dev/null 2>&1 || { printf "VP_NOT_FOUND\\n" >&2; exit 1; }',
     "    vp install --frozen-lockfile --ignore-scripts",
     '    T3CODE_DESKTOP_VERSION="$VERSION" node scripts/build-desktop-artifact.ts --platform mac --target dir --arch arm64',
-    '  ) >"$BUILD_LOG" 2>&1 || { tail -n 40 "$BUILD_LOG" >&2; exit 1; }',
+    '  \' _ "$REPO" "$WORKTREE" "$HEAD_SHA" "$VERSION" >"$BUILD_LOG" 2>&1; then',
+    '    tail -n 40 "$BUILD_LOG" >&2',
+    "    exit 1",
+    "  fi",
     '  BUILT_APP="$(find "$WORKTREE/release/mac-arm64" -maxdepth 1 -name "*.app" -type d | head -n 1)"',
     '  [ -n "$BUILT_APP" ] || { printf "NO_MAC_APP_BUILT\\n" >&2; exit 1; }',
     '  rm -rf "$STAGED_DIR.tmp" "$STAGED_DIR"',
@@ -260,8 +297,12 @@ export function buildMacDeployScript(input: {
     '  find "$STAGED_ROOT" -mindepth 1 -maxdepth 1 ! -name "$HEAD_SHA" -exec rm -rf {} +',
     "fi",
     READ_ONLY_ACTIVE_RUNS_SH,
+    // Pass APP_PREFIX via environment to awk so it never appears in any pipeline command's argv.
     "app_running() {",
-    '  ps -axo command= | grep -Fq "$APP_PATH/Contents/MacOS/"',
+    '  ps -axo command= | APP_PREFIX="$APP_PATH/Contents/MacOS/" awk \'',
+    '    index($0, ENVIRON["APP_PREFIX"]) > 0 { found = 1 }',
+    "    END { exit(found ? 0 : 1) }",
+    "  '",
     "}",
     "WAS_RUNNING=0",
     'if [ -f "$REOPEN_MARKER" ]; then WAS_RUNNING=1; fi',
@@ -290,13 +331,18 @@ export function buildMacDeployScript(input: {
     'APP_OLD="$APP_PARENT/.marscode-prev-$$.app"',
     'rm -rf "$APP_STAGE" "$APP_OLD"',
     'ditto "$STAGED_DIR/app.bundle" "$APP_STAGE"',
+    // Shield the atomic rename window from signals; cleanup restores APP_OLD if anything exits mid-swap.
+    "trap '' HUP INT TERM",
     'if [ -e "$APP_PATH" ]; then mv "$APP_PATH" "$APP_OLD"; fi',
     'if ! mv "$APP_STAGE" "$APP_PATH"; then',
     '  if [ -e "$APP_OLD" ]; then mv "$APP_OLD" "$APP_PATH"; fi',
+    "  trap cleanup EXIT HUP INT TERM",
     "  exit 1",
     "fi",
     'APP_STAGE=""',
+    "trap cleanup EXIT HUP INT TERM",
     'rm -rf "$APP_OLD" "$STAGED_DIR"',
+    'APP_OLD=""',
     'if [ "$WAS_RUNNING" -eq 1 ]; then',
     '  open -a "$APP_PATH"',
     '  rm -f "$REOPEN_MARKER"',

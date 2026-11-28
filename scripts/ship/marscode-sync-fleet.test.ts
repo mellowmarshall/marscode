@@ -206,6 +206,24 @@ describe("fleet version selection and diff planning", () => {
     expect(plan.fleet.needsLinuxBuild).toBe(false);
     expect(plan.needsWorktreeUpdate).toBe(false);
 
+    // Server trust checks in packages/host-guards/ must trigger linux-x64-server rollout.
+    const guardPlan = planSync({
+      headSha: "sha-2",
+      state: syncedState("sha-1"),
+      existingBinaries: ALL_BINS,
+      appImageExists: true,
+      hasNodeModules: true,
+      jobsBehind: 0,
+      force: false,
+      skipApp: true,
+      fleetHosts: SAMPLE_HOSTS,
+      desktopHost: { eligible: true },
+      listChangedFiles: () => ["packages/host-guards/src/queueTrust.ts"],
+    });
+    expect(
+      Object.fromEntries(guardPlan.fleet.hosts.map((e) => [e.host.name, e.decision.action])),
+    ).toEqual({ "worker-a": "build", "wsl-box": "build", "mac-laptop": "skip" });
+
     const singleHost = planSync({
       headSha: "sha-2",
       state: syncedState("sha-1"),
@@ -296,7 +314,7 @@ describe("fleet version selection and diff planning", () => {
 });
 
 describe("real POSIX shell execution of remote Linux and macOS scripts", () => {
-  it("runs Linux probe and activate script against real SQLite states (active, locked, missing table, stale sha, idle)", () => {
+  it("runs Linux probe and activate script against real SQLite states (active, live collision, locked, missing table, corrupt, idle)", () => {
     const dir = makeTempDir("marscode-linux-sh-");
     const t3Home = NodePath.join(dir, "t3home");
     const stubBin = NodePath.join(dir, "bin");
@@ -304,24 +322,38 @@ describe("real POSIX shell execution of remote Linux and macOS scripts", () => {
     const oldSha = "1111111111111111111111111111111111111111";
     const newSha = "2222222222222222222222222222222222222222";
     const verDir = NodePath.join(t3Home, "runtime/versions", version);
+    const readyDir = NodePath.join(t3Home, "runtime/versions", `.marscode-ready-${newSha}`);
     const dbPath = NodePath.join(t3Home, "userdata/statev2.sqlite");
     NodeFS.mkdirSync(NodePath.dirname(dbPath), { recursive: true });
     NodeFS.mkdirSync(verDir, { recursive: true });
     const updateLog = NodePath.join(dir, "t3-update.log");
     writeExecutable(
       NodePath.join(verDir, "t3"),
-      `#!/bin/sh\necho "$*" >> ${JSON.stringify(updateLog)}\nexit 0\n`,
+      `#!/bin/sh\necho "OLD $*" >> ${JSON.stringify(updateLog)}\nexit 0\n`,
     );
     NodeFS.writeFileSync(NodePath.join(verDir, ".install-complete"), `${version}\n`);
     NodeFS.writeFileSync(NodePath.join(verDir, ".marscode-sha"), `${oldSha}\n`);
-    // Stub systemctl so the script checks our stub cleanly.
+    // Build a real tarball for newSha to exercise version-collision unpacking without touching live verDir.
+    const tarballSrc = NodePath.join(dir, "tar-src/t3-bundle");
+    writeExecutable(
+      NodePath.join(tarballSrc, "t3"),
+      `#!/bin/sh\nif [ "$1" = "--version" ]; then echo ${version}; exit 0; fi\necho "NEW $*" >> ${JSON.stringify(updateLog)}\nexit 0\n`,
+    );
+    const archivePath = NodePath.join(dir, "new-release.tar.gz");
+    const tarRes = NodeChildProcess.spawnSync(
+      "tar",
+      ["-czf", archivePath, "-C", NodePath.join(dir, "tar-src"), "t3-bundle"],
+      { encoding: "utf8" },
+    );
+    expect(tarRes.status).toBe(0);
+
     writeExecutable(
       NodePath.join(stubBin, "systemctl"),
       '#!/bin/sh\nif [ "$2" = "cat" ]; then exit 0; fi\nif [ "$2" = "is-active" ]; then [ "${3:-}" = "--quiet" ] || echo active; exit 0; fi\nexit 0\n',
     );
     const env = { ...process.env, PATH: `${stubBin}:${process.env.PATH ?? ""}` };
 
-    // 1. Stale SHA for same version string must report NEED_STAGE (H4).
+    // 1. Stale SHA for same version string must report NEED_STAGE.
     const probeStale = NodeChildProcess.spawnSync("sh", ["-s"], {
       input: buildLinuxStageProbeScript({ version, headSha: newSha, t3Home }),
       encoding: "utf8",
@@ -330,10 +362,7 @@ describe("real POSIX shell execution of remote Linux and macOS scripts", () => {
     expect(probeStale.status).toBe(0);
     expect(probeStale.stdout.trim()).toBe("NEED_STAGE");
 
-    // Pin to newSha for activation tests.
-    NodeFS.writeFileSync(NodePath.join(verDir, ".marscode-sha"), `${newSha}\n`);
-
-    // 2. Real SQLite DB with an active run must defer (never call t3 update).
+    // 2. Active run + same-version collision: unpacks into immutable readyDir and leaves live verDir untouched.
     runPython(
       `import sqlite3, sys
 c = sqlite3.connect(sys.argv[1])
@@ -342,16 +371,68 @@ c.execute("INSERT INTO orchestration_v2_projection_runs VALUES ('r1', 'running')
 c.commit(); c.close()`,
       [dbPath],
     );
-    const activeRes = NodeChildProcess.spawnSync("sh", ["-s"], {
+    const collisionRes = NodeChildProcess.spawnSync("sh", ["-s"], {
+      input: buildLinuxActivateScript({
+        version,
+        headSha: newSha,
+        t3Home,
+        remoteArchivePath: archivePath,
+      }),
+      encoding: "utf8",
+      env,
+    });
+    expect(collisionRes.status).toBe(0);
+    expect(collisionRes.stdout.trim()).toBe("DEFERRED active_runs=1");
+    expect(NodeFS.existsSync(updateLog)).toBe(false);
+    // Live version dir still holds oldSha; newSha sits in readyDir so probe now says STAGED.
+    expect(NodeFS.readFileSync(NodePath.join(verDir, ".marscode-sha"), "utf8").trim()).toBe(oldSha);
+    expect(NodeFS.readFileSync(NodePath.join(readyDir, ".marscode-sha"), "utf8").trim()).toBe(
+      newSha,
+    );
+    const probeReady = NodeChildProcess.spawnSync("sh", ["-s"], {
+      input: buildLinuxStageProbeScript({ version, headSha: newSha, t3Home }),
+      encoding: "utf8",
+      env,
+    });
+    expect(probeReady.stdout.trim()).toBe("STAGED");
+
+    // 3. Real locked SQLite DB (BEGIN EXCLUSIVE held by another process) must defer as active_runs_unknown.
+    const lockReady = NodePath.join(dir, "db.locked");
+    const locker = NodeChildProcess.spawn(
+      "python3",
+      [
+        "-c",
+        `import sqlite3, sys, time
+c = sqlite3.connect(sys.argv[1], isolation_level=None)
+c.execute("BEGIN EXCLUSIVE")
+open(sys.argv[2], "w").write("1")
+time.sleep(10)`,
+        dbPath,
+        lockReady,
+      ],
+      { stdio: "ignore" },
+    );
+    cleanups.push(() => {
+      try {
+        locker.kill("SIGKILL");
+      } catch {
+        // already exited
+      }
+    });
+    for (let i = 0; i < 150 && !NodeFS.existsSync(lockReady); i += 1) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+    expect(NodeFS.existsSync(lockReady)).toBe(true);
+    const lockedRes = NodeChildProcess.spawnSync("sh", ["-s"], {
       input: buildLinuxActivateScript({ version, headSha: newSha, t3Home }),
       encoding: "utf8",
       env,
     });
-    expect(activeRes.status).toBe(0);
-    expect(activeRes.stdout.trim()).toBe("DEFERRED active_runs=1");
-    expect(NodeFS.existsSync(updateLog)).toBe(false);
+    locker.kill("SIGKILL");
+    expect(lockedRes.status).toBe(0);
+    expect(lockedRes.stdout.trim()).toBe("DEFERRED active_runs_unknown");
 
-    // 3. Corrupt/unreadable SQLite file must defer as active_runs_unknown (H1).
+    // 4. Corrupt SQLite file also defers as active_runs_unknown.
     const corruptPath = NodePath.join(dir, "t3corrupt");
     const corruptVerDir = NodePath.join(corruptPath, "runtime/versions", version);
     NodeFS.mkdirSync(NodePath.join(corruptPath, "userdata"), { recursive: true });
@@ -368,7 +449,31 @@ c.commit(); c.close()`,
     expect(corruptRes.status).toBe(0);
     expect(corruptRes.stdout.trim()).toBe("DEFERRED active_runs_unknown");
 
-    // 4. Mark run completed -> activates cleanly via `t3 update <ver> --yes --allow-downgrade`.
+    // 5. Missing orchestration_v2_projection_runs table on a fresh DB counts as 0 active runs and activates.
+    const freshPath = NodePath.join(dir, "t3fresh");
+    const freshVerDir = NodePath.join(freshPath, "runtime/versions", version);
+    const freshDb = NodePath.join(freshPath, "userdata/statev2.sqlite");
+    NodeFS.mkdirSync(NodePath.dirname(freshDb), { recursive: true });
+    NodeFS.mkdirSync(freshVerDir, { recursive: true });
+    writeExecutable(NodePath.join(freshVerDir, "t3"), "#!/bin/sh\nexit 0\n");
+    NodeFS.writeFileSync(NodePath.join(freshVerDir, ".install-complete"), `${version}\n`);
+    NodeFS.writeFileSync(NodePath.join(freshVerDir, ".marscode-sha"), `${newSha}\n`);
+    runPython(
+      `import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("CREATE TABLE unrelated (id INTEGER)")
+c.commit(); c.close()`,
+      [freshDb],
+    );
+    const freshRes = NodeChildProcess.spawnSync("sh", ["-s"], {
+      input: buildLinuxActivateScript({ version, headSha: newSha, t3Home: freshPath }),
+      encoding: "utf8",
+      env,
+    });
+    expect(freshRes.status).toBe(0);
+    expect(freshRes.stdout.trim()).toBe(`ACTIVATED ${version}`);
+
+    // 6. Once the active run completes, readyDir swaps into verDir and activates the NEW binary.
     runPython(
       `import sqlite3, sys
 c = sqlite3.connect(sys.argv[1])
@@ -383,12 +488,13 @@ c.commit(); c.close()`,
     });
     expect(idleRes.status).toBe(0);
     expect(idleRes.stdout.trim()).toBe(`ACTIVATED ${version}`);
+    expect(NodeFS.readFileSync(NodePath.join(verDir, ".marscode-sha"), "utf8").trim()).toBe(newSha);
     expect(NodeFS.readFileSync(updateLog, "utf8")).toContain(
-      `update ${version} --yes --allow-downgrade`,
+      `NEW update ${version} --yes --allow-downgrade`,
     );
   });
 
-  it("runs macOS deploy script with parentheses in appPath, recovers stale lock, and preserves reopen across slow quit", () => {
+  it("runs macOS script against real ps (no self-match), exercises real slow quit + reopen, stale lock, and failed checkout", () => {
     const dir = makeTempDir("marscode-mac-sh-");
     const repo = NodePath.join(dir, "repo");
     const dataRoot = NodePath.join(dir, "data");
@@ -400,60 +506,96 @@ c.commit(); c.close()`,
     const version = "0.1.12-nightly.20261128.1";
 
     NodeFS.mkdirSync(NodePath.join(repo, ".git"), { recursive: true });
-    NodeFS.mkdirSync(NodePath.join(appsDir, "T3 Code (Nightly).app/Contents/MacOS"), {
-      recursive: true,
-    });
+    NodeFS.mkdirSync(NodePath.join(appPath, "Contents/MacOS"), { recursive: true });
     NodeFS.writeFileSync(NodePath.join(appPath, "version.txt"), "old");
-    // Pre-stage built bundle to exercise lock recovery + running detection + quit + swap + reopen.
     const stagedBundle = NodePath.join(dataRoot, "staged-app", sha, "app.bundle");
     NodeFS.mkdirSync(NodePath.join(stagedBundle, "Contents/MacOS"), { recursive: true });
-    NodeFS.writeFileSync(NodePath.join(stagedBundle, "version.txt"), "new");
-    // Stale lock with dead PID (H2b).
+    NodeFS.writeFileSync(NodePath.join(stagedBundle, "version.txt"), "new-real-ps");
+    // Stale lock with dead PID must recover automatically.
     NodeFS.mkdirSync(NodePath.join(dataRoot, ".sync.lock"), { recursive: true });
     NodeFS.writeFileSync(NodePath.join(dataRoot, ".sync.lock/pid"), "999999999\n");
 
-    const runningFlag = NodePath.join(dir, "app.running");
     const quitLog = NodePath.join(dir, "quit.log");
     const openLog = NodePath.join(dir, "open.log");
-    NodeFS.writeFileSync(runningFlag, "1");
-
-    // Stub ps, osascript, ditto, open.
-    writeExecutable(
-      NodePath.join(stubBin, "ps"),
-      `#!/bin/sh\nif [ -f ${JSON.stringify(runningFlag)} ]; then echo ${JSON.stringify(`${appPath}/Contents/MacOS/T3 Code (Nightly)`)}; fi\n`,
-    );
+    writeExecutable(NodePath.join(stubBin, "ditto"), '#!/bin/sh\ncp -R "$1" "$2"\n');
     writeExecutable(
       NodePath.join(stubBin, "osascript"),
-      `#!/bin/sh\necho "$*" >> ${JSON.stringify(quitLog)}\nrm -f ${JSON.stringify(runningFlag)}\nexit 0\n`,
+      `#!/bin/sh\necho "$*" >> ${JSON.stringify(quitLog)}\nexit 0\n`,
     );
-    writeExecutable(NodePath.join(stubBin, "ditto"), '#!/bin/sh\ncp -R "$1" "$2"\n');
     writeExecutable(
       NodePath.join(stubBin, "open"),
       `#!/bin/sh\necho "$*" >> ${JSON.stringify(openLog)}\nexit 0\n`,
     );
 
-    const env = { ...process.env, PATH: `${stubBin}:${process.env.PATH ?? ""}` };
+    // 1. Run against REAL system `ps` (not stubbed): idle non-running app with `(Nightly)` must NOT self-match.
+    const realPsEnv = { ...process.env, PATH: `${stubBin}:${process.env.PATH ?? ""}` };
     const script = buildMacDeployScript({ headSha: sha, version, repo, dataRoot, appPath, t3Home });
-    const res = NodeChildProcess.spawnSync("sh", ["-s"], { input: script, encoding: "utf8", env });
+    const idleRealPs = NodeChildProcess.spawnSync("sh", ["-s"], {
+      input: script,
+      encoding: "utf8",
+      env: realPsEnv,
+    });
+    expect(idleRealPs.status).toBe(0);
+    expect(idleRealPs.stdout.trim()).toBe(`ACTIVATED ${version}`);
+    expect(NodeFS.readFileSync(NodePath.join(appPath, "version.txt"), "utf8")).toBe("new-real-ps");
+    expect(NodeFS.existsSync(quitLog)).toBe(false);
+    expect(NodeFS.existsSync(openLog)).toBe(false);
 
-    expect(res.status).toBe(0);
-    expect(res.stdout.trim()).toBe(`ACTIVATED ${version}`);
-    expect(NodeFS.readFileSync(NodePath.join(appPath, "version.txt"), "utf8")).toBe("new");
-    // Proves C1 fix: parentheses in "T3 Code (Nightly).app" were matched, quit was sent, and open relaunched it.
-    expect(NodeFS.readFileSync(quitLog, "utf8")).toContain("T3 Code (Nightly)");
-    expect(NodeFS.readFileSync(openLog, "utf8")).toContain(appPath);
-    expect(NodeFS.existsSync(NodePath.join(dataRoot, ".reopen-app"))).toBe(false);
-    expect(NodeFS.existsSync(NodePath.join(dataRoot, ".sync.lock"))).toBe(false);
-
-    // Verify H2 fix: if .reopen-app marker survived a slow quit, next sync still relaunches after swap.
+    // 2. Real slow quit: app stays running past all 30 poll cycles (fast sleep stub) -> defers with
+    // `.reopen-app` marker intact; then once the app finishes closing, the next run swaps AND reopens it.
     NodeFS.mkdirSync(NodePath.join(stagedBundle, "Contents/MacOS"), { recursive: true });
-    NodeFS.writeFileSync(NodePath.join(stagedBundle, "version.txt"), "new-2");
-    NodeFS.writeFileSync(NodePath.join(dataRoot, ".reopen-app"), "");
-    NodeFS.rmSync(openLog, { force: true });
-    const res2 = NodeChildProcess.spawnSync("sh", ["-s"], { input: script, encoding: "utf8", env });
-    expect(res2.status).toBe(0);
+    NodeFS.writeFileSync(NodePath.join(stagedBundle, "version.txt"), "new-after-slow-quit");
+    const runningFlag = NodePath.join(dir, "app.running");
+    NodeFS.writeFileSync(runningFlag, "1");
+    writeExecutable(NodePath.join(stubBin, "sleep"), "#!/bin/sh\nexit 0\n");
+    writeExecutable(
+      NodePath.join(stubBin, "ps"),
+      `#!/bin/sh\nif [ -f ${JSON.stringify(runningFlag)} ]; then echo ${JSON.stringify(`${appPath}/Contents/MacOS/T3 Code (Nightly)`)}; fi\n`,
+    );
+
+    const slowQuitRes = NodeChildProcess.spawnSync("sh", ["-s"], {
+      input: script,
+      encoding: "utf8",
+      env: realPsEnv,
+    });
+    expect(slowQuitRes.status).toBe(0);
+    expect(slowQuitRes.stdout.trim()).toBe("DEFERRED app_still_running");
+    expect(NodeFS.readFileSync(quitLog, "utf8")).toContain("T3 Code (Nightly)");
+    expect(NodeFS.existsSync(NodePath.join(dataRoot, ".reopen-app"))).toBe(true);
+    expect(NodeFS.readFileSync(NodePath.join(appPath, "version.txt"), "utf8")).toBe("new-real-ps");
+
+    // App finishes closing after the timeout; next sync swaps and reopens because of .reopen-app.
+    NodeFS.rmSync(runningFlag);
+    const secondRunRes = NodeChildProcess.spawnSync("sh", ["-s"], {
+      input: script,
+      encoding: "utf8",
+      env: realPsEnv,
+    });
+    expect(secondRunRes.status).toBe(0);
+    expect(secondRunRes.stdout.trim()).toBe(`ACTIVATED ${version}`);
+    expect(NodeFS.readFileSync(NodePath.join(appPath, "version.txt"), "utf8")).toBe(
+      "new-after-slow-quit",
+    );
     expect(NodeFS.readFileSync(openLog, "utf8")).toContain(appPath);
     expect(NodeFS.existsSync(NodePath.join(dataRoot, ".reopen-app"))).toBe(false);
+
+    // 3. Failed git checkout in the build child `sh -eu` must abort instead of building an older commit.
+    const badSha = "9999999999999999999999999999999999999999";
+    const failScript = buildMacDeployScript({
+      headSha: badSha,
+      version,
+      repo,
+      dataRoot,
+      appPath,
+      t3Home,
+    });
+    const failBuild = NodeChildProcess.spawnSync("sh", ["-s"], {
+      input: failScript,
+      encoding: "utf8",
+      env: realPsEnv,
+    });
+    expect(failBuild.status).not.toBe(0);
+    expect(NodeFS.existsSync(NodePath.join(dataRoot, "staged-app", badSha))).toBe(false);
   });
 });
 

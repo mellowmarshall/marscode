@@ -59,13 +59,10 @@ const SERVER_PREFIXES = [
   "scripts/lib/",
 ];
 
-const NON_SERVER_PACKAGE_PREFIXES = ["packages/runlog/", "packages/host-guards/"];
-
 /** Files that change the standalone linux-x64 t3 server archive. */
 export function matchesFleetServerSource(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, "/").replace(/^\.\//, "");
   if (SERVER_EXACT_FILES.has(normalized)) return true;
-  if (NON_SERVER_PACKAGE_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return false;
   return SERVER_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
