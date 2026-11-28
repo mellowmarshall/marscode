@@ -58,21 +58,28 @@ function onPath(binary: string, env: Readonly<Record<string, string | undefined>
 
 /** An AppImage's runtime mount (`/tmp/.mount_<name><id>`): it goes away when that app exits. */
 const APPIMAGE_MOUNT_RE = /^\/tmp\/\.mount_[^/]+(\/|$)/;
+const APPIMAGE_RUNTIME_KEYS = ["APPIMAGE", "APPDIR", "ARGV0", "OWD"] as const;
+const MOUNT_PATH_LIST_KEYS = ["PATH", "XDG_DATA_DIRS", "GSETTINGS_SCHEMA_DIR"] as const;
 
 /**
- * The caller's env minus the library paths of the AppImage it runs inside. The worker outlives
- * MarsCode; once a restart unmounts the old image, a worker still naming that mount in
- * LD_LIBRARY_PATH fails the host guards' worker check, and every git command it runs is refused.
+ * The caller's env without the AppImage MarsCode runs from. The worker outlives MarsCode: once a
+ * restart unmounts the image, its paths are stale (and under world-writable /tmp), and a
+ * LD_LIBRARY_PATH naming the mount fails the host guards' worker check, so every git command the
+ * worker runs is refused. The worker uses the system node, which needs no LD_LIBRARY_PATH.
  */
-export function withoutAppImageLibraries(
+export function withoutAppImageRuntime(
   env: Readonly<Record<string, string | undefined>>,
 ): Record<string, string | undefined> {
   const out = { ...env };
-  const kept = (env.LD_LIBRARY_PATH ?? "")
-    .split(":")
-    .filter((seg) => seg !== "" && !APPIMAGE_MOUNT_RE.test(seg));
-  if (kept.length > 0) out.LD_LIBRARY_PATH = kept.join(":");
-  else delete out.LD_LIBRARY_PATH;
+  delete out.LD_LIBRARY_PATH;
+  for (const key of APPIMAGE_RUNTIME_KEYS) delete out[key];
+  for (const key of MOUNT_PATH_LIST_KEYS) {
+    const value = out[key];
+    if (value === undefined) continue;
+    const kept = value.split(":").filter((seg) => seg !== "" && !APPIMAGE_MOUNT_RE.test(seg));
+    if (kept.length > 0) out[key] = kept.join(":");
+    else delete out[key];
+  }
   return out;
 }
 
@@ -184,7 +191,7 @@ export function launchDetachedWorker(input: LaunchInput): LaunchResult {
 
   const node = input.nodePath ?? process.execPath;
   const env: Record<string, string | undefined> = {
-    ...withoutAppImageLibraries(input.env),
+    ...withoutAppImageRuntime(input.env),
     SHIP_QUEUE_ROOT: input.root,
     SHIP_QUEUE_WORKER_VERSION: target.version,
     SHIP_QUEUE_WORKER_ENTRY: target.entryPath,
