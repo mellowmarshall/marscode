@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
+import { overrideRequestPath } from "./challengeGate.ts";
 import { runShipQueueCli } from "./cli.ts";
 import { jobReviewPath, readJob, readLog } from "./jobStore.ts";
 import { nodeProcessRunner } from "./nodeProcess.ts";
@@ -388,5 +389,6 @@ describe("unanswered challenge", () => {
         io: { stdout: (t) => out.push(t), stderr: (t) => out.push(t), env: {}, cwd: fx.tmp },
       }),
     ).toBe(1);
+    expect(NodeFS.existsSync(overrideRequestPath(fx.root, id))).toBe(false);
   });
 });

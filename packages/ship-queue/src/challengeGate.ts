@@ -58,6 +58,15 @@ export function requestChallengeOverride(
     overrideRequestPath(root, id),
     `${JSON.stringify({ reason, at: clock.now() })}\n`,
   );
+  // The worker may have ended the job (window over) between the read above and this write.
+  const after = readJob(root, id);
+  if (!after || isEnded(after)) {
+    NodeFS.rmSync(overrideRequestPath(root, id), { force: true });
+    return {
+      ok: false,
+      message: `job ${id} ended (${after?.reason ?? "challenged"}) before the override landed; fix the findings and resubmit`,
+    };
+  }
   return {
     ok: true,
     message: `job ${id}: override recorded; it resumes on its own. Follow it: ship-queue watch ${id}`,

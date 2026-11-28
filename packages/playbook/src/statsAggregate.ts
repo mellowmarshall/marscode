@@ -102,7 +102,12 @@ function accumulate(bucket: MutableBucket, rec: ReviewStatRecord): void {
   if (rec.bypassDetected) bucket.bypasses += 1;
   if (rec.playbookFriction) bucket.friction += 1;
   if (rec.fallbackUsed) bucket.fallbacks += 1;
-  if (rec.source === "playbook_challenge" && !isPass) bucket.challenges += 1;
+  if (
+    rec.source === "playbook_challenge" &&
+    (rec.verdict === "challenged" || rec.verdict === "rejected_budget")
+  ) {
+    bucket.challenges += 1;
+  }
   if (rec.overridden) bucket.overrides += 1;
   bucket.breaking += rec.counts.breaking;
   bucket.critical += rec.counts.critical;

@@ -151,6 +151,15 @@ describe("review stats store", () => {
     ]);
     const stats = aggregateReviewStats(records, { side: "reviewer", by: "model" });
     expect(stats.totals).toMatchObject({ challenges: 2, overrides: 1 });
+    // An owner bypass is not a challenge.
+    const bypass = { ...records[0]!, id: "bypass", verdict: "bypassed", overridden: false };
+    expect(
+      aggregateReviewStats([...records, bypass], {
+        side: "reviewer",
+        by: "model",
+        includeBypasses: true,
+      }).totals,
+    ).toMatchObject({ challenges: 2, overrides: 1 });
     expect(stats.groups[0]).toMatchObject({ challenges: 2, overrides: 1 });
   });
 

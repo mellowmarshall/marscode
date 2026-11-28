@@ -121,22 +121,49 @@ function readShipJob(jobDir: string, jobId: string): ReviewStatRecord | null {
   });
 }
 
-/** Commits whose playbook challenge a ship job overrode (`challenge_override.tip`). */
+/** A repo's short name: a ship job's `owner_name` and a challenge's `name` compare equal. */
+function repoName(repo: string): string {
+  return (repo.split(/[_/]/).at(-1) ?? repo).toLowerCase();
+}
+
+/** `repo\0tip` keys of challenges a ship job overrode (`challenge_override.tip`, full SHA). */
 function readOverriddenTips(shipJobsDir: string): ReadonlySet<string> {
-  const tips = new Set<string>();
+  const keys = new Set<string>();
   for (const entry of listDir(shipJobsDir)) {
     if (!entry.isDirectory()) continue;
-    try {
-      const job = JSON.parse(
-        NodeFS.readFileSync(NodePath.join(shipJobsDir, entry.name, "job.json"), "utf8"),
-      ) as { readonly challenge_override?: { readonly tip?: unknown } };
-      const tip = job.challenge_override?.tip;
-      if (typeof tip === "string" && /^[0-9a-f]{7,64}$/i.test(tip)) tips.add(tip.toLowerCase());
-    } catch {
-      // A job without job.json, or without an override, adds nothing.
-    }
+    const key = readOverrideKey(NodePath.join(shipJobsDir, entry.name, "job.json"));
+    if (key) keys.add(key);
   }
-  return tips;
+  return keys;
+}
+
+const overrideKeyCache = new Map<string, { readonly stamp: string; readonly key: string | null }>();
+
+function readOverrideKey(jobFile: string): string | null {
+  let stamp: string;
+  try {
+    const st = NodeFS.statSync(jobFile);
+    stamp = `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return null;
+  }
+  const hit = overrideKeyCache.get(jobFile);
+  if (hit?.stamp === stamp) return hit.key;
+  let key: string | null = null;
+  try {
+    const job = JSON.parse(NodeFS.readFileSync(jobFile, "utf8")) as {
+      readonly repo?: unknown;
+      readonly challenge_override?: { readonly tip?: unknown };
+    };
+    const tip = job.challenge_override?.tip;
+    if (typeof tip === "string" && /^[0-9a-f]{40,64}$/i.test(tip) && typeof job.repo === "string") {
+      key = `${repoName(job.repo)}\0${tip.toLowerCase()}`;
+    }
+  } catch {
+    key = null;
+  }
+  overrideKeyCache.set(jobFile, { stamp, key });
+  return key;
 }
 
 function listDir(dir: string): ReadonlyArray<NodeFS.Dirent> {
@@ -178,15 +205,18 @@ export function collectReviewRecords(
   }
   const shipIdByReviewThread = new Map<string, string>();
   const shipJobsDir = paths.shipJobsDir ?? defaultShipJobsDir();
-  const overriddenTips = readOverriddenTips(shipJobsDir);
-  for (const [id, rec] of byId) {
-    if (rec.source === "playbook_challenge" && rec.verdict !== "pass" && rec.commit) {
-      const tip = rec.commit.toLowerCase();
-      if ([...overriddenTips].some((t) => t.startsWith(tip) || tip.startsWith(t))) {
-        byId.set(id, { ...rec, overridden: true });
-      }
-    }
+  // Each override marks one challenge: the newest record of that repo and challenged tip.
+  const overridden = readOverriddenTips(shipJobsDir);
+  const newestByKey = new Map<string, ReviewStatRecord>();
+  for (const rec of byId.values()) {
+    if (rec.source !== "playbook_challenge" || rec.commit.length < 7) continue;
+    if (rec.verdict !== "challenged" && rec.verdict !== "rejected_budget") continue;
+    const key = `${repoName(rec.repo)}\0${rec.commit.toLowerCase()}`;
+    if (!overridden.has(key)) continue;
+    const seen = newestByKey.get(key);
+    if (!seen || rec.timestamp > seen.timestamp) newestByKey.set(key, rec);
   }
+  for (const rec of newestByKey.values()) byId.set(rec.id, { ...rec, overridden: true });
   for (const entry of listDir(shipJobsDir)) {
     if (!entry.isDirectory()) continue;
     const rec = readShipJob(NodePath.join(shipJobsDir, entry.name), entry.name);
