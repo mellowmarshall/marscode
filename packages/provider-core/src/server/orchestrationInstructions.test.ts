@@ -110,6 +110,7 @@ describe("T3 modal guidance", () => {
       "never ask in chat or give the user a terminal command.",
       "run `sudo -S -p '' <cmd> < \"$file\"` yourself",
       're-run the exact command yourself as `HOST_GUARD_OVERRIDE="<why, in words>" <command>`',
+      "`HOST_GUARD_OVERRIDE_PLAN=<plan.json>` or `marscode-guard override --plan`",
       "Only for owner decisions, not failures you can fix.",
     ]) {
       assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, rule);

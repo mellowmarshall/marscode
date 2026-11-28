@@ -90,6 +90,7 @@ import { changeRequestsCreatedBy } from "../../apps/server/src/orchestration-v2/
 import { type BackgroundWait, makeBackgroundWait } from "./backgroundWait.ts";
 import { DeviceExpect, gradeDevice } from "./device-grading.ts";
 import { FileLinksExpect, gradeFileLinks } from "./file-link-grading.ts";
+import { HostGuardExpect, gradeHostGuard } from "./host-guard-grading.ts";
 import {
   AGENT_DEVICE_SHELL,
   deviceFailure,
@@ -270,6 +271,8 @@ const McpToolUseExpect = Schema.Struct({
   secret: Schema.optional(SecretExpect),
   /** File pills in the final answer resolve against the thread cwd to `world.files` entries. */
   fileLinks: Schema.optional(FileLinksExpect),
+  /** MarsCode host-guard plan batching and fixable-CI checks. See `host-guard-grading.ts`. */
+  hostGuard: Schema.optional(HostGuardExpect),
 });
 
 /**
@@ -2642,6 +2645,7 @@ export const gradeSample = (
     ),
   );
   checks.push(...gradeSecret(expect.secret, run, pasted));
+  checks.push(...gradeHostGuard(expect.hostGuard, run));
   return checks;
 };
 
