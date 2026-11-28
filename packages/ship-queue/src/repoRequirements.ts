@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import { serviceToolSpecs } from "./ciServicesPlan.ts";
 import { loadRepoDeclarationFromDir } from "./policyReload.ts";
 
 export interface RegisteredRepoCheckout {
@@ -108,7 +109,7 @@ export function collectRepoToolRequirements(input: {
     out.push({
       repo: repoName,
       primary: item.primary,
-      requiredTools: decl.ciTools,
+      requiredTools: serviceToolSpecs(decl.ciTools, decl.ciServices),
       requiredArch: decl.ciArch,
       ciLocalOnly: decl.ciLocalOnly,
     });

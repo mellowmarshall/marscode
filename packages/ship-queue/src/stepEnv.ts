@@ -73,17 +73,32 @@ const FORGE_ENV_NAMES: ReadonlyArray<string> = [
   "SSH_AUTH_SOCK",
 ];
 
+/**
+ * How the docker CLI finds its engine, for the shell that starts a job's services only: no step
+ * gets them. Unset, the CLI uses its default socket (/var/run/docker.sock, or its context).
+ */
+const DOCKER_ENV_NAMES: ReadonlyArray<string> = [
+  "DOCKER_HOST",
+  "DOCKER_CONTEXT",
+  "DOCKER_CONFIG",
+  "DOCKER_CERT_PATH",
+  "DOCKER_TLS_VERIFY",
+];
+
+interface StepEnvOptions {
+  readonly forge?: boolean | undefined;
+  readonly docker?: boolean | undefined;
+}
+
 function looksLikeCredential(name: string): boolean {
   const lower = name.toLowerCase();
   return CREDENTIAL_WORDS.some((word) => lower.includes(word));
 }
 
-function isAllowedStepEnvName(
-  name: string,
-  options: { readonly forge?: boolean | undefined } = {},
-): boolean {
+function isAllowedStepEnvName(name: string, options: StepEnvOptions = {}): boolean {
   if (STEP_ENV_NAMES.includes(name)) return true;
   if (options.forge && FORGE_ENV_NAMES.includes(name)) return true;
+  if (options.docker && DOCKER_ENV_NAMES.includes(name)) return true;
   return STEP_ENV_PREFIXES.some((p) => name.startsWith(p)) && !looksLikeCredential(name);
 }
 
@@ -93,7 +108,7 @@ function isAllowedStepEnvName(
  */
 export function allowlistedStepBaseEnv(
   baseEnv: Readonly<Record<string, string | undefined>>,
-  options: { readonly forge?: boolean | undefined } = {},
+  options: StepEnvOptions = {},
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(baseEnv)) {
@@ -110,10 +125,12 @@ function anyCase(word: string): string {
 /**
  * Bash that unsets every exported variable outside the allowlist, for the first line of a remote
  * step, before the toolchain setup, the `SHIP_QUEUE_*` exports, and the stdin secret reader add
- * theirs. Shell bookkeeping (`PWD`, `OLDPWD`, `SHLVL`, `_`) stays. Holds no single quote.
+ * theirs. Shell bookkeeping (`PWD`, `OLDPWD`, `SHLVL`, `_`) stays, and with `docker` the names
+ * the docker CLI reads (the services shell). Holds no single quote.
  */
-export function buildRemoteEnvAllowlistScript(): string {
-  const keep = [...STEP_ENV_NAMES, "PWD", "OLDPWD", "SHLVL", "_"].join("|");
+export function buildRemoteEnvAllowlistScript(options: StepEnvOptions = {}): string {
+  const docker = options.docker ? DOCKER_ENV_NAMES : [];
+  const keep = [...STEP_ENV_NAMES, ...docker, "PWD", "OLDPWD", "SHLVL", "_"].join("|");
   const families = STEP_ENV_PREFIXES.map((p) => `${p}*`).join("|");
   const creds = CREDENTIAL_WORDS.map((w) => `*${anyCase(w)}*`).join("|");
   return [

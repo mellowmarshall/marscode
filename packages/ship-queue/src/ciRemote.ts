@@ -2,6 +2,8 @@
 import { shellSingleQuote } from "@t3tools/ssh/command";
 
 import type { CiHostEntry } from "./ciHosts.ts";
+import type { CiServicePlan } from "./ciServicesPlan.ts";
+import { remoteServiceShell, startCiServices, stopCiServices } from "./ciServicesRun.ts";
 import { declaredStepPaths, type ShipDeclaration } from "./declaration.ts";
 import { git } from "./gitQueries.ts";
 import { runRemoteStep, type StepJobContext } from "./stepRunner.ts";
@@ -25,6 +27,8 @@ export interface RemoteStep {
 
 export type RemoteCiResult =
   | { readonly kind: "infra"; readonly detail: string }
+  /** The job's own files refuse its services there: no other host would start them either. */
+  | { readonly kind: "refused"; readonly detail: string }
   | { readonly kind: "ran" };
 
 export interface RemoteCiInput {
@@ -34,6 +38,8 @@ export interface RemoteCiInput {
   readonly body: string;
   readonly steps: ReadonlyArray<RemoteStep>;
   readonly secrets: Readonly<Record<string, string>>;
+  /** The job's CI services, started in the run's worktree before the first step. */
+  readonly services?: CiServicePlan | null | undefined;
   readonly run: ProcessRunner;
   readonly runRemote?: RemoteCommandRunner | undefined;
   readonly log: (text: string) => void;
@@ -184,15 +190,31 @@ export async function runRemoteCi(input: RemoteCiInput): Promise<RemoteCiResult>
     };
   }
 
-  input.log(`running CI on ${host.name} (worktree ${worktree} of ${cloneDir})`);
+  const services = input.services ?? null;
+  const serviceShell = remoteServiceShell({
+    runRemote,
+    ssh: host.ssh,
+    toolchainSetup: setup,
+    worktree,
+  });
   try {
+    let stepCtx: StepJobContext & { readonly ontoSha: string; readonly tipSha: string } = ctx;
+    if (services) {
+      const started = await startCiServices(serviceShell, services, input.log);
+      if (started.kind === "refused") return { kind: "refused", detail: started.reason };
+      if (started.kind === "failed") {
+        return { kind: "infra", detail: `services on ${host.name}: ${started.reason}` };
+      }
+      stepCtx = { ...ctx, ciServiceEnv: started.env };
+    }
+    input.log(`running CI on ${host.name} (worktree ${worktree} of ${cloneDir})`);
     for (const [index, step] of input.steps.entries()) {
       const started = input.nowMs();
       const res = await runRemoteStep({
         sshAlias: host.ssh,
         remoteWorktree: worktree,
         remoteDataRootDeclared: host.data_root,
-        ctx,
+        ctx: stepCtx,
         cmdline: step.cmdline,
         secrets: input.secrets,
         withholdSecrets: step.withholdSecrets,
@@ -209,6 +231,8 @@ export async function runRemoteCi(input: RemoteCiInput): Promise<RemoteCiResult>
     }
     return { kind: "ran" };
   } finally {
+    // Pass, fail, a lost step or a cancel: the job's project goes before its worktree.
+    if (services) await stopCiServices(serviceShell, services, input.log);
     await drop(worktree);
   }
 }

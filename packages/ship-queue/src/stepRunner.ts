@@ -4,6 +4,7 @@ import * as NodePath from "node:path";
 
 import { shellSingleQuote } from "@t3tools/ssh/command";
 
+import { ciEnvSourceShell, isStepEnvName, wrapArgvWithCiEnv } from "./ciEnvFile.ts";
 import type { ShipDeclaration } from "./declaration.ts";
 import { formatSecretStdinPayload } from "./dopplerBroker.ts";
 import { jobEvidenceDir } from "./jobStore.ts";
@@ -43,6 +44,10 @@ export interface StepJobContext {
   readonly pr?: number | undefined;
   readonly worktreeRoot?: string | undefined;
   readonly jobsBehind?: number | undefined;
+  /** `ship_ci_env`, relative to the worktree: a CI step's shell sources it first. */
+  readonly ciEnvFile?: string | undefined;
+  /** What the job's started services give a CI step (`SHIP_QUEUE_CI_SERVICES`, the project). */
+  readonly ciServiceEnv?: Readonly<Record<string, string>> | undefined;
 }
 
 export interface LocalStepInput {
@@ -182,6 +187,9 @@ export function buildLocalStepEnv(input: {
     if (env.RUSTC_WRAPPER === "sccache") {
       env.CARGO_INCREMENTAL = "0";
     }
+    for (const [key, value] of Object.entries(input.ctx.ciServiceEnv ?? {})) {
+      if (isStepEnvName(key)) env[key] = value;
+    }
     if (!input.withholdSecrets && input.secrets) {
       for (const [key, value] of Object.entries(input.secrets)) {
         env[key] = value;
@@ -213,7 +221,11 @@ export async function runLocalStep(input: LocalStepInput): Promise<ProcessResult
   if (stateDir) NodeFS.mkdirSync(stateDir, { recursive: true });
   const evidenceDir = env.PLAYBOOK_EVIDENCE_DIR;
   if (evidenceDir) NodeFS.mkdirSync(evidenceDir, { recursive: true });
-  const [command, ...args] = resolved.argv;
+  const argv =
+    input.mode === "ci" && input.ctx.ciEnvFile
+      ? wrapArgvWithCiEnv(NodePath.join(input.ctx.worktree, input.ctx.ciEnvFile), resolved.argv)
+      : resolved.argv;
+  const [command, ...args] = argv;
   return input.run({
     command: command!,
     args,
@@ -260,6 +272,9 @@ export function buildRemoteStepScript(input: {
     ...(input.ctx.pr !== undefined
       ? [`SHIP_QUEUE_PR=${shellSingleQuote(String(input.ctx.pr))}`]
       : []),
+    ...Object.entries(input.ctx.ciServiceEnv ?? {})
+      .filter(([key]) => isStepEnvName(key))
+      .map(([key, value]) => `${key}=${shellSingleQuote(value)}`),
   ].join(" ");
 
   const remoteSocketPath = buildSccacheSocketPath(input.ctx.jobId);
@@ -273,6 +288,9 @@ export function buildRemoteStepScript(input: {
     `export ${exports} DOPPLER_CONFIG_DIR="$sq_g/ship-queue-doppler-config" SHIP_QUEUE_BASE_TREE="$sq_g/ship-queue-base" PLAYBOOK_EVIDENCE_DIR="$sq_g/ship-queue-playbook-evidence" PLAYBOOK_EVIDENCE_JOB=${shellSingleQuote(input.ctx.jobId)}`,
     `[ ! -f "$sq_g/ship-queue-body.md" ] || export SHIP_QUEUE_BODYFILE="$sq_g/ship-queue-body.md"`,
     REMOTE_SECRET_READER,
+    ...(input.ctx.ciEnvFile
+      ? [ciEnvSourceShell(shellSingleQuote(`./${input.ctx.ciEnvFile}`))]
+      : []),
     `sq_cmd=(bash "$SHIP_QUEUE_BASE_TREE"/${shellSingleQuote(stepScript)}${stepArgs ? ` ${stepArgs}` : ""})`,
     `if [ "$(uname -s 2>/dev/null)" = Darwin ] && command -v caffeinate >/dev/null 2>&1; then sq_cmd=(caffeinate -i -s "\${sq_cmd[@]}"); fi`,
     `"\${sq_cmd[@]}" <&0`,
