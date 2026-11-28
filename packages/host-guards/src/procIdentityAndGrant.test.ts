@@ -554,7 +554,7 @@ describe("procIdentity and MarsCode AppImage server verification", () => {
     }
   });
 
-  it("rejects env-var override/config/socket spoofing when invoking the built dist/bin.mjs CLI", async () => {
+  it("rejects env-var override/config/socket spoofing when invoking the CLI", async () => {
     const tmpRoot = NodeFS.existsSync("/tmp") ? "/tmp" : NodeOS.tmpdir();
     const dir = NodeFS.mkdtempSync(NodePath.join(tmpRoot, "hg-forge-"));
     tempDirs.push(dir);
@@ -579,7 +579,8 @@ describe("procIdentity and MarsCode AppImage server verification", () => {
     }));
 
     try {
-      const binPath = NodePath.join(PKG_ROOT, "dist", "bin.mjs");
+      // Run the source entry: a fresh checkout has no dist, and a stale dist tests old code.
+      const binPath = NodePath.join(PKG_ROOT, "src", "bin.ts");
       const hostileEnv: NodeJS.ProcessEnv = {
         PATH: "/usr/bin:/bin",
         HOME: dir,
