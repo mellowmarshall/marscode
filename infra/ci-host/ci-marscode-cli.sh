@@ -45,18 +45,22 @@ ln -s "$stage" "$link_tmp"
 # GNU mv swaps the link atomically; BSD mv has no -T, so macOS falls back to ln -sfn.
 mv -T "$link_tmp" "$target" 2>/dev/null || ln -sfn "$stage" "$target"
 
+# The single-quoted printf formats are the wrapper's literal text, expanded when it runs.
+# shellcheck disable=SC2016
 {
   printf '#!/usr/bin/env bash\nset -euo pipefail\n'
-  printf "node_bin='%s'\n" "$node_bin"
-  # shellcheck disable=SC2016 # literal text of the generated wrapper
+  printf 'node_bin=%q\n' "$node_bin"
   printf 'if [ ! -x "$node_bin" ]; then\n  node_bin="$(command -v node)"\nfi\n'
-  printf "exec \"\$node_bin\" '%s/dist/bin.mjs' \"\$@\"\n" "$target"
+  printf 'exec "$node_bin" %q "$@"\n' "$target/dist/bin.mjs"
 } > "$wrapper_tmp"
 chmod 755 "$wrapper_tmp"
 mv -f "$wrapper_tmp" "$bin_dir/$name"
 committed=1
 
-for old in "$releases/$name".*; do
-  [ "$old" = "$stage" ] || rm -rf "$old"
+# Drop old releases, but never the one the link now names, and never a stage younger than ten
+# minutes: a concurrent install of the same tool may not have linked it yet.
+current=$(readlink "$target" || true)
+find "$releases" -mindepth 1 -maxdepth 1 -name "$name.*" -mmin +10 -print | while IFS= read -r old; do
+  [ "$old" = "$current" ] || rm -rf "$old"
 done
 printf 'ci-marscode-cli.sh: installed %s\n' "$bin_dir/$name"

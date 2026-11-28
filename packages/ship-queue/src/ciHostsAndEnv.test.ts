@@ -125,6 +125,11 @@ describe("canonical ci-hosts.json loader and validator", () => {
     const text = NodeFS.readFileSync(NodePath.join(repoRoot, TOOL_CATALOG_SOURCE), "utf8");
     expect(text).not.toMatch(/=0{64}\b/);
     expect(text).not.toContain("$CI_DEVTOOLS");
+    expect(text).not.toMatch(/\/devtools\//);
+    // Probes run without CI_HOST_PAYLOAD, so they name the synced payload by its literal path.
+    for (const m of text.matchAll(/ship-queue-ci\/marscode-ci-host\/([A-Za-z0-9._/-]+)/g)) {
+      expect(NodeFS.existsSync(NodePath.join(repoRoot, m[1] ?? "")), m[1]).toBe(true);
+    }
     const referenced = new Set(
       [...text.matchAll(/\$CI_HOST_PAYLOAD\/([A-Za-z0-9._/-]+)/g)].map((m) => m[1] ?? ""),
     );

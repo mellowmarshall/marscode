@@ -49,6 +49,11 @@ export async function runHostsSubcommand(
     return 0;
   }
 
+  // Manifest warnings (e.g. a host-local toolchain that hides the tracked catalog) reach the operator.
+  for (const warning of loadCiHostsManifest({ overridePath: manifestPath }).warnings) {
+    io.stderr(`ship-queue hosts: warning: ${warning}\n`);
+  }
+
   if (action === "check") {
     const json = rest.includes("--json");
     const includeDrift = rest.includes("--drift");

@@ -43,8 +43,8 @@ export function defaultCliBundleDir(homeDir: string = NodeOS.homedir()): string 
 }
 
 /**
- * Ships `marscode@sourceRef:infra/ci-host` + bundled MarsCode packages to a CI host, plus each
- * present prebuilt CLI bundle from `bundleDir` at `packages/<name>/dist/bin.mjs`.
+ * Ships `marscode@sourceRef:infra/ci-host` + bundled MarsCode packages to a CI host, plus every
+ * prebuilt CLI bundle from `bundleDir` at `packages/<name>/dist/bin.mjs` (refuses when one is missing).
  */
 export async function syncCiHostPayload(input: {
   readonly host: CiHostEntry;
@@ -66,6 +66,14 @@ export async function syncCiHostPayload(input: {
   const clis = PAYLOAD_CLI_BUNDLES.filter((name) =>
     NodeFS.existsSync(NodePath.join(bundleDir, name, "dist", "bin.mjs")),
   );
+  const missingClis = PAYLOAD_CLI_BUNDLES.filter((name) => !clis.includes(name));
+  if (missingClis.length > 0) {
+    return {
+      ok: false,
+      paths,
+      error: `missing CLI bundle(s) ${missingClis.join(", ")} under ${bundleDir}; run the post-merge sync (marscode-sync) on this host first`,
+    };
+  }
   const runLocal = input.deps?.runLocal ?? nodeProcessRunner;
   const archive = await runLocal({
     command: "bash",
