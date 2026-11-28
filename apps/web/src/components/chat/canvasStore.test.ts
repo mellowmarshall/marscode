@@ -84,4 +84,38 @@ describe("chat canvas model", () => {
     expect(store.getState().measurements.narrowestWidth).toBe(900);
     expect(store.getState()).not.toBe(measured);
   });
+
+  it("preserves detailsCardWidth across measurements and resolves resized placement", () => {
+    const store = createChatCanvasStore();
+    store.getState().setDetailsCardWidth(400);
+    expect(store.getState().measurements.detailsCardWidth).toBe(400);
+
+    // Repeating the same width preserves state identity.
+    const afterWidth = store.getState();
+    store.getState().setDetailsCardWidth(400);
+    expect(store.getState()).toBe(afterWidth);
+
+    // Setting measurements without an explicit detailsCardWidth keeps the chosen width.
+    store.getState().setMeasurements(measurements(1400));
+    expect(store.getState().measurements.detailsCardWidth).toBe(400);
+
+    // Out-of-range widths clamp to the supported bounds.
+    store.getState().setDetailsCardWidth(999);
+    expect(store.getState().measurements.detailsCardWidth).toBe(480);
+
+    const model = resolveChatCanvasModel({
+      measurements: { ...measurements(1400), detailsCardWidth: 400 },
+      detailsCardMeasurement: { threadRef, width: 400, fullContentHeight: 320 },
+      threadRef,
+      preview: null,
+      detailsCardInlineOpen: true,
+    });
+    expect(model.detailsCardMode).toBe("inline");
+    expect(model.detailsCardPlacement?.width).toBe(400);
+    expect(model.preferredDetailsCard?.width).toBe(400);
+    // Chat stays clear of the widened details card (1400 - 400 - 12 - 32 = 956 >= chat.left + chat.width).
+    expect(model.layout.chat.left + model.layout.chat.width).toBeLessThanOrEqual(
+      model.detailsCardPlacement!.x - 32,
+    );
+  });
 });

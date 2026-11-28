@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import type { ResizableWidthHandlers } from "../../hooks/useResizableWidth";
 import type { resolveChatCanvasLayout } from "./chatCanvasLayout";
 import type { resolveThreadDetailsCardLayout } from "./threadDetailsCardLayout";
 import type { ScopedThreadRef } from "@t3tools/contracts";
@@ -8,6 +9,14 @@ export interface DetailsCardMeasurement {
   readonly threadRef: ScopedThreadRef;
   readonly width: number;
   readonly fullContentHeight: number;
+}
+
+export interface ThreadDetailsCardResize {
+  readonly width: number;
+  readonly minWidth: number;
+  readonly maxWidth: number;
+  readonly setWidth: (width: number) => void;
+  readonly handlers: ResizableWidthHandlers;
 }
 
 export const ChatCanvasContext = createContext<{
@@ -22,6 +31,8 @@ export const ChatCanvasContext = createContext<{
   preferredDetailsCard: ReturnType<typeof resolveThreadDetailsCardLayout>;
   /** Where the inline card sits now; null when it shows as a popover. */
   detailsCardPlacement: ReturnType<typeof resolveThreadDetailsCardLayout>;
+  /** Pointer and keyboard resize controls for the inline details card. */
+  detailsCardResize?: ThreadDetailsCardResize | undefined;
 } | null>(null);
 
 export const useChatCanvas = () => useContext(ChatCanvasContext);

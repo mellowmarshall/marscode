@@ -1,8 +1,16 @@
 import { useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { useStore } from "zustand";
+import { useResizableWidth } from "../../hooks/useResizableWidth";
 import { ChatCanvasContext } from "./ChatCanvasContext";
 import type { ChatCanvasPreview } from "./chatCanvasLayout";
 import { resolveChatCanvasModel, type ChatCanvasStore } from "./canvasStore";
+import {
+  THREAD_DETAILS_CARD_DEFAULT_WIDTH,
+  THREAD_DETAILS_CARD_MAX_WIDTH,
+  THREAD_DETAILS_CARD_MIN_WIDTH,
+  THREAD_DETAILS_CARD_WIDTH_STORAGE_KEY,
+  resolveThreadDetailsCardMaxWidth,
+} from "./threadDetailsCardLayout";
 import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore";
 import { observeResize } from "../../lib/observeResize";
 import type { ScopedThreadRef } from "@t3tools/contracts";
@@ -139,6 +147,28 @@ export function ChatCanvas({
       ? false
       : selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, threadRef, "inline"),
   );
+  const detailsCardFitWidth = Math.min(
+    measurements.narrowestWidth ?? measurements.width,
+    measurements.width,
+  );
+  const maxDetailsCardWidth =
+    measurements.width > 0
+      ? Math.max(
+          THREAD_DETAILS_CARD_MIN_WIDTH,
+          resolveThreadDetailsCardMaxWidth({
+            fitWidth: detailsCardFitWidth,
+            lane: { padding: measurements.padding, minChatWidth: measurements.minChatWidth },
+          }),
+        )
+      : THREAD_DETAILS_CARD_MAX_WIDTH;
+  const detailsCardResize = useResizableWidth({
+    storageKey: THREAD_DETAILS_CARD_WIDTH_STORAGE_KEY,
+    defaultWidth: THREAD_DETAILS_CARD_DEFAULT_WIDTH,
+    minWidth: THREAD_DETAILS_CARD_MIN_WIDTH,
+    maxWidth: maxDetailsCardWidth,
+    edge: "left",
+    onWidthCommit: (nextWidth) => store.getState().setDetailsCardWidth(nextWidth),
+  });
   const model = resolveChatCanvasModel({
     measurements,
     detailsCardMeasurement,
@@ -156,8 +186,15 @@ export function ChatCanvas({
     detailsCardTopInset: model.detailsCardTopInset,
     preferredDetailsCard: model.preferredDetailsCard,
     detailsCardPlacement: model.detailsCardPlacement,
+    detailsCardResize: {
+      ...detailsCardResize,
+      minWidth: THREAD_DETAILS_CARD_MIN_WIDTH,
+      maxWidth: maxDetailsCardWidth,
+    },
   };
   const { layout } = context;
+  const inlineDetailsCardWidth =
+    model.preferredDetailsCard?.width ?? THREAD_DETAILS_CARD_DEFAULT_WIDTH;
   return (
     <ChatCanvasContext value={context}>
       <div
@@ -171,6 +208,7 @@ export function ChatCanvas({
             "--chat-timeline-gutter": `${measurements.timelineGutter}px`,
             "--chat-lane-inset-start": `${layout.chat.insetStart}px`,
             "--chat-lane-inset-end": `${layout.chat.insetEnd}px`,
+            "--thread-details-panel-width": `${inlineDetailsCardWidth}px`,
           } as CSSProperties
         }
       >
