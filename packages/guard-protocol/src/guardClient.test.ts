@@ -505,6 +505,52 @@ describe("guard-protocol Unix socket client & CLI", () => {
     ).toBe(64);
   });
 
+  it("installs when `node` on PATH is a link to a launcher that is node only under that name", () => {
+    const root = makeTempDir("marscode-install-launcher-");
+    const toolDir = NodePath.join(root, "tools");
+    const binDir = NodePath.join(root, "bin");
+    const libDir = NodePath.join(root, "lib");
+    NodeFS.mkdirSync(toolDir, { recursive: true });
+    // A multi-call launcher: it runs node when it is called `node`, and fails under its own name.
+    const launcher = NodePath.join(toolDir, "launcher");
+    NodeFS.writeFileSync(
+      launcher,
+      `#!/bin/sh\ncase "$(basename "$0")" in\n  node) exec '${process.execPath}' "$@" ;;\n  *) echo "error: Command '$1' not found" >&2; exit 2 ;;\nesac\n`,
+      { mode: 0o755 },
+    );
+    NodeFS.symlinkSync(launcher, NodePath.join(toolDir, "node"));
+    const installer = NodePath.join(PKG_DIR, "scripts", "install-guards.sh");
+    const preload = NodePath.join(root, "preload.cjs");
+    const preloadRan = NodePath.join(root, "preload-ran");
+    NodeFS.writeFileSync(
+      preload,
+      `require("node:fs").writeFileSync(${JSON.stringify(preloadRan)}, "x");\n`,
+    );
+    const res = NodeChildProcess.spawnSync(
+      "bash",
+      [installer, "--bin-dir", binDir, "--lib-dir", libDir],
+      {
+        encoding: "utf8",
+        // An inherited preload must not run in the installer's node probe.
+        env: {
+          ...process.env,
+          PATH: `${toolDir}:/usr/bin:/bin`,
+          NODE_OPTIONS: `--require ${preload}`,
+        },
+      },
+    );
+    expect(res.status, res.stderr).toBe(0);
+    expect(NodeFS.existsSync(preloadRan)).toBe(false);
+    // The installed wrapper runs the real node binary, not the launcher.
+    const wrapper = NodeFS.readFileSync(NodePath.join(binDir, "marscode-guard"), "utf8");
+    expect(wrapper).toContain(process.execPath);
+    expect(wrapper).not.toContain(launcher);
+    const help = NodeChildProcess.spawnSync(NodePath.join(binDir, "marscode-guard"), ["--help"], {
+      encoding: "utf8",
+    });
+    expect(help.stdout + help.stderr).toContain("marscode-guard <override|");
+  });
+
   it("installs safely, scrubs NODE_OPTIONS, and interoperates end-to-end with Python bridge", async () => {
     const installRoot = makeTempDir("marscode-install-");
     const binDir = NodePath.join(installRoot, "bin");
