@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - GitHub REST and GraphQL API write guard for `gh api` calls.
-import { GH_UNREADABLE_INPUT, parseApiParts } from "./ghApiArgs.ts";
+import { parseApiParts, readBodyField, type GhApiBody } from "./ghApiArgs.ts";
 import { resolveEnvGhRepoSlug } from "./ghArgParse.ts";
 import { decideGhGraphqlCall } from "./ghGraphqlGuard.ts";
 import {
@@ -29,17 +29,6 @@ export function normalizeApiPath(endpoint: string): string {
   }
 }
 
-function readJsonStringField(raw: string, key: string): string {
-  if (!raw.trim()) return "";
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const val = parsed?.[key];
-    return typeof val === "string" ? val : "";
-  } catch {
-    return "";
-  }
-}
-
 export function decideGhApiCall(
   args: ReadonlyArray<string>,
   cwd: string,
@@ -61,7 +50,8 @@ export function decideGhApiCall(
     return decideGhGraphqlCall({ endpoint, fields, raw, hasInputFlag }, here, config, queued);
   }
 
-  if (createsManagedRepo(method, path, fields, raw, config)) {
+  const body: GhApiBody = { fields, raw, hasInputFlag };
+  if (createsManagedRepo(method, path, body, config)) {
     return repoAdminRefusal(`gh api ${method} ${path}`);
   }
   if (method === "GET") return ALLOW_VERDICT;
@@ -73,8 +63,7 @@ export function decideGhApiCall(
       method,
       path,
       rest: (idMatch[2] ?? "").replace(/\/+$/, ""),
-      fields,
-      raw,
+      body,
       target: null,
       config,
       queued,
@@ -112,7 +101,7 @@ export function decideGhApiCall(
 
   if (!isSlugInScope(owner, config, name)) return ALLOW_VERDICT;
   const target = hereSlug && hereSlug[0] === owner && hereSlug[1] === name ? here : null;
-  return decideManagedRepoWrite({ method, path, rest, fields, raw, target, config, queued });
+  return decideManagedRepoWrite({ method, path, rest, body, target, config, queued });
 }
 
 /** A write to a managed repo: deny by default, with base-branch checks on the everyday writes. */
@@ -120,16 +109,15 @@ function decideManagedRepoWrite(input: {
   readonly method: string;
   readonly path: string;
   readonly rest: string;
-  readonly fields: Readonly<Record<string, string>>;
-  readonly raw: string;
+  readonly body: GhApiBody;
   readonly target: RepoInfo | null;
   readonly config: HostGuardsConfig;
   readonly queued: boolean;
 }): GuardVerdict {
-  const { method, path, rest, fields, raw, target, config, queued } = input;
+  const { method, path, rest, body, target, config, queued } = input;
   const bases = target ? target.bases() : FALLBACK_BASES;
   if (method === "POST" && rest === "git/refs") {
-    const refused = checkGitRefsCreate(fields, raw, bases);
+    const refused = checkGitRefsCreate(body, bases);
     if (refused) {
       return {
         verdict: "deny",
@@ -176,7 +164,8 @@ function decideManagedRepoWrite(input: {
   }
 
   if (method === "PATCH" && /^pulls\/\d+$/.test(rest)) {
-    if (raw === GH_UNREADABLE_INPUT || fields.base === GH_UNREADABLE_INPUT) {
+    const rawBase = readBodyField(body, "base");
+    if (rawBase === null) {
       return {
         verdict: "deny",
         reason: formatMergeRefusal(
@@ -186,9 +175,7 @@ function decideManagedRepoWrite(input: {
         ),
       };
     }
-    const base = (fields.base || readJsonStringField(raw, "base"))
-      .trim()
-      .replace(/^refs\/heads\//, "");
+    const base = rawBase.trim().replace(/^refs\/heads\//, "");
     if (base && (bases.includes(base) || hasTemplatePlaceholder(base))) {
       return {
         verdict: "deny",
@@ -202,7 +189,7 @@ function decideManagedRepoWrite(input: {
   }
 
   if (rest.startsWith("contents/") && (method === "PUT" || method === "DELETE")) {
-    const branch = fields.branch || readJsonStringField(raw, "branch");
+    const branch = readBodyField(body, "branch");
     if (!branch || bases.includes(branch) || hasTemplatePlaceholder(branch)) {
       return {
         verdict: "deny",

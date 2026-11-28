@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Deny-by-default repo administration in managed orgs: a short allowlist of gh repo subcommands and gh api write paths.
-import { GH_UNREADABLE_INPUT } from "./ghApiArgs.ts";
+import { readBodyField, type GhApiBody } from "./ghApiArgs.ts";
 import { resolveEnvGhRepoSlug } from "./ghArgParse.ts";
 import type { HostGuardsConfig } from "./hostConfig.ts";
 import { ALLOW_VERDICT, type GuardVerdict } from "./pushGuard.ts";
@@ -60,33 +60,12 @@ export function isEverydayApiWrite(method: string, rest: string, queued: boolean
   return queued && QUEUE_WRITES.some((p) => p.test(rest));
 }
 
-function bodyField(
-  fields: Readonly<Record<string, string>>,
-  raw: string,
-  key: string,
-): string | null {
-  if (fields[key] === GH_UNREADABLE_INPUT || raw === GH_UNREADABLE_INPUT) return null;
-  if (fields[key] !== undefined) return fields[key];
-  if (!raw.trim()) return "";
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const value = parsed?.[key];
-    return typeof value === "string" ? value : "";
-  } catch {
-    return null;
-  }
-}
-
 /**
  * `POST git/refs` creates the ref named in the body: only a new non-base branch is everyday.
  * Returns why it is refused, or null.
  */
-export function checkGitRefsCreate(
-  fields: Readonly<Record<string, string>>,
-  raw: string,
-  bases: ReadonlyArray<string>,
-): string | null {
-  const ref = bodyField(fields, raw, "ref");
+export function checkGitRefsCreate(body: GhApiBody, bases: ReadonlyArray<string>): string | null {
+  const ref = readBodyField(body, "ref");
   if (ref === null) return "unreadable ref";
   const branch = /^refs\/heads\/(.+)$/.exec(ref.trim())?.[1] ?? "";
   if (!branch) return `ref ${ref || "(missing)"} is not a branch`;
@@ -115,8 +94,7 @@ export function nestedRepoAdminWrite(path: string, config: HostGuardsConfig): bo
 export function createsManagedRepo(
   method: string,
   path: string,
-  fields: Readonly<Record<string, string>>,
-  raw: string,
+  body: GhApiBody,
   config: HostGuardsConfig,
 ): boolean {
   if (method === "GET") return false;
@@ -127,11 +105,11 @@ export function createsManagedRepo(
   if (org) return managed(org[1] ?? null);
   const action = /^repos\/[^/]+\/[^/]+\/(forks|generate)$/.exec(path);
   if (action?.[1] === "forks") {
-    const target = bodyField(fields, raw, "organization");
+    const target = readBodyField(body, "organization");
     return target === null || (target !== "" && managed(target));
   }
   if (action?.[1] === "generate") {
-    const owner = bodyField(fields, raw, "owner");
+    const owner = readBodyField(body, "owner");
     return owner === null || owner === "" || managed(owner);
   }
   return false;

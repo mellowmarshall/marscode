@@ -288,3 +288,96 @@ describe("gh repo aliases", () => {
     );
   });
 });
+
+describe("ghApiGuard reads the body gh actually sends", () => {
+  it("with --input, reads body keys only from the input file (fields go in the query string)", () => {
+    const { config, cwd } = makeConfig();
+    const file = (name: string, body: unknown) => {
+      const path = NodePath.join(cwd, name);
+      NodeFS.writeFileSync(path, typeof body === "string" ? body : JSON.stringify(body));
+      return path;
+    };
+    const decide = (args: ReadonlyArray<string>) =>
+      decideGhApiCall(["api", ...args], cwd, config, false, {}).verdict;
+    const tag = file("tag.json", { ref: "refs/tags/v9", sha: "abc" });
+    const base = file("base.json", { base: "main" });
+    const fork = file("fork.json", { organization: "example-org" });
+    const okRef = file("ok.json", { ref: "refs/heads/feat/ok", sha: "abc" });
+    const numberBase = file("num.json", { base: 7 });
+    const broken = file("broken.json", "{");
+    for (const args of [
+      [`${REPO}/git/refs`, "--input", tag, "-f", "ref=refs/heads/ok"],
+      ["-X", "PATCH", `${REPO}/pulls/1`, "--input", base, "-f", "base=feat"],
+      ["-X", "PATCH", `${REPO}/pulls/1`, "--input", numberBase],
+      ["-X", "PATCH", `${REPO}/pulls/1`, "--input", broken, "-f", "base=feat"],
+      ["-X", "PATCH", `${REPO}/pulls/1`, "--input", "-", "-f", "base=feat"],
+      ["-X", "POST", "repos/other-org/other-repo/forks", "--input", fork, "-f", "organization=x"],
+      ["-X", "POST", "repos/other-org/other-repo/forks", "--input", broken],
+      [`${REPO}/git/refs`, "--input", broken, "-f", "ref=refs/heads/ok"],
+    ]) {
+      expect(decide(args), args.join(" ")).toBe("deny");
+    }
+    for (const args of [
+      [`${REPO}/git/refs`, "--input", okRef, "-f", "ref=refs/tags/v9"],
+      [
+        "-X",
+        "PATCH",
+        `${REPO}/pulls/1`,
+        "--input",
+        file("t.json", { title: "t" }),
+        "-f",
+        "base=main",
+      ],
+      [
+        "-X",
+        "POST",
+        "repos/other-org/other-repo/forks",
+        "--input",
+        file("f.json", {}),
+        "-f",
+        "organization=example-org",
+      ],
+    ]) {
+      expect(decide(args), args.join(" ")).toBe("allow");
+    }
+  });
+});
+
+describe("ghGraphqlGuard refuses what it cannot read", () => {
+  it("refuses query[] keys and undefined characters inside a mutation", () => {
+    const bad = 'mutation { archiveRepository(input: {repositoryId: "R"}) { clientMutationId } }';
+    expectAll(
+      [
+        ["graphql", "-f", `query[]=${bad}`],
+        ["graphql", "-f", `query[q]=${bad}`],
+        [
+          "graphql",
+          "-f",
+          `query=mutation { \u00a0archiveRepository(input: {repositoryId: "R"}) { clientMutationId } }`,
+        ],
+        [
+          "graphql",
+          "-f",
+          `query=mutation { \u2028archiveRepository(input: {repositoryId: "R"}) { clientMutationId } }`,
+        ],
+        [
+          "graphql",
+          "-f",
+          `query=mutation { \varchiveRepository(input: {repositoryId: "R"}) { clientMutationId } }`,
+        ],
+      ],
+      "deny",
+    );
+    expectAll(
+      [
+        [
+          "graphql",
+          "-f",
+          'query=mutation { addComment(input: {subjectId: "I", body: "b"}) { commentEdge { node { reactions(first: 10) { totalCount } } } } }',
+        ],
+        ["graphql", "-f", "query=query { viewer { repositories(first: 5) { totalCount } } }"],
+      ],
+      "allow",
+    );
+  });
+});

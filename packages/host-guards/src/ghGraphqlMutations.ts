@@ -48,6 +48,8 @@ const EVERYDAY_MUTATIONS: ReadonlySet<string> = new Set([
   "unresolveReviewThread",
 ]);
 
+const NUMBER_RE = /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+
 type Fields = { readonly fields: ReadonlyArray<string> } | { readonly error: string };
 
 /** Index just past the selection set that opens at `open`, or -1 when it never closes. */
@@ -123,12 +125,15 @@ function graphqlMutationFields(src: string): Fields {
     }
     if (open >= tokens.length) return { error: "unparseable GraphQL" };
     if (opType === "subscription") return { error: "subscription" };
+    const end = skipSelectionSet(tokens, open);
+    if (end === -1) return { error: "unclosed selection set" };
     if (opType === "mutation") {
       const err = rootFields(tokens, open, fields);
       if (err) return { error: err };
+      // Characters GraphQL does not define (U+00A0, U+2028, \v) could hide a field from this reader.
+      const odd = tokens.slice(i, end).find((o) => o.kind === "other" && !NUMBER_RE.test(o.value));
+      if (odd) return { error: "unexpected characters" };
     }
-    const end = skipSelectionSet(tokens, open);
-    if (end === -1) return { error: "unclosed selection set" };
     i = end;
   }
   return { fields };
@@ -139,6 +144,8 @@ export function findUnlistedMutation(
   fields: Readonly<Record<string, string>>,
   parsedInput: unknown,
 ): string | null {
+  // gh turns `query[]=` and `query[k]=` keys into an array or object named `query`.
+  if (Object.keys(fields).some((k) => k.startsWith("query["))) return "(nested query field)";
   const sources: unknown[] = [];
   if (Object.hasOwn(fields, "query")) sources.push(fields.query);
   if (parsedInput && typeof parsedInput === "object" && !Array.isArray(parsedInput)) {

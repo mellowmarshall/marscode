@@ -48,6 +48,34 @@ export interface GhApiParts {
   readonly unknownFlag: string | null;
 }
 
+export interface GhApiBody {
+  readonly fields: Readonly<Record<string, string>>;
+  readonly raw: string;
+  readonly hasInputFlag: boolean;
+}
+
+/**
+ * The body value gh sends for `key`. With `--input`, gh sends `-f`/`-F` fields as query
+ * parameters and the body is the file alone. Null when it cannot be read or is not a string.
+ */
+export function readBodyField(body: GhApiBody, key: string): string | null {
+  if (!body.hasInputFlag) {
+    const value = body.fields[key];
+    return value === GH_UNREADABLE_INPUT ? null : (value ?? "");
+  }
+  if (body.raw === GH_UNREADABLE_INPUT) return null;
+  if (!body.raw.trim()) return "";
+  try {
+    const parsed = JSON.parse(body.raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    if (!Object.hasOwn(parsed, key)) return "";
+    const value = (parsed as Record<string, unknown>)[key];
+    return typeof value === "string" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function readRegularInputFile(filePath: string, cwd: string): string {
   if (filePath === "-") return GH_UNREADABLE_INPUT;
   const abs = NodePath.resolve(cwd, filePath);
