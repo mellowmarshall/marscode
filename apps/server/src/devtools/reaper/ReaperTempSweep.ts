@@ -6,6 +6,7 @@ import { inside, type PathGuard } from "./ReaperPathGuard.ts";
 import {
   diskBytes,
   forceRemove,
+  gitDataIn,
   hasRecentEntry,
   lstatDevice,
   onRootDevice,
@@ -138,6 +139,11 @@ export async function sweepTmpRoots(
       const isDir = st.isDirectory();
       if (!(await onRootDevice(target, realRoot, ctx.deviceOf ?? lstatDevice))) continue;
       if (isDir && (await hasRecentEntry(target, cutoff))) continue;
+      const gitData = await gitDataIn(target);
+      if (gitData !== null) {
+        ctx.log(`  Kept stale temp ${target}: it holds ${gitData}`);
+        continue;
+      }
       const bytes = isDir ? await diskBytes(target) : st.blocks * 512;
       if (!ctx.dryRun && !(await forceRemove(target))) continue;
       if (isDir) result.dirs += 1;
@@ -163,10 +169,14 @@ async function staleExhaustDir(
 ): Promise<boolean> {
   const st = await NodeFSP.lstat(target).catch(() => null);
   if (st === null || st.uid !== ctx.uid || !st.isDirectory()) return false;
-  if (await lexists(NodePath.join(target, ".git"))) return false;
   if (!(await onRootDevice(target, root, ctx.deviceOf ?? lstatDevice))) return false;
   const cutoff = isMktempName(name) ? cutoffs.tmp : cutoffs.exhaust;
   if (st.mtimeMs >= cutoff || (await hasRecentEntry(target, cutoff, { gitIsRecent: true }))) {
+    return false;
+  }
+  const gitData = await gitDataIn(target);
+  if (gitData !== null) {
+    ctx.log(`  Kept stale exhaust ${target}: it holds ${gitData}`);
     return false;
   }
   return !ctx.guard.isProtected(await NodeFSP.realpath(target).catch(() => target));

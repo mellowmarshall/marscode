@@ -81,12 +81,12 @@ async function removeIfStale(
   if (candidate.mtimeMs >= cutoff) return;
   const real = await NodeFSP.realpath(candidate.path).catch(() => candidate.path);
   if (overlapsAny(real, ctx.historyRoots) || ctx.guard.isProtectedUnder(real, root)) return;
+  if (!(await onRootDevice(candidate.path, root, ctx.deviceOf ?? lstatDevice))) return;
   const gitData = await gitDataIn(candidate.path);
   if (gitData !== null) {
     ctx.log(`  Kept stale ${label} ${candidate.path}: it holds ${gitData}`);
     return;
   }
-  if (!(await onRootDevice(candidate.path, root, ctx.deviceOf ?? lstatDevice))) return;
   if (candidate.isDir && (await hasRecentEntry(candidate.path, cutoff, { gitIsRecent: true }))) {
     return;
   }

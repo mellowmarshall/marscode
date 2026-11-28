@@ -57,6 +57,22 @@ function age(target: string, ageMs: number): void {
   NodeFS.utimesSync(target, seconds, seconds);
 }
 
+function bareRepo(dir: string): void {
+  for (const sub of ["objects/pack", "refs/heads"]) {
+    NodeFS.mkdirSync(NodePath.join(dir, sub), { recursive: true });
+  }
+  NodeFS.writeFileSync(NodePath.join(dir, "HEAD"), "ref: refs/heads/main\n");
+}
+
+/** Every entry below dir aged, deepest first, so only git data can keep a folder. */
+function ageTree(dir: string, ageMs: number): void {
+  for (const entry of NodeFS.readdirSync(dir, { withFileTypes: true })) {
+    const child = NodePath.join(dir, entry.name);
+    if (entry.isDirectory()) ageTree(child, ageMs);
+    age(child, ageMs);
+  }
+}
+
 const ctx = (guard: PathGuard, dryRun = false): SweepContext => ({
   uid,
   nowMs: NOW_MS,
@@ -207,6 +223,34 @@ describe.skipIf(platform !== "linux" && platform !== "darwin")("reaper sweeps", 
     expect(NodeFS.existsSync(golden)).toBe(true);
   });
 
+  it("keeps stale clones and bare mirrors in temp roots and exhaust dirs", async () => {
+    const root = tempDir("t3-reaper-tmpgit-");
+    writeAged(NodePath.join(root, "clone-old", ".git", "HEAD"), DAY, "ref: refs/heads/main\n");
+    writeAged(NodePath.join(root, "clone-old", "src", "main.c"), DAY);
+    bareRepo(NodePath.join(root, "mirror-old"));
+    writeAged(NodePath.join(root, "build-old", "out.o"), DAY);
+    writeAged(NodePath.join(root, "stale.log"), DAY);
+    ageTree(root, 3 * DAY);
+    const devRoot = tempDir("t3-reaper-devgit-");
+    const repo = NodePath.join(devRoot, "app");
+    bareRepo(NodePath.join(repo, "scratch-mirror"));
+    NodeFS.mkdirSync(NodePath.join(repo, "audit.git", "objects"), { recursive: true });
+    writeAged(NodePath.join(repo, "bench-old", "out.log"), DAY);
+    ageTree(devRoot, 10 * DAY);
+    const logs: string[] = [];
+    const sweep = { ...ctx(new PathGuard([])), log: (line: string) => void logs.push(line) };
+
+    const tmp = await sweepTmpRoots([root], sweep);
+    const exhaust = await sweepDevExhaust(devRoot, sweep);
+
+    expect(NodeFS.readdirSync(root).toSorted()).toEqual(["clone-old", "mirror-old"]);
+    expect([tmp.dirs, tmp.files]).toEqual([1, 1]);
+    expect(NodeFS.existsSync(NodePath.join(root, "mirror-old", "objects", "pack"))).toBe(true);
+    expect(exhaust).toBe(1);
+    expect(NodeFS.readdirSync(repo).toSorted()).toEqual(["audit.git", "scratch-mirror"]);
+    expect(logs.filter((line) => line.includes("Kept stale"))).toHaveLength(4);
+  });
+
   it("counts without removing in a dry run", async () => {
     const root = tempDir("t3-reaper-dry-");
     const stale = NodePath.join(root, "old.txt");
@@ -303,29 +347,13 @@ describe.skipIf(platform !== "linux" && platform !== "darwin")("reaper sweeps", 
   it("keeps stale git data below an approved rule and removes ordinary stale output", async () => {
     const home = tempDir("t3-reaper-approved-");
     const cache = NodePath.join(home, ".cache", "acme");
-    const bareRepo = (dir: string) => {
-      for (const sub of ["objects/pack", "refs/heads"]) {
-        NodeFS.mkdirSync(NodePath.join(dir, sub), { recursive: true });
-      }
-      NodeFS.writeFileSync(NodePath.join(dir, "HEAD"), "ref: refs/heads/main\n");
-    };
     bareRepo(NodePath.join(cache, "mirror"));
     bareRepo(NodePath.join(cache, "vendor", "deps", "lib"));
     NodeFS.mkdirSync(NodePath.join(cache, "suffixed", "pkg", "upstream.git"), { recursive: true });
     NodeFS.mkdirSync(NodePath.join(cache, "checkout", "src", ".GIT"), { recursive: true });
     writeAged(NodePath.join(cache, "worktree-file", ".git"), 30 * DAY, "gitdir: /x\n");
     writeAged(NodePath.join(cache, "build-old", "obj", "main.o"), 30 * DAY);
-    // Every entry old, deepest first, so only the git data can keep a folder.
-    const paths: string[] = [];
-    const collect = (dir: string) => {
-      for (const entry of NodeFS.readdirSync(dir, { withFileTypes: true })) {
-        const child = NodePath.join(dir, entry.name);
-        if (entry.isDirectory()) collect(child);
-        paths.push(child);
-      }
-    };
-    collect(cache);
-    for (const target of paths) age(target, 30 * DAY);
+    ageTree(cache, 30 * DAY);
     const logs: string[] = [];
     const totals = await sweepApprovedPolicy(
       [{ path: cache, maxAgeDays: 7, keepLatest: 0, enabled: true }],
